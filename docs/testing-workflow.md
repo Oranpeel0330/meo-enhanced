@@ -1770,6 +1770,18 @@ reflow is accounted separately from motion and may expand between paragraphs.
 The image resource
 pool suite holds decode completion and cancels it through the production loader.
 
+The reading-work contract also requires blocked results to retain pending state
+without requesting another frame or entering an empty viewport transaction.
+The deferred-math browser contract counts the owning callbacks during a held
+pointer and retains its original release, continuous-wheel and batch assertions.
+The Mermaid runtime contract primes six cached diagrams, then checks no engine
+lease, initialization or generation on reuse, awaited two-diagram commits,
+gesture restart between batches, theme invalidation and retirement. Deferred cold
+cases use uncached diagram sources, so cache hits cannot bypass their intended
+hold. `bun scripts/test-preview-mermaid-runtime.ts --preview-only` selects its
+Preview/resource cases for focused work; the default release invocation retains
+the independent cold Live scrolling case as well.
+
 `scripts/test-preview-reading-work.ts` belongs to `test:large-document-budget`
 as a process-only deterministic contract. It checks one shared admission budget,
 latest-key coalescing, bounded ready-result batches, continuation fairness, atomic

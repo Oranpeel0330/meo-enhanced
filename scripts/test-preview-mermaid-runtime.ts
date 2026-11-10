@@ -268,6 +268,16 @@ async function assertPreviewRuntime() {
     return firstLoad === secondLoad && first === second && typeof first.render === 'function';
   });
   if (!sharedRuntime || runtimeRequests !== 2) throw new Error('Retry must load one CSP-authorized runtime shared by concurrent callers');
+  const cachedBatch = await page.evaluate(() => (window as any).__probePreviewCachedBatch());
+  assert.deepEqual(cachedBatch.held, { waitingCommits: 0, painted: 0, groups: 0 }, 'cached results retain the existing held-gesture protection');
+  assert.deepEqual(cachedBatch.prepared, { initializes: 0, renders: 0, groups: 0, waitingCommits: 1, painted: 0, settled: false },
+    'cached diagrams must reach their reading owner without acquiring or initializing the cold renderer');
+  assert.deepEqual(cachedBatch.resumedGesture, { painted: 2, waitingCommits: 0 }, 'a new gesture between cached batches keeps the original admission boundary');
+  assert.equal(cachedBatch.accepted.painted, 6);
+  assert.ok(cachedBatch.accepted.batches.length >= 3 && cachedBatch.accepted.batches.every((count: number) => count > 0 && count <= 2),
+    'cached results retain bounded, awaited commits');
+  assert.deepEqual(cachedBatch.changedTheme, { painted: 6, groups: 1, renders: 6 }, 'a changed theme must render fresh diagrams');
+  assert.equal(cachedBatch.retiredPainted, 0, 'a retired cached commit cannot publish late DOM');
   const gestureBatch = await page.evaluate(() => (window as any).__probePreviewGestureBatch());
   assert.deepEqual(gestureBatch, { between: { started: 1, painted: 0 }, beforeCommit: { painted: 0, notices: 0 },
     after: { painted: 2, notices: 1 } }, 'an in-flight batch must yield between diagrams and before SVG projection, then resume exactly once');
@@ -275,44 +285,46 @@ async function assertPreviewRuntime() {
   assert.equal(commitBatches.painted, 6, 'bounded commits must eventually present every nearby diagram');
   assert.ok(commitBatches.batches.length >= 3 && commitBatches.batches.every((count: number) => count > 0 && count <= 2),
     'cold diagram results must not accumulate into one large DOM commit');
-  const coldLiveText = Array.from({ length: 240 }, (_, index) => `Paragraph ${index}.\n\n`).join('')
-    + '```mermaid\nflowchart LR; A[ColdLiveGesture]-->B\n```\n\n'
-    + '```typescript\nconst value = 1;\n```\n\n'.repeat(55);
-  assert.ok(assessLargeDocument(coldLiveText).boundedEditorWork && !assessLargeDocument(coldLiveText).windowedPreview,
-    'cold Live fixture must use the actual earlier work budget');
-  const coldLive = await page.evaluate(async text => {
-    const scope = window as any;
-    scope.__previewController.setVisible(false);
-    const runtime = await scope.__loadMermaidRuntime(), original = runtime.render;
-    scope.__coldLiveRequests = 0;
-    runtime.render = async (...args: any[]) => {
-      if (args[1].includes('ColdLiveGesture')) scope.__coldLiveRequests++;
-      return original.apply(runtime, args);
-    };
-    const host = document.createElement('div'); host.className = 'editor-host';
-    host.style.cssText = 'position:fixed;inset:0;width:900px;height:500px'; document.body.append(host);
-    const editor = scope.__createSharedMermaidEditor({ parent: host, text, initialMode: 'live', onApplyChanges() {} });
-    scope.__coldLive = { editor, host, text, restore: () => { runtime.render = original; } };
-    for (let index = 0; index < 8; index++) await new Promise(requestAnimationFrame);
-    const view = editor.view, rect = view.scrollDOM.getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
-      distance: view.lineBlockAt(text.indexOf('```mermaid')).top - 100 };
-  }, coldLiveText);
-  try {
-    await page.mouse.move(coldLive.x, coldLive.y);
-    await page.mouse.wheel({ deltaY: coldLive.distance });
-    await page.waitForSelector('.editor-host .meo-mermaid-block');
-    for (let index = 0; index < 4; index++) {
-      await page.mouse.wheel({ deltaY: 1 });
-      await new Promise(resolve => setTimeout(resolve, 80));
-      assert.equal(await page.evaluate(() => (window as any).__coldLiveRequests), 0,
-        'a cold Live diagram must not invoke Mermaid during continuing trusted scrolling');
+  if (!process.argv.includes('--preview-only')) {
+    const coldLiveText = Array.from({ length: 240 }, (_, index) => `Paragraph ${index}.\n\n`).join('')
+      + '```mermaid\nflowchart LR; A[ColdLiveGesture]-->B\n```\n\n'
+      + '```typescript\nconst value = 1;\n```\n\n'.repeat(55);
+    assert.ok(assessLargeDocument(coldLiveText).boundedEditorWork && !assessLargeDocument(coldLiveText).windowedPreview,
+      'cold Live fixture must use the actual earlier work budget');
+    const coldLive = await page.evaluate(async text => {
+      const scope = window as any;
+      scope.__previewController.setVisible(false);
+      const runtime = await scope.__loadMermaidRuntime(), original = runtime.render;
+      scope.__coldLiveRequests = 0;
+      runtime.render = async (...args: any[]) => {
+        if (args[1].includes('ColdLiveGesture')) scope.__coldLiveRequests++;
+        return original.apply(runtime, args);
+      };
+      const host = document.createElement('div'); host.className = 'editor-host';
+      host.style.cssText = 'position:fixed;inset:0;width:900px;height:500px'; document.body.append(host);
+      const editor = scope.__createSharedMermaidEditor({ parent: host, text, initialMode: 'live', onApplyChanges() {} });
+      scope.__coldLive = { editor, host, text, restore: () => { runtime.render = original; } };
+      for (let index = 0; index < 8; index++) await new Promise(requestAnimationFrame);
+      const view = editor.view, rect = view.scrollDOM.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2,
+        distance: view.lineBlockAt(text.indexOf('```mermaid')).top - 100 };
+    }, coldLiveText);
+    try {
+      await page.mouse.move(coldLive.x, coldLive.y);
+      await page.mouse.wheel({ deltaY: coldLive.distance });
+      await page.waitForSelector('.editor-host .meo-mermaid-block');
+      for (let index = 0; index < 4; index++) {
+        await page.mouse.wheel({ deltaY: 1 });
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.equal(await page.evaluate(() => (window as any).__coldLiveRequests), 0,
+          'a cold Live diagram must not invoke Mermaid during continuing trusted scrolling');
+      }
+      await page.waitForFunction(() => (window as any).__coldLiveRequests === 1
+        && !!(window as any).__coldLive.host.querySelector('.meo-mermaid-svg-wrapper svg'));
+      assert.equal(await page.evaluate(() => (window as any).__coldLive.editor.getText() === (window as any).__coldLive.text), true);
+    } finally {
+      await page.evaluate(() => { const scope = window as any; scope.__coldLive.restore(); scope.__coldLive.editor.destroy(); scope.__coldLive.host.remove(); });
     }
-    await page.waitForFunction(() => (window as any).__coldLiveRequests === 1
-      && !!(window as any).__coldLive.host.querySelector('.meo-mermaid-svg-wrapper svg'));
-    assert.equal(await page.evaluate(() => (window as any).__coldLive.editor.getText() === (window as any).__coldLive.text), true);
-  } finally {
-    await page.evaluate(() => { const scope = window as any; scope.__coldLive.restore(); scope.__coldLive.editor.destroy(); scope.__coldLive.host.remove(); });
   }
   if (process.argv.includes('--gantt-only')) {
     await assertGanttPreviewContrast(browser, entry);
@@ -649,6 +661,10 @@ async function assertPreviewRuntime() {
     document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument
       ?.querySelector('.meo-export-mermaid:not(.is-math).is-rendered')?.textContent?.includes('Updated')
   ), { timeout: 3000 });
+  // Retirement must hold real uncached work; a comment-only change can now
+  // correctly bypass the shared engine through its ready SVG cache.
+  const staleText = markdownText.replace('Start --> Check --> Done', 'Start --> StalePending --> Done');
+  const staleRendered = renderMarkdownToHtml({ markdownText: staleText, markdownFilePath: 'C:/tmp/preview-mermaid.md', target: 'html' });
   const stalePreview = await page.evaluate(({ oldText, html, lightStyles, darkStyles }) => {
     const controller = (window as typeof window & { __previewController?: any }).__previewController;
     const messages = (window as typeof window & {
@@ -667,7 +683,7 @@ async function assertPreviewRuntime() {
       result: { ok: true, value: { html, hasMermaid: true, styles: { light: lightStyles, dark: darkStyles } } }
     });
     return { requestId, mermaidRequestsBefore };
-  }, { oldText: `${markdownText}\n<!-- stale-mermaid-frame -->`, html: rendered.html, lightStyles, darkStyles });
+  }, { oldText: staleText, html: staleRendered.html, lightStyles, darkStyles });
   if (!stalePreview.requestId) throw new Error('Stale Mermaid frame request was not created');
   await page.waitForFunction((requestsBefore) => (
     (window as typeof window & { __previewMermaidRequests?: number }).__previewMermaidRequests ?? 0
@@ -735,13 +751,14 @@ async function assertPreviewRuntime() {
     darkStyles
   });
   if (!appearanceDuringLoad.requestId) throw new Error('Appearance-during-load request was not created');
-  await page.waitForFunction((requestsBefore) => (
-    (window as typeof window & { __previewMermaidRequests?: number }).__previewMermaidRequests ?? 0
-  ) > requestsBefore, { timeout: 2000 }, appearanceDuringLoad.mermaidRequestsBefore);
-  await page.waitForFunction(() => Boolean(
-    document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument
-      ?.querySelector('.meo-export-mermaid.is-rendered svg')
-  ));
+  await page.waitForFunction(() => {
+    const controller = (window as any).__previewController;
+    const block = document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument
+      ?.querySelector<HTMLElement>('.meo-export-mermaid.is-rendered');
+    // Preserved browsing contexts need not fire load. Whether it was reused or
+    // loaded, the actual accepted SVG must match the controller's active theme.
+    return !!block?.querySelector('svg') && block.dataset.meoPreviewMermaidAppearance === controller.getAppearance();
+  });
   const shiftedBlockContinuity = await page.evaluate(async ({ text, html, lightStyles, darkStyles }) => {
     const controller = (window as typeof window & { __previewController?: any }).__previewController;
     const testWindow = window as typeof window & {
@@ -975,6 +992,8 @@ async function assertPreviewRuntime() {
     console.log(`Preview delayed Mermaid retirement ${scenario} passed`);
   }
 
+  const disposingText = markdownText.replace('Start --> Check --> Done', 'Start --> DisposePending --> Done');
+  const disposingRendered = renderMarkdownToHtml({ markdownText: disposingText, markdownFilePath: 'C:/tmp/preview-mermaid.md', target: 'html' });
   const disposingPreview = await page.evaluate(({ text, html, lightStyles, darkStyles }) => {
     const controller = (window as typeof window & { __previewController?: any }).__previewController;
     const testWindow = window as typeof window & {
@@ -994,8 +1013,8 @@ async function assertPreviewRuntime() {
     });
     return { requestId, mermaidRequestsBefore };
   }, {
-    text: `${updatedMarkdownText}\n<!-- disposed-mermaid-frame -->`,
-    html: updatedRendered.html,
+    text: disposingText,
+    html: disposingRendered.html,
     lightStyles,
     darkStyles
   });

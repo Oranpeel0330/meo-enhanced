@@ -22,6 +22,69 @@ const mermaidResources = createMermaidDiagramRenderPool({
   initialize: initializeMermaidEditorRuntime,
   render: renderMermaidRuntime
 });
+(window as any).__probePreviewCachedBatch = async () => {
+  const runtime = await loadMermaidRuntime(), originalRender = runtime.render, originalInitialize = runtime.initialize;
+  const frame = document.createElement('iframe'); frame.style.height = '400px'; document.body.append(frame);
+  const doc = frame.contentDocument!; doc.documentElement.dataset.meoPreviewResourceBudget = 'bounded';
+  const sources = Array.from({ length: 6 }, (_, index) => `flowchart LR; A[Cached-${Date.now()}-${index}]-->B`);
+  const reset = () => { doc.body.innerHTML = sources.map(source =>
+    `<div class="meo-export-mermaid" style="height:40px" data-source-b64="${btoa(source)}"></div>`).join(''); };
+  const painted = () => doc.querySelectorAll('.meo-export-mermaid.is-rendered svg').length;
+  let initializes = 0, renders = 0, groups = 0, interacting = false, settled = false;
+  runtime.initialize = ((...args: Parameters<typeof runtime.initialize>) => { initializes++; return originalInitialize.apply(runtime, args); }) as typeof runtime.initialize;
+  runtime.render = (async (id: string) => { renders++; return {
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" id="${id}" viewBox="0 0 100 30"><rect width="100" height="30"/></svg>`
+  }; }) as typeof runtime.render;
+  const resources = { ...mermaidResources, acquireGroup() { groups++; return mermaidResources.acquireGroup(); } };
+  const renderer = createPreviewMermaidRenderer(resources, error => { throw error; }, () => interacting);
+  const releases: Array<() => void> = [], batches: number[] = [];
+  let operation: Promise<void> | null = null;
+  const frames = async (count = 3) => { for (let index = 0; index < count; index++) await new Promise(requestAnimationFrame); };
+  try {
+    reset(); await renderer.render(doc, 'dark');
+    reset(); initializes = renders = groups = 0; interacting = true;
+    operation = renderer.render(doc, 'dark', undefined, () => true, mutate => new Promise<void>(resolve => {
+      releases.push(() => { const before = painted(); mutate(); batches.push(painted() - before); resolve(); });
+    })).then(() => { settled = true; });
+    await frames();
+    const held = { waitingCommits: releases.length, painted: painted(), groups };
+    interacting = false;
+    const deadline = performance.now() + 5_000;
+    while (!releases.length && !settled) {
+      if (performance.now() > deadline) throw Error('Cached Preview results did not reach their owner');
+      await frames();
+    }
+    const prepared = { initializes, renders, groups, waitingCommits: releases.length, painted: painted(), settled };
+    interacting = true;
+    releases.shift()?.();
+    await frames();
+    const resumedGesture = { painted: painted(), waitingCommits: releases.length };
+    interacting = false;
+    while (!settled) {
+      for (const release of releases.splice(0)) release();
+      if (performance.now() > deadline) throw Error('Cached Preview results did not settle');
+      await frames();
+    }
+    const accepted = { batches: [...batches], painted: painted() };
+    reset(); doc.documentElement.style.setProperty('--meo-mermaid-node-background', '#123456');
+    const beforeMiss = groups, beforeRender = renders;
+    await renderer.render(doc, 'dark');
+    const changedTheme = { painted: painted(), groups: groups - beforeMiss, renders: renders - beforeRender };
+    doc.documentElement.style.removeProperty('--meo-mermaid-node-background');
+    reset(); settled = false;
+    operation = renderer.render(doc, 'dark', undefined, () => true, mutate => new Promise<void>(resolve => {
+      releases.push(() => { mutate(); resolve(); });
+    })).then(() => { settled = true; });
+    await frames(); renderer.dispose();
+    for (const release of releases.splice(0)) release();
+    await operation;
+    return { held, prepared, resumedGesture, accepted, changedTheme, retiredPainted: painted() };
+  } finally {
+    interacting = false; renderer.dispose(); for (const release of releases) release();
+    await operation?.catch(() => {});
+    runtime.render = originalRender; runtime.initialize = originalInitialize; frame.remove();
+  }
+};
 (window as any).__probePreviewGestureBatch = async () => {
   const runtime = await loadMermaidRuntime(), original = runtime.render;
   const frame = document.createElement('iframe'); frame.style.height = '400px'; document.body.append(frame);
