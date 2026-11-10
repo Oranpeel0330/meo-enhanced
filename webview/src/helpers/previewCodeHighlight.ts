@@ -90,7 +90,7 @@ export function hasAppliedPreviewCodeHighlight(root: ParentNode): boolean {
 
 /** Projects exact Shiki tokens and reports whether it replaced reading-row DOM. */
 export function applyPreviewCodeHighlight(frameDocument: Document, nearViewportOnly = false, isCurrent: () => boolean = () => true,
-  budget?: { readonly maxBlocks: number; readonly onPending: () => void; readonly canUpdate?: (code: HTMLElement) => boolean }): boolean {
+  budget?: { readonly maxBlocks: number; readonly onPending: (codes: readonly HTMLElement[]) => void; readonly canUpdate?: (code: HTMLElement) => boolean }): boolean {
   if (!isCurrent()) return false;
   let changed = false;
   const nearby = nearViewportOnly ? getPreviewViewportResources(frameDocument, 'code') : undefined;
@@ -108,7 +108,8 @@ export function applyPreviewCodeHighlight(frameDocument: Document, nearViewportO
     const [from, to] = nearViewportOnly ? previewCodeReadingBand(request.sources, height) : [0, request.sources.length];
     return [{ ...request, code, from, to }];
   });
-  let projected = 0, pending = false;
+  let projected = 0;
+  const pending: HTMLElement[] = [];
   for (const { language, source, sources, from, to, offset, version: themeVersion, code } of requests) {
     if (sources.slice(from, to).every((sourceElement) => sourceElement.dataset.meoShiki === themeVersion)) continue;
     const lines = getShikiTokens(language, source, 'preview', offset + to);
@@ -116,7 +117,7 @@ export function applyPreviewCodeHighlight(frameDocument: Document, nearViewportO
       requestShikiTokens(language, source, 'preview', isCurrent);
       continue;
     }
-    if (budget && (projected >= budget.maxBlocks || budget.canUpdate?.(code) === false)) { pending = true; continue; }
+    if (budget && (projected >= budget.maxBlocks || budget.canUpdate?.(code) === false)) { pending.push(code); continue; }
     projected++;
 
     // Retain the preceding bracket context, but allocate presentation runs only
@@ -143,6 +144,6 @@ export function applyPreviewCodeHighlight(frameDocument: Document, nearViewportO
       changed = true;
     }
   }
-  if (pending) budget?.onPending();
+  if (pending.length) budget?.onPending(pending);
   return changed;
 }

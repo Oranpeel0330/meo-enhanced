@@ -1440,7 +1440,7 @@ export function createPreviewController({
     readonly signature: string;
   }>();
   let previewMathObserver: ReadingViewportObserver | null = null;
-  let flushPreviewMath: (() => boolean) | null = null;
+  let previewMathWork: { run(): boolean; ready(): boolean } | null = null;
   let previewTableLayout: PreviewTableLayoutController | null = null;
   const tableColumnPreferences = createPreviewTableColumnPreferences();
   let previewViewportResources: ReturnType<typeof observePreviewViewportResources> = null;
@@ -1492,7 +1492,8 @@ export function createPreviewController({
     // Cold reading enrichment yields between fences. Explicit content/theme
     // commits keep the existing atomic projection with no intermediate palette.
     const budget = reading && hasBoundedPreviewResources(frameDocument)
-      ? { maxBlocks: 2, onPending: () => scheduleViewportHighlight(frameDocument, 'code'), canUpdate: canCommitReadingElement } : undefined;
+      ? { maxBlocks: 2, onPending: (codes: readonly HTMLElement[]) => scheduleViewportHighlight(frameDocument, 'code',
+        () => codes.some(code => !code.isConnected || canCommitReadingElement(code))), canUpdate: canCommitReadingElement } : undefined;
     if (!applyPreviewCodeHighlight(frameDocument, true, currentCodeHighlight(frameDocument), budget) || !searchQuery) return;
     // Token spans replace text nodes that may own visible Find marks. The
     // existing search owner retains its logical anchor and projects it again.
@@ -1513,14 +1514,14 @@ export function createPreviewController({
     const current = () => !disposed && generation === frameGeneration && activeFrameDocument === frameDocument;
     const ready = readingWork.commit(() => { if (current()) { mutate(); sourceMapDirty = true; } },
       reason => { if (current()) cancelled?.(reason); }, canCommit ?? (() => !isViewportInteracting()));
-    armViewportHighlight(frameDocument);
+    armViewportHighlight(frameDocument, true);
     return ready;
   };
-  const requestReadingWork = (frameDocument: Document, kind: ReadingKind) => {
+  const requestReadingWork = (frameDocument: Document, kind: ReadingKind, ready?: () => boolean) => {
     readingWork.request(readingKeys[kind], () => {
       if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
       switch (kind) {
-        case 'math': return flushPreviewMath?.() ?? false;
+        case 'math': return previewMathWork?.run() ?? false;
         case 'actions': addPreviewCodeCopyControls(frameDocument, uiLanguage); break;
         case 'blocks': refreshDocumentBlocks?.(frameDocument); break;
         case 'code': if (currentCodeHighlight(frameDocument)()) applyCodeHighlight(frameDocument, true); break;
@@ -1535,16 +1536,17 @@ export function createPreviewController({
           break;
         }
       }
-    }, () => kind === 'math' || kind === 'code' || !isViewportInteracting());
+    }, () => ready?.() !== false && (kind === 'math' ? previewMathWork?.ready() !== false : kind === 'code' || !isViewportInteracting()));
   };
-  const scheduleViewportHighlight = (frameDocument: Document, kind?: ReadingKind) => {
+  const scheduleViewportHighlight = (frameDocument: Document, kind?: ReadingKind, ready?: () => boolean) => {
     if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
     if (hasBoundedPreviewResources(frameDocument)) {
-      for (const step of kind ? [kind] : Object.keys(readingKeys) as ReadingKind[]) requestReadingWork(frameDocument, step);
+      for (const step of kind ? [kind] : Object.keys(readingKeys) as ReadingKind[]) requestReadingWork(frameDocument, step, ready);
     }
-    armViewportHighlight(frameDocument);
+    armViewportHighlight(frameDocument, true);
   };
-  const armViewportHighlight = (frameDocument: Document) => {
+  const armViewportHighlight = (frameDocument: Document, wake = false) => {
+    if (wake && highlightTimer !== null) { window.clearTimeout(highlightTimer); highlightTimer = null; }
     if (highlightFrame !== null || highlightTimer !== null || readingBatch) return;
     highlightFrame = window.requestAnimationFrame(() => {
       highlightFrame = null;
@@ -1553,17 +1555,21 @@ export function createPreviewController({
           // Held pointers own selection and scrollbar geometry. Ordinary wheels
           // retain native motion through the viewport transaction while nearby
           // enrichment continues in the existing bounded reading budget.
-          highlightTimer = window.setTimeout(() => {
-            highlightTimer = null;
-            armViewportHighlight(frameDocument);
-          }, 250);
           return;
         }
         if (hasBoundedPreviewResources(frameDocument)) {
           if (readingWork.drain()) armViewportHighlight(frameDocument);
+          else if (readingWork.hasPending()) {
+            // New scroll/resource events wake immediately. Otherwise use the
+            // existing gesture deadline once, rather than polling every frame.
+            const remaining = previewGestureUntil - performance.now();
+            if (remaining > 0) highlightTimer = window.setTimeout(() => {
+              highlightTimer = null; armViewportHighlight(frameDocument);
+            }, Math.ceil(remaining) + 1);
+          }
           return;
         }
-        const moreMath = flushPreviewMath?.() ?? false;
+        const moreMath = previewMathWork?.run() ?? false;
         addPreviewCodeCopyControls(frameDocument, uiLanguage);
         refreshDocumentBlocks?.(frameDocument);
         if (currentCodeHighlight(frameDocument)()) {
@@ -1700,7 +1706,7 @@ export function createPreviewController({
   const disposePreviewMathViewports = () => {
     previewMathObserver?.disconnect();
     previewMathObserver = null;
-    flushPreviewMath = null;
+    previewMathWork = null;
     for (const viewport of previewMathViewports.values()) {
       viewport.controller.destroy();
     }
@@ -1921,7 +1927,7 @@ export function createPreviewController({
   const attachPreviewMathViewports = (frameDocument: Document) => {
     previewMathObserver?.disconnect();
     previewMathObserver = null;
-    flushPreviewMath = null;
+    previewMathWork = null;
     const roots = Array.from(frameDocument.querySelectorAll<HTMLElement>(
       '.meo-export-math-display, .meo-export-math-inline'
     ));
@@ -1968,7 +1974,11 @@ export function createPreviewController({
       // Keep fitted DOM when suspending so scrolling does not change page geometry.
       for (const viewport of previewMathViewports.values()) viewport.controller.setActive(false);
       const pending = new Set<HTMLElement>();
-      flushPreviewMath = () => {
+      previewMathWork = { ready() {
+        if (!pending.size) return true;
+        for (const element of pending) if (!element.isConnected || canCommitReadingElement(element)) return true;
+        return false;
+      }, run() {
         if (disposed || activeFrameDocument !== frameDocument || host.hidden || !pending.size) return false;
         const started = performance.now();
         let count = 0;
@@ -1986,7 +1996,7 @@ export function createPreviewController({
           }
         });
         return pending.size > 0;
-      };
+      } };
       previewMathObserver = observeReadingViewport(frameDocument, entries => {
         if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
         for (const entry of entries) {
@@ -2395,6 +2405,7 @@ export function createPreviewController({
         else previewScrollRange?.release((event as PointerEvent).pointerId,
           event.currentTarget === frameDocument.defaultView ? (event as PointerEvent).clientY : undefined);
         if (activePreviewPointers.delete((event as PointerEvent).pointerId)) previewGestureUntil = performance.now() + 250;
+        if (readingWork.hasPending()) armViewportHighlight(frameDocument, true);
       };
       for (const target of [frameDocument.defaultView, window]) {
         target?.addEventListener('pointerup', finishPointer, { capture: true, signal });
@@ -2404,6 +2415,7 @@ export function createPreviewController({
         previewScrollRange?.cancel();
         activePreviewPointers.clear(); previewGestureUntil = 0;
         activePreviewScrollbarPointers.clear();
+        if (readingWork.hasPending()) armViewportHighlight(frameDocument, true);
       }, { signal });
       // Ownership follows gestures that can actually move the reading surface.
       // Selection/focus events may be browser-generated by a DOM replacement and
@@ -3948,7 +3960,7 @@ export function createPreviewController({
         previewGestureUntil = 0;
         previewMathObserver?.disconnect();
         previewMathObserver = null;
-        flushPreviewMath = null;
+        previewMathWork = null;
         for (const viewport of previewMathViewports.values()) viewport.controller.setActive(false);
         closePreviewBlockFullscreen(frame.contentDocument);
         previewImageActions?.closeFullscreen();

@@ -12,6 +12,19 @@ assert.equal(readingResourceDistance({ top: -1000, bottom: 20 }, 0, 720), 0, 'a 
 assert.equal(readingResourceDistance({ top: 800, bottom: 900 }, 0, 720), 80);
 assert.equal(readingResourceDistance({ top: -200, bottom: -80 }, 0, 720), 80, 'both scroll directions share the approach rule');
 
+let dormantBatches = 0, dormantChecks = 0;
+const dormant = createPreviewReadingWork({ now: () => 0, batch(run) { dormantBatches++; run(); } });
+const dormantResults = Array.from({ length: 32 }, () => dormant.commit(() => {
+  throw Error('A blocked result cannot publish');
+}, undefined, () => { dormantChecks++; return false; }));
+let turns = 0;
+do { turns++; } while (turns < 120 && dormant.drain());
+assert.equal(turns, 1, 'blocked work must stop requesting continuation frames');
+assert.equal(dormant.hasPending(), true, 'sleeping retains results for the next owner wake');
+assert.equal(dormantBatches, 0, 'a blocked queue must not capture a viewport transaction');
+assert.equal(dormantChecks, 32, 'one owner wake checks the blocked queue once');
+dormant.cancel(); await Promise.all(dormantResults);
+
 let time = 0, batches = 0, inBatch = false;
 const work = createPreviewReadingWork({ now: () => time, budgetMs: 4,
   batch(run) { assert.equal(inBatch, false); inBatch = true; batches++; try { run(); } finally { inBatch = false; } } });
@@ -28,8 +41,9 @@ assert.equal(batches, 2, 'A turn owns one complete transaction');
 let safeToCommit = false, deferredPublished = false;
 const deferred = work.commit(() => { deferredPublished = true; }, undefined, () => safeToCommit);
 work.request(second, () => { trace.push('safe preparation'); });
-assert.equal(work.drain(), true);
+assert.equal(work.drain(), false);
 assert.equal(trace.at(-1), 'safe preparation', 'unsafe geometry cannot block independent preparation');
+assert.equal(work.hasPending(), true);
 assert.equal(deferredPublished, false);
 safeToCommit = true;
 assert.equal(work.drain(), false);

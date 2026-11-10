@@ -32,16 +32,22 @@ export function createPreviewReadingWork(options: {
     },
     hasPending: () => pending.size > 0,
     cancel,
+    /** True requests another turn; blocked results remain pending for an owner wake. */
     drain(): boolean {
-      if (draining || !pending.size) return pending.size > 0;
+      if (draining || !pending.size) return false;
       const epoch = generation, seen = new Set<object>(), started = options.now();
+      const nextReady = (visited?: Set<object>): [object, Work] | undefined => {
+        for (const entry of pending) if (!visited?.has(entry[0]) && entry[1].ready?.() !== false) return entry;
+        return undefined;
+      };
       let ran = 0;
       draining = true;
       try {
+        // Do not capture a reading anchor when no result can be admitted.
+        if (!nextReady()) return false;
         options.batch(() => {
           while (epoch === generation && ran < 8) {
-            let next: [object, Work] | undefined;
-            for (const entry of pending) if (!seen.has(entry[0]) && entry[1].ready?.() !== false) { next = entry; break; }
+            const next = nextReady(seen);
             if (!next) break;
             const [key, work] = next;
             // Always admit one indivisible step. Measured costs keep later
@@ -56,11 +62,11 @@ export function createPreviewReadingWork(options: {
             if (options.now() - started >= budget) break;
           }
         });
+        return !!nextReady();
       } catch (error) {
         cancel('failed');
         throw error;
       } finally { draining = false; }
-      return pending.size > 0;
     }
   };
 }

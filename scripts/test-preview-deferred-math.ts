@@ -28,7 +28,18 @@ assert.ok(exported.html.includes('katex-display'), 'exports remain complete stan
 assert.ok(!exported.html.includes('data-meo-deferred-math'));
 console.log('Large Preview defers display formulas; inline, small documents and exports stay complete');
 
-const build = await Bun.build({ entrypoints: ['scripts/test-preview-code-update-entry.ts'], target: 'browser', format: 'iife' });
+const build = await Bun.build({ entrypoints: ['scripts/test-preview-code-update-entry.ts'], target: 'browser', format: 'iife', plugins: [{
+  name: 'observe-reading-owner-frames', setup(builder) {
+    builder.onLoad({ filter: /webview[\\/]src[\\/]helpers[\\/]preview\.ts$/ }, async ({ path }) => {
+      const source = await Bun.file(path).text();
+      const marker = '      highlightFrame = null;\n      if (!disposed';
+      const normalized = source.replaceAll('\r\n', '\n');
+      assert.equal(normalized.split(marker).length, 2, 'Instrument the owning reading frame, without counting other animation work');
+      return { loader: 'ts', contents: normalized.replace(marker,
+        '      highlightFrame = null;\n      (window as any).__readingFrameCount = ((window as any).__readingFrameCount ?? 0) + 1;\n      if (!disposed') };
+    });
+  }
+}] });
 assert.ok(build.success, build.logs.map(String).join('\n'));
 const dist = path.resolve(import.meta.dir, '../webview/dist');
 const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
@@ -200,6 +211,12 @@ try {
       await page.evaluate(async () => { for (let index = 0; index < 3; index++) await new Promise(requestAnimationFrame); });
       assert.equal(await page.evaluate(() => (window as any).__mathBatchSizes.length), 0,
         'a held native gesture must defer cold formula generation in a complex non-windowed document');
+      const dormantFrames = await page.evaluate(async () => {
+        const scope = window as any, before = scope.__readingFrameCount;
+        for (let index = 0; index < 20; index++) await new Promise(requestAnimationFrame);
+        return scope.__readingFrameCount - before;
+      });
+      assert.equal(dormantFrames, 0, 'held reading work must sleep until pointer release instead of polling');
       await page.mouse.up();
       await page.waitForFunction(() => (window as any).__mathBatchSizes.reduce((sum: number, count: number) => sum + count, 0) === 6);
       const batches = await page.evaluate(() => (window as any).__mathBatchSizes as number[]);
