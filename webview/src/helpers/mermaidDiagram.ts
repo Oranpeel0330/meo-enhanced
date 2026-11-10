@@ -6,6 +6,7 @@ import type { SyntaxNodeRef } from '@lezer/common';
 import type { MermaidConfig } from 'mermaid';
 import { getMermaidColorVariables, getMermaidPalette } from '../../../src/shared/mermaidPalette';
 import { getViewportController } from './viewportController';
+import { observeReadingViewport, type ReadingViewportObserver } from '../editor/readingViewportObserver';
 import { applyLiveBlockIndent, getCodeBlockSourceLines } from './blockIndent';
 import { getFencedCodeBodyRange } from './markdownSyntax';
 import type { MermaidDiagramRenderRequest } from '../application/mermaidDiagramRenderResources';
@@ -689,7 +690,7 @@ export class MermaidDiagramWidget extends WidgetType {
   uiLanguage: UiLanguage;
   embeddedInteractionCleanup: () => void;
   embeddedControlsCleanup: () => void;
-  private visibilityObserver: IntersectionObserver | null = null;
+  private visibilityObserver: ReadingViewportObserver | null = null;
   private requestCurrentPresentation: (refresh?: boolean) => void = () => {};
 
   constructor(
@@ -1038,14 +1039,14 @@ export class MermaidDiagramWidget extends WidgetType {
     this.visibilityObserver?.disconnect();
     this.visibilityObserver = null;
     if (gated) {
-      // CodeMirror mounts DOM beyond the screen. Retain its height, but keep
-      // Mermaid's synchronous layout and cached SVG DOM out of that overscan.
-      this.visibilityObserver = new IntersectionObserver(entries => {
+      // Begin within a bounded approach band while the existing frame budget
+      // still owns admission. CodeMirror retains more distant geometry only.
+      this.visibilityObserver = observeReadingViewport(container.ownerDocument, entries => {
         if (this.container !== container || !container.isConnected) return;
         nearScreen = entries.some(entry => entry.target === container && entry.isIntersecting);
         if (nearScreen) this.requestCurrentPresentation();
-      }, { root: view!.scrollDOM, rootMargin: '80px 0px' });
-      this.visibilityObserver.observe(container);
+      }, view!.scrollDOM);
+      this.visibilityObserver?.observe(container);
     } else this.requestCurrentPresentation();
     this.unsubscribeThemeRefresh();
     this.unsubscribeThemeRefresh = this.presentationFactory.subscribeThemeRefresh(() => {

@@ -152,6 +152,28 @@ try {
     assert.equal(await page.evaluate(() => (window as any).__formulaCommit), true,
       'updating an already generated formula must commit its result without a raw-TeX frame');
     if (text === complex) {
+      stage = 'nearby formula during continuous native wheels';
+      const approach = '<div style="height:1900px">Approach the next formula</div>\n\n$$\nx_{approach}^2\n$$\n\n' + complex;
+      await render(approach, exportRuntime.renderPreviewDocument({ markdownText: approach, sourceDocumentPath: 'C:/formula-approach.md', uiLanguage: 'en' }));
+      const point = await page.$eval('.preview-frame', element => {
+        const rect = element.getBoundingClientRect(); return { x: rect.x + 100, y: rect.y + 100 };
+      });
+      await page.mouse.move(point.x, point.y);
+      const approachSamples: Array<{ top: number; height: number; ready: boolean; interacting: boolean }> = [];
+      for (let index = 0; index < 24; index++) {
+        await page.mouse.wheel({ deltaY: index < 3 ? 240 : index % 2 ? 8 : -8 });
+        await new Promise(resolve => setTimeout(resolve, 30));
+        approachSamples.push(await page.evaluate(() => {
+          const controller = (window as any).__previewController, doc = controller.host.querySelector('iframe').contentDocument;
+          const formula = doc.querySelector('.meo-export-math-display');
+          return { top: formula.getBoundingClientRect().top, height: doc.documentElement.clientHeight,
+            ready: !!formula.querySelector('.katex-display'), interacting: controller.isViewportInteracting() };
+        }));
+      }
+      assert.ok(approachSamples.every(sample => sample.interacting), 'Every approach sample must retain the actual wheel gesture');
+      assert.ok(approachSamples.some(sample => sample.ready && sample.top > sample.height + 40),
+        `Nearby formulas must finish before entering view during continuous native wheels: ${JSON.stringify(approachSamples)}`);
+
       stage = 'bounded visible formula batches';
       const empty = 'A fresh formula surface.';
       await render(empty, exportRuntime.renderPreviewDocument({ markdownText: empty, sourceDocumentPath: 'C:/formula-batch.md', uiLanguage: 'en' }));

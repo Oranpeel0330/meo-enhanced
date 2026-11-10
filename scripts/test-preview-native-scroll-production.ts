@@ -11,10 +11,19 @@ const prose = (count: number) => Array.from({ length: count }, (_, index) =>
 const ordinary = prose(120), large = prose(4000);
 const code = '```js\n' + Array.from({ length: 18000 }, (_, index) => `const row${index} = "value ${index}";`).join('\n') + '\n```';
 const list = Array.from({ length: 6000 }, (_, index) => `${index + 1}. Item ${index} with a stable reading witness.`).join('\n');
+const nearbyResources = Array.from({ length: 60 }, (_, index) => [
+  `## Nearby resources ${index}`, '', prose(4), '',
+  '$$', `\\frac{x_{${index}}^2+1}{y}=\\sqrt{z}`, '$$', '',
+  '```typescript', `const nearbyResource${index} = ${index};`, '```', '',
+  '![Nearby diagram](data:image/svg+xml;base64,'
+    + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="120"><rect width="640" height="120" fill="#567"/></svg>').toString('base64') + ')', ''
+].join('\n')).join('\n');
+assert.ok(assessLargeDocument(nearbyResources).boundedEditorWork, 'Resource-rich native scrolling must exercise the bounded reading queue');
 const cases = [
   { name: 'source-control', text: ordinary, mode: 'source' },
   { name: 'live-control', text: ordinary, mode: 'live' },
   { name: 'ordinary', text: ordinary, mode: 'preview' },
+  { name: 'nearby-resources', text: nearbyResources, mode: 'preview' },
   { name: 'large-prose', text: large, mode: 'preview' },
   { name: 'long-code', text: code, mode: 'preview' },
   { name: 'long-list', text: list, mode: 'preview' },
@@ -34,7 +43,7 @@ async function record(page: Page, animated: boolean) {
     if (!witness) throw Error('A concrete reading witness is required');
     scope.__nativeAnimated = animated;
     scope.__nativeTrace = { wheels: [], writes: [], samples: [], witness, reading: witness, epoch: 0, initial: scroll.scrollTop,
-      witnessTop: witness.getBoundingClientRect().top };
+      witnessTop: witness.getBoundingClientRect().top, compensation: 0 };
     return scroll.scrollTop;
   }, animated);
 }
@@ -44,7 +53,7 @@ async function result(page: Page) {
     const scope = window as any, trace = scope.__nativeTrace, scroll = scope.__nativeScrollElement as Element;
     return { wheels: trace.wheels as Array<{ trusted: boolean; prevented: boolean; delta: number; top: number }>,
       writes: trace.writes as Array<{ before: number; after: number }>, initial: trace.initial as number, top: scroll.scrollTop,
-      samples: trace.samples as Array<{ top: number; witness: number | null; source: number; reading: number | null; epoch: number }>,
+      samples: trace.samples as Array<{ top: number; witness: number | null; source: number; reading: number | null; epoch: number; compensation: number }>,
       visualDelta: trace.witness.isConnected ? trace.witness.getBoundingClientRect().top - trace.witnessTop as number : null };
   });
 }
@@ -126,7 +135,8 @@ try {
         Object.defineProperty(scroll, 'scrollTop', { configurable: true,
           get() { return descriptor.get!.call(this); }, set(value) {
             const before = descriptor.get!.call(this); descriptor.set!.call(this, value);
-            scope.__nativeTrace?.writes.push({ before, after: descriptor.get!.call(this) });
+            const after = descriptor.get!.call(this), trace = scope.__nativeTrace;
+            if (trace) { trace.writes.push({ before, after }); trace.compensation += after - before; }
           } });
         doc.addEventListener('wheel', event => {
           scope.__nativeTrace?.wheels.push({ trusted: event.isTrusted, prevented: event.defaultPrevented, delta: event.deltaY, top: scroll.scrollTop });
@@ -151,6 +161,7 @@ try {
               reading = trace.reading?.getBoundingClientRect() ?? null;
             }
             trace.samples.push({ top: scroll.scrollTop,
+              compensation: trace.compensation,
               witness: trace.witness.isConnected ? trace.witness.getBoundingClientRect().top : null,
               reading: reading?.top ?? null, epoch: trace.epoch,
               source: document.querySelector('.editor-host .cm-scroller')?.scrollTop ?? 0 });
@@ -205,6 +216,19 @@ try {
         await record(page, true); await page.mouse.wheel({ deltaY: delta }); await frames(page, 90);
         await settleNativeMotion(page);
         const crossing = await result(page);
+        if (testCase.name === 'nearby-resources') {
+          // Cold resources can legitimately change height after native motion.
+          // Every correction must begin at the fully reached destination; an
+          // early write would cancel the remaining animation and fail here.
+          let compensation = 0;
+          for (const write of crossing.writes) {
+            assert.ok(Math.abs(write.before - crossing.initial - delta - compensation) <= 2,
+              `Resource geometry interrupted unfinished native motion: ${JSON.stringify(crossing.writes)}`);
+            compensation += write.after - write.before;
+          }
+          crossing.top -= compensation;
+          for (const sample of crossing.samples) sample.top -= sample.compensation;
+        }
         assert.ok(Math.abs(crossing.top - crossing.initial - delta) <= 2,
           `Cold window interrupted native motion: ${JSON.stringify({ initial: crossing.initial, top: crossing.top, writes: crossing.writes })}`);
         for (let index = 1; index < crossing.samples.length; index++) {
@@ -214,9 +238,14 @@ try {
           if ('split' in testCase) assert.ok(testCase.split
             ? (current.source - previous.source) * Math.sign(delta) >= -1
             : Math.abs(current.source - previous.source) <= 1, `${testCase.name}: cold window changed Source ownership`);
-          if (current.epoch === previous.epoch && current.reading !== null && previous.reading !== null) {
+          // Post-motion resources may expand between two visible paragraphs.
+          // A single reading anchor cannot keep both sides of that expansion
+          // fixed. Native-motion frames retain the original witness bound;
+          // every post-motion correction was separately checked above.
+          const resourceLayoutChanged = testCase.name === 'nearby-resources' && current.compensation !== previous.compensation;
+          if (!resourceLayoutChanged && current.epoch === previous.epoch && current.reading !== null && previous.reading !== null) {
             assert.ok(Math.abs(current.reading - previous.reading + current.top - previous.top) <= 2,
-              `${testCase.name}: cold window displaced its painted reading witness`);
+              `${testCase.name}: cold window displaced its painted reading witness: ${JSON.stringify({ previous, current, writes: crossing.writes })}`);
           }
         }
         const tail = crossing.samples.slice(-8).map(sample => sample.top);

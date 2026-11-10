@@ -1,6 +1,6 @@
 type Step = () => boolean | void;
 type Retirement = 'retired' | 'failed';
-type Work = { step: Step; cancel?: (reason: Retirement) => void };
+type Work = { step: Step; ready?: () => boolean; cancel?: (reason: Retirement) => void };
 
 /** Pending reading enrichment shares one admission budget and one viewport
  * transaction. The presentation owner retains frames, gestures and revisions. */
@@ -20,10 +20,10 @@ export function createPreviewReadingWork(options: {
     for (const work of retired) work.cancel?.(reason);
   };
   return {
-    request(key: object, step: Step) { pending.set(key, { step }); },
-    commit(mutate: () => void, cancelled?: (reason: Retirement) => void): Promise<void> {
+    request(key: object, step: Step, ready?: () => boolean) { pending.set(key, { step, ready }); },
+    commit(mutate: () => void, cancelled?: (reason: Retirement) => void, ready?: () => boolean): Promise<void> {
       return new Promise<void>((resolve, reject) => {
-        pending.set({}, { cancel(reason) {
+        pending.set({}, { ready, cancel(reason) {
           try { cancelled?.(reason); resolve(); } catch (error) { reject(error); }
         }, step() {
           try { mutate(); resolve(); } catch (error) { reject(error); }
@@ -41,7 +41,7 @@ export function createPreviewReadingWork(options: {
         options.batch(() => {
           while (epoch === generation && ran < 8) {
             let next: [object, Work] | undefined;
-            for (const entry of pending) if (!seen.has(entry[0])) { next = entry; break; }
+            for (const entry of pending) if (!seen.has(entry[0]) && entry[1].ready?.() !== false) { next = entry; break; }
             if (!next) break;
             const [key, work] = next;
             // Always admit one indivisible step. Measured costs keep later

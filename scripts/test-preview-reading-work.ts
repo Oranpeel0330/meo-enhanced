@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict';
 import { createPreviewReadingWork } from '../webview/src/application/previewReadingWork';
+import { readingPreparationMargin, readingPreparationRange, readingResourceDistance } from '../webview/src/application/readingWindow';
+
+for (const height of [0, 200, 720, 1000, 4000]) {
+  const margin = readingPreparationMargin(height), band = readingPreparationRange(100, 100 + height);
+  assert.ok(margin >= 800 && margin <= 1600, 'resource preparation remains bounded across pane sizes');
+  assert.deepEqual(band, { from: 100 - margin, to: 100 + height + margin });
+}
+assert.equal(readingPreparationMargin(1000), 1000, 'tall panes prepare one screen, independently of their width');
+assert.equal(readingResourceDistance({ top: -1000, bottom: 20 }, 0, 720), 0, 'a tall visible resource outranks speculative work');
+assert.equal(readingResourceDistance({ top: 800, bottom: 900 }, 0, 720), 80);
+assert.equal(readingResourceDistance({ top: -200, bottom: -80 }, 0, 720), 80, 'both scroll directions share the approach rule');
 
 let time = 0, batches = 0, inBatch = false;
 const work = createPreviewReadingWork({ now: () => time, budgetMs: 4,
@@ -13,6 +24,17 @@ assert.deepEqual(trace, ['first']);
 assert.equal(work.drain(), false);
 assert.deepEqual(trace, ['first', 'second']);
 assert.equal(batches, 2, 'A turn owns one complete transaction');
+
+let safeToCommit = false, deferredPublished = false;
+const deferred = work.commit(() => { deferredPublished = true; }, undefined, () => safeToCommit);
+work.request(second, () => { trace.push('safe preparation'); });
+assert.equal(work.drain(), true);
+assert.equal(trace.at(-1), 'safe preparation', 'unsafe geometry cannot block independent preparation');
+assert.equal(deferredPublished, false);
+safeToCommit = true;
+assert.equal(work.drain(), false);
+await deferred;
+assert.equal(deferredPublished, true, 'a ready result commits once its existing owner releases native motion');
 
 // Known expensive work waits for a fresh budget but must never starve.
 trace.length = 0;

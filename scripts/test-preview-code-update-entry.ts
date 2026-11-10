@@ -9,6 +9,7 @@ import { createPreviewViewport } from '../webview/src/helpers/previewViewport';
 import { createPreviewSourceGeometry } from '../webview/src/helpers/previewSourceGeometry';
 import { initializeImageHandling, settleImageSrcRequest } from '../webview/src/helpers/images';
 import { applyUiTheme } from '../webview/src/helpers/uiTheme';
+import { observeReadingViewport } from '../webview/src/editor/readingViewportObserver';
 
 // Resolving both export palettes must not change the active Preview theme.
 const palette = createCodePaletteWebviewAdapter({ setShikiTheme() {} });
@@ -42,6 +43,7 @@ const scope = window as typeof window & {
   __initializeImageHandling: typeof initializeImageHandling;
   __settleImageSrcRequest: typeof settleImageSrcRequest;
   __applyUiTheme: typeof applyUiTheme;
+  __observeReadingViewport: typeof observeReadingViewport;
 };
 scope.__previewController = controller;
 scope.__previewMessages = messages;
@@ -52,4 +54,5 @@ scope.__createPreviewSourceGeometry = createPreviewSourceGeometry;
 scope.__initializeImageHandling = initializeImageHandling;
 scope.__settleImageSrcRequest = settleImageSrcRequest;
 scope.__applyUiTheme = applyUiTheme;
+scope.__observeReadingViewport = observeReadingViewport;
 document.body.append(controller.host);

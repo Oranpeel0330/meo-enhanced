@@ -8,6 +8,7 @@ import {
 import { projectShikiTokenLines, type ShikiPresentationRun } from '../../../src/shared/shikiTokenPresentation';
 import { getPreviewViewportResources } from './previewViewportResources';
 import { previewCodeSource } from './previewCodeSource';
+import { readingPreparationRange, readingResourceDistance } from '../application/readingWindow';
 
 const FONT_STYLE_ITALIC = 1;
 const FONT_STYLE_BOLD = 2;
@@ -17,17 +18,18 @@ const FONT_STYLE_UNDERLINE = 4;
 export function previewCodeReadingBand(lines: readonly HTMLElement[], height: number): readonly [number, number] {
   // Keep ordinary fences atomic, including a short fence straddling the band.
   if (lines.length <= 240) return [0, lines.length];
+  const band = readingPreparationRange(0, height);
   let low = 0, high = lines.length;
   while (low < high) {
     const middle = (low + high) >>> 1;
-    if (lines[middle]!.getBoundingClientRect().bottom < -height) low = middle + 1;
+    if (lines[middle]!.getBoundingClientRect().bottom < band.from) low = middle + 1;
     else high = middle;
   }
   const from = low;
   high = lines.length;
   while (low < high) {
     const middle = (low + high) >>> 1;
-    if (lines[middle]!.getBoundingClientRect().top <= height * 2) low = middle + 1;
+    if (lines[middle]!.getBoundingClientRect().top <= band.to) low = middle + 1;
     else high = middle;
   }
   return [from, low];
@@ -88,32 +90,33 @@ export function hasAppliedPreviewCodeHighlight(root: ParentNode): boolean {
 
 /** Projects exact Shiki tokens and reports whether it replaced reading-row DOM. */
 export function applyPreviewCodeHighlight(frameDocument: Document, nearViewportOnly = false, isCurrent: () => boolean = () => true,
-  budget?: { readonly maxBlocks: number; readonly onPending: () => void }): boolean {
+  budget?: { readonly maxBlocks: number; readonly onPending: () => void; readonly canUpdate?: (code: HTMLElement) => boolean }): boolean {
   if (!isCurrent()) return false;
   let changed = false;
   const nearby = nearViewportOnly ? getPreviewViewportResources(frameDocument, 'code') : undefined;
   const codes = nearby ?? Array.from(frameDocument.querySelectorAll<HTMLElement>('code.hljs'));
   const height = nearViewportOnly ? frameDocument.documentElement.clientHeight : 0;
+  const band = readingPreparationRange(0, height);
   // Read the whole candidate band before token DOM writes can invalidate layout.
-  const candidates = nearViewportOnly ? codes.filter(code => {
-    const bounds = code.getBoundingClientRect();
-    return bounds.bottom >= -height && bounds.top <= height * 2;
-  }) : codes;
+  const candidates = nearViewportOnly ? codes.map(code => ({ code, bounds: code.getBoundingClientRect() }))
+    .filter(({ bounds }) => bounds.bottom >= band.from && bounds.top <= band.to)
+    .sort((left, right) => readingResourceDistance(left.bounds, 0, height) - readingResourceDistance(right.bounds, 0, height))
+    .map(({ code }) => code) : codes;
   const requests = candidates.flatMap(code => {
     const request = getHighlightRequest(code);
     if (!request) return [];
     const [from, to] = nearViewportOnly ? previewCodeReadingBand(request.sources, height) : [0, request.sources.length];
-    return [{ ...request, from, to }];
+    return [{ ...request, code, from, to }];
   });
   let projected = 0, pending = false;
-  for (const { language, source, sources, from, to, offset, version: themeVersion } of requests) {
+  for (const { language, source, sources, from, to, offset, version: themeVersion, code } of requests) {
     if (sources.slice(from, to).every((sourceElement) => sourceElement.dataset.meoShiki === themeVersion)) continue;
     const lines = getShikiTokens(language, source, 'preview', offset + to);
     if (!lines) {
       requestShikiTokens(language, source, 'preview', isCurrent);
       continue;
     }
-    if (budget && projected >= budget.maxBlocks) { pending = true; continue; }
+    if (budget && (projected >= budget.maxBlocks || budget.canUpdate?.(code) === false)) { pending = true; continue; }
     projected++;
 
     // Retain the preceding bracket context, but allocate presentation runs only

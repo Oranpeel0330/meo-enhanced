@@ -703,6 +703,7 @@ export function loadBrowserImage(
   return new Promise((resolve) => {
     const image = new Image();
     let settled = false;
+    let decoding = false;
 
     function complete(value: HTMLImageElement | null): void {
       if (settled) return;
@@ -713,7 +714,9 @@ export function loadBrowserImage(
       resolve(value);
     }
     function onLoad(): void {
-      complete(image);
+      if (settled || decoding) return;
+      decoding = true;
+      void image.decode().catch(() => undefined).then(() => complete(image));
     }
     function onError(): void {
       complete(null);
@@ -736,6 +739,6 @@ export function loadBrowserImage(
     image.addEventListener('error', onError, { once: true });
     signal?.addEventListener('abort', onAbort, { once: true });
     image.src = forceReload ? cacheBustedImageSource(resolvedSrc) : resolvedSrc;
-    if (image.complete && image.naturalWidth > 0) complete(image);
+    if (image.complete && image.naturalWidth > 0) onLoad();
   });
 }

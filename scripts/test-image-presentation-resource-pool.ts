@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createImagePresentationResourcePool } from '../webview/src/editor/imagePresentationAdapter';
+import { createImagePresentationResourcePool, loadBrowserImage } from '../webview/src/editor/imagePresentationAdapter';
 
 let now = 1_000;
 let resolveCalls = 0;
@@ -208,5 +208,46 @@ hinted.invalidateResource('document', './a b.png', null);
 assert.equal(hinted.getIntrinsicSize('document', './a b.png'), null, 'resource changes must retire old header hints');
 releaseAgain();
 hinted.dispose();
+
+// Network completion alone cannot publish a prepared image. Exercise the real
+// browser-loader interface with controlled decoding and an abort while pending.
+const originalImage = globalThis.Image;
+const decodingImages: DecodingImage[] = [];
+class DecodingImage extends EventTarget {
+  complete = false;
+  naturalWidth = 800;
+  decodeCalls = 0;
+  finish!: () => void;
+  private value = '';
+  private decoded = new Promise<void>(resolve => { this.finish = resolve; });
+  constructor() { super(); decodingImages.push(this); }
+  get src() { return this.value; }
+  set src(value: string) {
+    this.value = value;
+    this.complete = !!value;
+    if (value) queueMicrotask(() => this.dispatchEvent(new Event('load')));
+  }
+  decode() { this.decodeCalls++; return this.decoded; }
+}
+try {
+  globalThis.Image = DecodingImage as unknown as typeof Image;
+  let ready = false;
+  const prepared = loadBrowserImage('image.png').then(image => { ready = true; return image; });
+  await flushPromises();
+  assert.equal(ready, false, 'a loaded image must wait for decoding before becoming prepared');
+  assert.equal(decodingImages[0]!.decodeCalls, 1, 'cached completion and the load event share decoding');
+  decodingImages[0]!.finish();
+  assert.equal(await prepared, decodingImages[0] as unknown as HTMLImageElement);
+  const abort = new AbortController();
+  const cancelled = loadBrowserImage('cancelled.png', abort.signal);
+  await flushPromises();
+  abort.abort();
+  assert.equal(await cancelled, null, 'abort retires the image even while decoding');
+  decodingImages[1]!.finish();
+  await flushPromises();
+} finally {
+  if (originalImage === undefined) delete (globalThis as any).Image;
+  else globalThis.Image = originalImage;
+}
 
 console.log('image presentation resource pool contracts passed');

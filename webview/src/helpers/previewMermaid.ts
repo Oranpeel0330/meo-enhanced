@@ -1,4 +1,5 @@
 import { syncPreviewRenderedActions } from './previewBlockActions';
+import { readingPreparationRange, readingResourceDistance } from '../application/readingWindow';
 import type { EditorAppearance } from '../../../src/protocol/editorCommands';
 import { getGithubMermaidConfig } from '../../../src/preview/githubMermaid';
 import { getMermaidColorVariables, getMermaidPalette } from '../../../src/shared/mermaidPalette';
@@ -24,7 +25,8 @@ function isNearPreviewViewport(block: HTMLElement, frameDocument: Document): boo
   if (!hasBoundedPreviewResources(frameDocument)) return true;
   const height = frameDocument.defaultView?.innerHeight ?? 0;
   const bounds = block.getBoundingClientRect();
-  return bounds.height > 0 && bounds.bottom >= -height && bounds.top <= height * 2;
+  const band = readingPreparationRange(0, height);
+  return bounds.height > 0 && bounds.bottom >= band.from && bounds.top <= band.to;
 }
 
 type PreviewMermaidPalette = ReturnType<typeof getMermaidPalette> & { background: string };
@@ -126,7 +128,7 @@ async function renderMermaidBlocks(
   const revision = frameDocument.documentElement.dataset.meoPreviewPresetRevision ?? '';
   const palette = readPreviewMermaidPalette(frameDocument, appearance);
   const themeKey = JSON.stringify(palette);
-  const viewportCenter = (frameDocument.defaultView?.innerHeight ?? 0) / 2;
+  const viewportHeight = frameDocument.defaultView?.innerHeight ?? 0;
   const blocks = (getPreviewViewportResources(frameDocument, 'mermaid')
     ?? Array.from(frameDocument.querySelectorAll<HTMLElement>('.meo-export-mermaid[data-source-b64]')))
     .filter((block) => (
@@ -138,7 +140,7 @@ async function renderMermaidBlocks(
     ))
     .map((block, documentIndex) => ({ block, documentIndex: getPreviewMermaidResourceIndex(frameDocument, block) ?? documentIndex }))
     .filter(({ block }) => isNearPreviewViewport(block, frameDocument))
-    .map((entry) => ({ ...entry, distance: Math.abs(entry.block.getBoundingClientRect().top - viewportCenter) }))
+    .map((entry) => ({ ...entry, distance: readingResourceDistance(entry.block.getBoundingClientRect(), 0, viewportHeight) }))
     .sort((left, right) => left.distance - right.distance);
   if (blocks.length === 0) return;
 

@@ -1,3 +1,5 @@
+import { observeReadingViewport } from '../editor/readingViewportObserver';
+
 type ResourceKind = 'code' | 'mermaid' | 'copy';
 type Candidates = Record<ResourceKind, Set<HTMLElement>> & { mermaidOrder: WeakMap<HTMLElement, number> };
 const candidatesByDocument = new WeakMap<Document, Candidates>();
@@ -27,7 +29,7 @@ export function observePreviewViewportResources(document: Document, changed: () 
   const kinds = new Map<HTMLElement, ResourceKind[]>();
   let active = false;
   let disposed = false;
-  const observer = new Observer(entries => {
+  const observer = observeReadingViewport(document, entries => {
     if (!active || disposed) return;
     let updated = false;
     for (const entry of entries) {
@@ -40,7 +42,7 @@ export function observePreviewViewportResources(document: Document, changed: () 
       }
     }
     if (updated) changed();
-  }, { rootMargin: '100% 0px' });
+  })!;
   const refresh = () => {
     if (disposed) return;
     observer.disconnect(); kinds.clear();

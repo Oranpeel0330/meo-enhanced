@@ -1753,6 +1753,23 @@ hidden/reveal behavior and atomic changed-formula commits remain required.
 `test-preview-code-update.ts` adds an actually bounded non-windowed case to the
 pending-token matrix, preserving old code until its replacement tokens are ready.
 
+Nearby resource preparation uses the existing owning suites. The process-only
+`test-preview-reading-work.ts` also bounds height-based preparation and visible
+resource priority in both reading directions. `test-preview-viewport-work-budget.ts`
+checks actual iframe observations before entry, a narrow pane, height changes,
+pause/resume and listener retirement, with an implicit-root negative control.
+`test-preview-deferred-math.ts` requires formulas to finish outside the visible
+viewport during continuous trusted wheels while retaining its held-pointer and
+bounded-batch checks. These additions keep their existing release registrations;
+the production Live-content and native-scroll suites retain their full budgets.
+The native-scroll suite also crosses cold formulas, code colors and images in a
+resource-rich bounded document with the same distance, reversal, native-motion
+reading-witness and selection bounds as its prose cases. Each resource height
+correction must begin at the fully reached native destination; post-motion
+reflow is accounted separately from motion and may expand between paragraphs.
+The image resource
+pool suite holds decode completion and cancels it through the production loader.
+
 `scripts/test-preview-reading-work.ts` belongs to `test:large-document-budget`
 as a process-only deterministic contract. It checks one shared admission budget,
 latest-key coalescing, bounded ready-result batches, continuation fairness, atomic

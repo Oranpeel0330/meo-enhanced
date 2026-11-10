@@ -1,4 +1,5 @@
 import { planAutomaticTableWidths, type AutomaticTableWidthPlan } from '../application/automaticTableWidths';
+import { observeReadingViewport } from '../editor/readingViewportObserver';
 import { createPreviewTableColumnPreferences } from './previewTableColumns';
 
 const DEFAULT_MINIMUM_COLUMN_WIDTH = 90;
@@ -265,7 +266,7 @@ export function createPreviewTableLayoutController(
   };
   // Intrinsic column measurement forces layout. Limit it to tables approaching
   // the viewport; revisiting a table still reuses its measured font/content key.
-  const visibilityObserver = deferOffscreen ? new frameWindow!.IntersectionObserver(entries => {
+  const visibilityObserver = deferOffscreen ? observeReadingViewport(frameDocument, entries => {
     if (disposed) return;
     for (const entry of entries) {
       const table = entry.target as HTMLTableElement;
@@ -274,7 +275,7 @@ export function createPreviewTableLayoutController(
       observeWidth(table, entry.isIntersecting);
     }
     scheduleRefresh();
-  }, { rootMargin: '800px 0px' }) : null;
+  }) : null;
   const trackedTables = new Set<HTMLTableElement>();
   const synchronizeTables = () => {
     const current = new Set(tables());

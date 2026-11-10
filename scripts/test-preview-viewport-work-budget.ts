@@ -40,6 +40,60 @@ try {
     (window as any).__previewDeclineViewportTransactionOwner = true;
   });
   await page.addScriptTag({ content: await build.outputs[0].text() });
+  stage = 'iframe approach range, resize and observer lifecycle';
+  await page.evaluate(() => {
+    const scope = window as any, frame = scope.__approachFrame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;inset:0;width:320px;height:600px;border:0;z-index:30';
+    document.body.append(frame);
+    const doc = frame.contentDocument!;
+    doc.open(); doc.write('<!doctype html><style>body{margin:0}.resource{position:absolute;height:40px;width:100px}</style>'
+      + '<div id="near" class="resource" style="top:1100px">near</div><div id="far" class="resource" style="top:4000px">far</div>'); doc.close();
+    scope.__approachEntries = [];
+    scope.__approachObserver = scope.__observeReadingViewport(doc, (entries: IntersectionObserverEntry[]) => {
+      for (const entry of entries) scope.__approachEntries.push({ id: entry.target.id, near: entry.isIntersecting });
+    });
+    for (const element of doc.querySelectorAll('.resource')) scope.__approachObserver.observe(element);
+    const implicit = new doc.defaultView!.IntersectionObserver(entries => {
+      scope.__implicitApproach = entries[0]!.isIntersecting; implicit.disconnect();
+    }, { rootMargin: '800px 0px' });
+    implicit.observe(doc.querySelector('#near')!);
+  });
+  await page.waitForFunction(() => {
+    const scope = window as any;
+    return scope.__approachEntries.some((entry: any) => entry.id === 'near' && entry.near)
+      && scope.__approachEntries.some((entry: any) => entry.id === 'far' && !entry.near)
+      && scope.__implicitApproach === false;
+  });
+  await page.evaluate(() => {
+    const scope = window as any, doc = scope.__approachFrame.contentDocument;
+    doc.querySelector('#near').style.top = '1850px';
+  });
+  await page.waitForFunction(() => (window as any).__approachEntries.filter((entry: any) => entry.id === 'near').at(-1)?.near === false);
+  await page.evaluate(() => { (window as any).__approachFrame.style.height = '1000px'; });
+  await page.waitForFunction(() => (window as any).__approachEntries.filter((entry: any) => entry.id === 'near').at(-1)?.near === true);
+  const suspendedCount = await page.evaluate(async () => {
+    const scope = window as any;
+    scope.__approachObserver.disconnect();
+    scope.__approachFrame.style.height = '600px';
+    for (let index = 0; index < 4; index++) await new Promise(requestAnimationFrame);
+    return scope.__approachEntries.length;
+  });
+  await page.evaluate(async () => { for (let index = 0; index < 4; index++) await new Promise(requestAnimationFrame); });
+  assert.equal(await page.evaluate(() => (window as any).__approachEntries.length), suspendedCount,
+    'disconnected owners must not receive resize or queued observations');
+  await page.evaluate(() => {
+    const scope = window as any;
+    scope.__approachEntries = [];
+    scope.__approachObserver.observe(scope.__approachFrame.contentDocument.querySelector('#near'));
+  });
+  await page.waitForFunction(() => (window as any).__approachEntries.at(-1)?.near === false);
+  await page.evaluate(() => { (window as any).__approachFrame.contentDocument.scrollingElement.scrollTop = 500; });
+  await page.waitForFunction(() => (window as any).__approachEntries.at(-1)?.near === true);
+  await page.evaluate(() => {
+    const scope = window as any;
+    scope.__approachObserver.unobserve(scope.__approachFrame.contentDocument.querySelector('#near'));
+    scope.__approachFrame.remove();
+  });
   stage = 'collapsed source geometry';
   const disclosure = exportRuntime.renderPreviewDocument({ sourceDocumentPath: '/fixture/disclosure.md', uiLanguage: 'en',
     markdownText: '<details open>\n<summary>Outer</summary>\n<details>\n<summary>Inner</summary>\n\n'

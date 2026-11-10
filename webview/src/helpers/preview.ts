@@ -14,6 +14,8 @@ import { getExportStyleEnvironment } from './export';
 import { documentSurfaceVariables } from '../../../src/shared/documentSurfaceRoles';
 import { createPreviewMermaidRenderer } from './previewMermaid';
 import { createPreviewReadingWork } from '../application/previewReadingWork';
+import { readingResourceDistance } from '../application/readingWindow';
+import { observeReadingViewport, type ReadingViewportObserver } from '../editor/readingViewportObserver';
 import { addPreviewCodeCopyControls, previewCopyBlockSelector, previewCopyBlockKind, closePreviewBlockFullscreen } from './previewBlockActions';
 import { setPreviewCodeSources } from './previewCodeSource';
 import { logWebviewRenderError } from './errors';
@@ -1437,7 +1439,7 @@ export function createPreviewController({
     readonly controller: LatexMathViewportController;
     readonly signature: string;
   }>();
-  let previewMathObserver: IntersectionObserver | null = null;
+  let previewMathObserver: ReadingViewportObserver | null = null;
   let flushPreviewMath: (() => boolean) | null = null;
   let previewTableLayout: PreviewTableLayoutController | null = null;
   const tableColumnPreferences = createPreviewTableColumnPreferences();
@@ -1447,6 +1449,11 @@ export function createPreviewController({
   let previewScrollRange: ReturnType<typeof createPreviewScrollRange> | null = null;
   let previewGestureUntil = 0;
   const isViewportInteracting = () => !host.hidden && (activePreviewPointers.size > 0 || performance.now() < previewGestureUntil);
+  // Geometry ahead of the screen cannot move its reading witness. Updates to
+  // visible/preceding content wait for native motion instead of cancelling it
+  // through a compensating scrollTop write. Preparation can still finish early.
+  const canCommitReadingElement = (element?: Element) => !isViewportInteracting()
+    || !!element && element.getBoundingClientRect().top >= element.ownerDocument.documentElement.clientHeight;
   const previewMermaidRenderer = createPreviewMermaidRenderer(
     mermaidRenderResources,
     (error) => logWebviewRenderError('preview.mermaid', error),
@@ -1485,7 +1492,7 @@ export function createPreviewController({
     // Cold reading enrichment yields between fences. Explicit content/theme
     // commits keep the existing atomic projection with no intermediate palette.
     const budget = reading && hasBoundedPreviewResources(frameDocument)
-      ? { maxBlocks: 2, onPending: () => scheduleViewportHighlight(frameDocument, 'code') } : undefined;
+      ? { maxBlocks: 2, onPending: () => scheduleViewportHighlight(frameDocument, 'code'), canUpdate: canCommitReadingElement } : undefined;
     if (!applyPreviewCodeHighlight(frameDocument, true, currentCodeHighlight(frameDocument), budget) || !searchQuery) return;
     // Token spans replace text nodes that may own visible Find marks. The
     // existing search owner retains its logical anchor and projects it again.
@@ -1500,12 +1507,12 @@ export function createPreviewController({
     readingWork.cancel();
   };
   const enqueueReadingCommit = (frameDocument: Document, mutate: () => void,
-    cancelled?: (reason: 'retired' | 'failed') => void): Promise<void> => {
+    cancelled?: (reason: 'retired' | 'failed') => void, canCommit?: () => boolean): Promise<void> => {
     const generation = frameGeneration;
     if (disposed || activeFrameDocument !== frameDocument) return Promise.resolve();
     const current = () => !disposed && generation === frameGeneration && activeFrameDocument === frameDocument;
     const ready = readingWork.commit(() => { if (current()) { mutate(); sourceMapDirty = true; } },
-      reason => { if (current()) cancelled?.(reason); });
+      reason => { if (current()) cancelled?.(reason); }, canCommit ?? (() => !isViewportInteracting()));
     armViewportHighlight(frameDocument);
     return ready;
   };
@@ -1528,7 +1535,7 @@ export function createPreviewController({
           break;
         }
       }
-    });
+    }, () => kind === 'math' || kind === 'code' || !isViewportInteracting());
   };
   const scheduleViewportHighlight = (frameDocument: Document, kind?: ReadingKind) => {
     if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
@@ -1542,10 +1549,10 @@ export function createPreviewController({
     highlightFrame = window.requestAnimationFrame(() => {
       highlightFrame = null;
       if (!disposed && activeFrameDocument === frameDocument && !host.hidden) {
-        if (hasBoundedPreviewResources(frameDocument) && isViewportInteracting()) {
-          // Native dragging owns the browser's range and layout. Enrich the
-          // newly visible band after the gesture, rather than reshaping it
-          // underneath the thumb or competing with queued pointer delivery.
+        if (hasBoundedPreviewResources(frameDocument) && activePreviewPointers.size > 0) {
+          // Held pointers own selection and scrollbar geometry. Ordinary wheels
+          // retain native motion through the viewport transaction while nearby
+          // enrichment continues in the existing bounded reading budget.
           highlightTimer = window.setTimeout(() => {
             highlightTimer = null;
             armViewportHighlight(frameDocument);
@@ -1720,7 +1727,7 @@ export function createPreviewController({
       if (host.hidden) commit();
       else withViewportTransaction(() => commit());
     };
-    const enqueueCommit = (commit: () => void) => {
+    const enqueueCommit = (commit: () => void, element?: Element) => {
       if (hasBoundedPreviewResources(frameDocument) && !host.hidden) {
         const publish = () => { if (!abortController.signal.aborted) commit(); };
         void enqueueReadingCommit(frameDocument, publish, reason => {
@@ -1728,7 +1735,7 @@ export function createPreviewController({
           // survive reopening. Hidden DOM needs no reading-anchor correction.
           if (host.hidden) { publish(); sourceMapDirty = true; }
           else if (reason === 'failed') withViewportTransaction(() => { publish(); sourceMapDirty = true; });
-        }).catch(handleWindowError);
+        }, () => canCommitReadingElement(element)).catch(handleWindowError);
         return;
       }
       pendingCommits.push(commit);
@@ -1869,7 +1876,7 @@ export function createPreviewController({
         pendingImages.delete(image);
       };
       if (forceReload) withViewportTransaction(() => { commitImage(); sourceMapDirty = true; });
-      else enqueueCommit(commitImage);
+      else enqueueCommit(commitImage, image);
     };
     refreshPreviewImage = async image => {
       image.dataset.meoPreviewImageRefreshing = 'true';
@@ -1887,18 +1894,13 @@ export function createPreviewController({
       reveal: image => revealPreviewElement(image, 'nearest')
     });
     previewImageActions.sync();
-    const FrameIntersectionObserver = frame.contentWindow
-      ? (frame.contentWindow as unknown as Pick<typeof globalThis, 'IntersectionObserver'>).IntersectionObserver
-      : null;
-    const observer = FrameIntersectionObserver
-      ? new FrameIntersectionObserver((entries: IntersectionObserverEntry[]) => {
-          for (const entry of entries) {
-            if (!entry.isIntersecting) continue;
-            observer?.unobserve(entry.target);
-            void loadImage(entry.target as HTMLImageElement);
-          }
-        }, { rootMargin: '800px 0px' })
-      : null;
+    const observer = observeReadingViewport(frameDocument, entries => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer?.unobserve(entry.target);
+        void loadImage(entry.target as HTMLImageElement);
+      }
+    });
     if (observer) {
       for (const image of images) observer.observe(image);
     } else {
@@ -1948,7 +1950,9 @@ export function createPreviewController({
       const mutate = (run: () => void) => {
         if (disposed || activeFrameDocument !== frameDocument || !element.isConnected) return;
         if (host.hidden) run();
-        else withViewportTransaction(() => { run(); sourceMapDirty = true; });
+        else if (canCommitReadingElement(element)) withViewportTransaction(() => { run(); sourceMapDirty = true; });
+        else void enqueueReadingCommit(frameDocument, run, () => { if (host.hidden) run(); },
+          () => canCommitReadingElement(element)).catch(handleWindowError);
       };
       const controller = element.classList.contains('meo-export-math-inline')
         ? attachLatexMathViewport(element, { layout: { kind: 'inline' }, mutate })
@@ -1969,16 +1973,21 @@ export function createPreviewController({
         const started = performance.now();
         let count = 0;
         withViewportTransaction(() => {
-          for (const element of pending) {
+          const height = frameDocument.documentElement.clientHeight;
+          const ordered = [...pending].map(element => ({ element,
+            distance: readingResourceDistance(element.getBoundingClientRect(), 0, height) }))
+            .sort((left, right) => left.distance - right.distance);
+          for (const { element } of ordered) {
+            if (!element.isConnected) { pending.delete(element); continue; }
+            if (!canCommitReadingElement(element)) continue;
             pending.delete(element);
-            if (!element.isConnected) continue;
             attach(element);
             if (++count >= 2 || performance.now() - started >= 4) break;
           }
         });
         return pending.size > 0;
       };
-      previewMathObserver = new frameWindow.IntersectionObserver(entries => {
+      previewMathObserver = observeReadingViewport(frameDocument, entries => {
         if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
         for (const entry of entries) {
           const element = entry.target as HTMLElement;
@@ -1992,8 +2001,8 @@ export function createPreviewController({
           }
         }
         if (pending.size) scheduleViewportHighlight(frameDocument, 'math');
-      }, { rootMargin: '800px 0px' });
-      for (const element of roots) previewMathObserver.observe(element);
+      });
+      for (const element of roots) previewMathObserver?.observe(element);
     } else {
       for (const element of roots) attach(element);
     }
