@@ -20,6 +20,7 @@ const createRunner = () => createBackgroundShiki('/worker.js', {name:'test',type
   if (loaded.has('javascript')) return []; loaded.add('javascript'); return [javascript];
 });
 let runner = createRunner();
+(window as any).hasSyntaxLanguage = () => runner.hasLanguage('javascript');
 (window as any).holdColdGrammar = () => {
   runner.dispose(); runner = createRunner();
   (window as any).coldGrammarHeld = false;
@@ -112,6 +113,7 @@ try {
     };
   });
   await page.goto(server.url.href); await page.addScriptTag({ content: script });
+  assert.equal(await page.evaluate(() => (window as any).hasSyntaxLanguage()), false, 'A cold worker cannot prepare reading work');
   const source = Array.from({ length: 18000 }, (_, index) => `const row${index} = { text: "content", number: 123 };`).join('\n');
   const wait = async (id: number) => {
     await page.waitForFunction(id => (window as any).jobs[id].done, { timeout: 30000 }, id);
@@ -119,8 +121,10 @@ try {
   };
   const unavailable = await wait(await page.evaluate(() => (window as any).startSyntax('const unavailable = 1;')));
   assert.ok(unavailable.cancelled, 'An unavailable WASM asset must settle the request and retire the failed worker');
+  assert.equal(await page.evaluate(() => (window as any).hasSyntaxLanguage()), false, 'A failed worker loses its prepared languages');
   const first = await page.evaluate(code => (window as any).startSyntax(code), source), cold = await wait(first);
   assert.ok(cold.exact && cold.partialRows === 128 && cold.first < cold.milliseconds / 2);
+  assert.equal(await page.evaluate(() => (window as any).hasSyntaxLanguage()), true, 'The active worker can reuse its loaded grammar');
   const edited = source.replace('row9000 =', 'renamed9000 =');
   const second = await page.evaluate(code => (window as any).startSyntax(code), edited), warm = await wait(second);
   assert.ok(warm.exact);
@@ -132,6 +136,7 @@ try {
   assert.ok(small.exact && small.partialRows === 0, 'An ordinary fence remains one complete result');
   const disposed = await page.evaluate(code => { const id = (window as any).startSyntax(code); (window as any).stopSyntax(); return id; }, source);
   assert.ok((await wait(disposed)).cancelled);
+  assert.equal(await page.evaluate(() => (window as any).hasSyntaxLanguage()), false, 'Disposal retires reading admission');
   const replacementBeforeInit = await page.evaluate(() => {
     (window as any).holdColdGrammar();
     return (window as any).startSyntax('const obsolete = 1;');
@@ -140,6 +145,7 @@ try {
   // request must still receive the unsent binary, rather than reuse a detached
   // cache or initialize a worker without its first-message engine bytes.
   await page.waitForFunction(() => (window as any).coldGrammarHeld);
+  assert.equal(await page.evaluate(() => (window as any).hasSyntaxLanguage()), false, 'A pending grammar is not yet reusable');
   const replacementAfterInit = await page.evaluate(() => {
     const id = (window as any).startSyntax('const accepted = "最新";');
     (window as any).releaseColdGrammar();

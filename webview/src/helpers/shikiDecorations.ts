@@ -15,6 +15,7 @@ import {
   resolveShikiLang,
   getShikiTokens,
   requestShikiTokens,
+  canPrepareShikiTokensDuringScroll,
   activateShikiCodeHighlighting,
   isShikiThemeReady,
   subscribeShikiRefresh,
@@ -33,6 +34,7 @@ import {
 import { getFencedCodeBodyRange, getFencedCodeInfo, syntaxTreeChanged } from './markdownSyntax';
 import { getCodeBlockSourceLines } from './blockIndent';
 import { getViewportController } from './viewportController';
+import { isLivePointerSelectionActive } from '../editor/livePointerSelection';
 import { collectDocumentMathRanges, getDisplayMathCopySource, getDisplayMathSource, getMathCompletionBody } from './displayMathBlocks';
 
 export const shikiRefreshEffect = StateEffect.define<null>();
@@ -40,6 +42,7 @@ export const shikiRefreshEffect = StateEffect.define<null>();
 const FONT_STYLE_ITALIC = 1;
 const FONT_STYLE_BOLD = 2;
 const FONT_STYLE_UNDERLINE = 4;
+type TokenNeeded = (language: string, code: string) => boolean;
 const pendingTokenDecoration = Decoration.mark({
   attributes: {
     style: 'color:var(--meo-token-foreground-color,var(--vscode-editor-foreground))'
@@ -51,6 +54,7 @@ function pendingDocumentTokenDecoration(language: string): Decoration {
     attributes: {
       style: 'color:var(--meo-token-foreground-color,var(--vscode-editor-foreground))'
     },
+    shikiPending: true,
     shikiLanguage: language,
     shikiThemeVersion: getShikiThemeVersion()
   });
@@ -168,13 +172,14 @@ function addTokenDecorations(
   contentTo: number,
   previous: DecorationSet = Decoration.none,
   allowUnseen: () => boolean = () => true,
-  isNeeded: () => boolean = () => true,
+  isNeeded: TokenNeeded = () => true,
   sourceLines?: readonly { from: number; to: number }[]
 ): void {
+  const requestIsNeeded = () => isNeeded(lang, code);
   const tokens = getShikiTokens(lang, code, 'editor', 1);
   // A prefix still belongs to pending work. Register this visible surface even
   // when another preparation caller requested the first batch and later retires.
-  if (tokens && isNeeded()) requestShikiTokens(lang, code, 'editor', isNeeded);
+  if (tokens && requestIsNeeded()) requestShikiTokens(lang, code, 'editor', requestIsNeeded);
   if (!tokens) {
     // Keep the mapped presentation until this revision's tokens are ready.
     // Only matching language/theme identities may enter the rebuilt result.
@@ -187,13 +192,16 @@ function addTokenDecorations(
       const end = Math.min(contentTo, to);
       if (start < end) {
         preservedPresentation = true;
-        builder.add(start, end, decoration);
+        // Retained colors still await this revision's result. They must also
+        // keep a visible/preceding block out of scrolling-time projection.
+        builder.add(start, end, decoration.spec.shikiPending ? decoration
+          : Decoration.mark({ ...decoration.spec, shikiPending: true }));
       }
     });
     // A hidden editor's mapped viewport may cover the whole replacement document.
     // Maintain known blocks and a bounded preparation of newly introduced code.
     if (!hadPresentation && !allowUnseen()) return;
-    if (isNeeded()) requestShikiTokens(lang, code, 'editor', isNeeded);
+    if (requestIsNeeded()) requestShikiTokens(lang, code, 'editor', requestIsNeeded);
     // On first paint there is no completed Shiki presentation to preserve.
     // Cover the block with one neutral foreground until the requested token
     // set arrives, so CodeMirror's language parser cannot briefly expose a
@@ -318,7 +326,7 @@ function addMathTokenDecorations(
   prefix: string,
   previous: DecorationSet,
   allowUnseen: () => boolean,
-  isNeeded: () => boolean
+  isNeeded: TokenNeeded
 ): void {
   if (from >= to) return;
   const doc = view.state.doc, lines: Array<{ from: number; to: number }> = [];
@@ -346,7 +354,7 @@ function addBlockDecorations(
   markCache: Map<string, Decoration>,
   previous: DecorationSet,
   allowUnseen: () => boolean,
-  isNeeded: () => boolean
+  isNeeded: TokenNeeded
 ): void {
   const { state } = view;
   if (node.name === 'CodeBlock') {
@@ -394,7 +402,7 @@ function buildDecorations(
   view: EditorView,
   previous: DecorationSet,
   allowUnseen: () => boolean,
-  canHighlight: () => boolean
+  canPrepare: TokenNeeded
 ): DecorationSet {
   if (!isShikiThemeReady()) {
     return Decoration.none;
@@ -402,7 +410,7 @@ function buildDecorations(
   const builder = new RangeSetBuilder<Decoration>();
   const markCache = new Map<string, Decoration>();
   const doc = view.state.doc;
-  const isNeeded = () => view.state.doc === doc && canHighlight();
+  const isNeeded: TokenNeeded = (language, code) => view.state.doc === doc && canPrepare(language, code);
   try {
     const math = collectDocumentMathRanges(view.state);
     const bodies = math.map(range => {
@@ -470,6 +478,29 @@ const shikiPlugin = ViewPlugin.fromClass(
       }
       return false;
     };
+    private canPrepareWhileScrolling(): boolean {
+      const viewport = getViewportController(this.view);
+      // Warm, bounded Worker work may finish ahead of the reader. Keep cold
+      // initialization, held pointers and input under their existing owners.
+      return !this.destroyed && this.view.inView && !this.view.composing && !this.caretPending
+        && !isLiveInputDerivedWorkPending(this.view.state) && !isLivePointerSelectionActive(this.view.state)
+        && viewport?.isUserScrolling() === true && !viewport.isScrollbarDragging();
+    }
+    private readonly canPrepare: TokenNeeded = (language, code) => this.canHighlight()
+      || this.canPrepareWhileScrolling() && canPrepareShikiTokensDuringScroll(language, code);
+    private canProjectAhead(): boolean {
+      if (!this.canPrepareWhileScrolling()) return false;
+      const bottom = this.view.scrollDOM.getBoundingClientRect().bottom;
+      const documentTop = this.view.documentTop;
+      let pending = false, safe = true, inspected = 0;
+      this.decorations.between(this.view.viewport.from, this.view.viewport.to, (from, _to, decoration) => {
+        if (++inspected > 512) { safe = false; return false; }
+        if (!decoration.spec.shikiPending) return;
+        pending = true;
+        if (documentTop + this.view.lineBlockAt(from).top < bottom) { safe = false; return false; }
+      });
+      return pending && safe;
+    }
     deferHighlightForCaret(): void {
       if (!usesLargeDocumentDerivedWorkBudget(this.view.state)) return;
       if (this.caretFrame !== null) window.cancelAnimationFrame(this.caretFrame);
@@ -498,15 +529,15 @@ const shikiPlugin = ViewPlugin.fromClass(
         return allowed;
       };
       this.releaseHighlighting = activateShikiCodeHighlighting();
-      this.decorations = buildDecorations(view, Decoration.none, this.allowUnseen, this.canHighlight);
+      this.decorations = buildDecorations(view, Decoration.none, this.allowUnseen, this.canPrepare);
       this.unsubscribe = subscribeShikiRefresh(() => {
         if (this.destroyed) return;
         const version = getShikiThemeVersion(), paletteChanged = version !== this.themeVersion;
         this.themeVersion = version;
-        // A result that started before the wheel gesture must not re-enter
-        // the presentation transaction merely because its tokens are ready.
+        // Visible/preceding results wait for native motion; an entirely
+        // downstream preparation may finish before it reaches the screen.
         // Explicit palette changes retain their immediate projection.
-        if (!paletteChanged && usesLargeDocumentDerivedWorkBudget(view.state) && !this.canHighlight()) return;
+        if (!paletteChanged && usesLargeDocumentDerivedWorkBudget(view.state) && !this.canHighlight() && !this.canProjectAhead()) return;
         view.dispatch({ effects: shikiRefreshEffect.of(null) });
       });
     }
@@ -533,7 +564,7 @@ const shikiPlugin = ViewPlugin.fromClass(
           || syntaxTreeChanged(transaction)
       );
       if (update.docChanged || update.selectionSet || update.viewportChanged || refreshed || becameVisible) {
-        this.decorations = buildDecorations(update.view, this.decorations, this.allowUnseen, this.canHighlight);
+        this.decorations = buildDecorations(update.view, this.decorations, this.allowUnseen, this.canPrepare);
       }
     }
 

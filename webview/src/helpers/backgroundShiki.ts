@@ -126,6 +126,8 @@ export function createBackgroundShiki(uri: string, theme: RawVscodeTheme,
     } catch { if (running === job) finish(null, true); }
   };
   return {
+    /** Reusing this grammar needs no language import on the editor's thread. */
+    hasLanguage(lang: string): boolean { return !disposed && !!worker && loaded.has(lang); },
     request(lang: string, code: string, isNeeded: () => boolean, progress?: (tokens: ShikiTokenLines) => void): Promise<ShikiTokenLines | null> {
       if (disposed) return Promise.resolve(null);
       if (running && !running.isNeeded()) worker?.postMessage({ cancel: running.id });

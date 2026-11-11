@@ -205,6 +205,14 @@ export function isShikiThemeReady(surface: ShikiSurface = 'editor'): boolean {
   return getRuntimeState(surface).rawTheme !== null;
 }
 
+/** Short reading work can reuse a warm Worker without importing or compiling
+ * a cold language on the editor's thread. Input/presentation admission stays
+ * with the caller; the normal request still owns cancellation and caching. */
+export function canPrepareShikiTokensDuringScroll(lang: string, code: string, surface: ShikiSurface = 'editor'): boolean {
+  return code.length <= 8_192 && code.split('\n', 129).length <= 128
+    && getRuntimeState(surface).background?.hasLanguage(lang) === true;
+}
+
 function cacheKey(state: ShikiRuntimeState, lang: string, code: string): string {
   return `${state.themeVersion} ${lang} ${code}`;
 }

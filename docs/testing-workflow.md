@@ -2401,6 +2401,16 @@ and when only one surface has preloaded an embedded language.
 Measure large-fence updates alongside first mode entry and retained heap; reuse
 must not shift the work into a later mode transition.
 
+`scripts/test-live-code-reading-production.ts` belongs to the release browser
+suite and the rendered/viewport targeted plans. It exercises ordinary and bounded
+documents through trusted continuous wheels. A new short block in a warm language
+must prepare and become colored before scrolling stops; cold languages, oversized
+fences and distant content must stay deferred. It retains the document text and
+the reading witness throughout coloring, with timing reported diagnostically.
+The background-Shiki contract separately checks that worker failure, pending
+grammar loading and disposal cannot report a reusable language; the lifecycle
+contract keeps the main-thread fallback out of scrolling preparation.
+
 `scripts/test-export-fence-highlight-reuse.ts` runs the bundled renderer in Node
 and observes the real fallback highlighter. It checks reuse after prose changes,
 code/language invalidation, custom-highlighter isolation, error retries, bounded

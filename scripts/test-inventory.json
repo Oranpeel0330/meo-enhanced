@@ -613,6 +613,7 @@
       "scripts/test-list-work-bound-production.ts",
       "scripts/test-live-block-toolbar-visibility.ts",
       "scripts/test-live-caret-continuity.ts",
+      "scripts/test-live-code-reading-production.ts",
       "scripts/test-live-command-presentation.ts",
       "scripts/test-live-composite-lists.ts",
       "scripts/test-live-decoration-history.ts",

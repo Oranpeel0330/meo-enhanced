@@ -160,6 +160,8 @@ async function consumersShareOneInstanceUntilTheLastRelease(): Promise<void> {
   assert.equal(highlighters.length, initializations + 1);
   assert.equal(shared.loadCalls, 1);
   assert.equal(shared.tokenizeCalls, 1);
+  assert.equal(shiki.canPrepareShikiTokensDuringScroll('typescript', 'const reading = 1;'), false,
+    'A warm main-thread fallback must retain its existing native-scroll admission');
 
   releaseFirst();
   releaseFirst();
