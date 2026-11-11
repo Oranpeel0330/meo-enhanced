@@ -2908,6 +2908,10 @@ the existing owner.
 `scripts/test-vscode-preview-shortcuts.ps1` separately checks the real workbench
 menu, read-only command isolation and native input clipboard operations in a
 disposable profile, restoring previous clipboard text.
+It compares Preview shortcut labels, dimensions and typography with the real
+Live/Source menus in both appearances, and checks native body/input Ctrl+C.
+Preview menu hints use platform defaults scoped to the readonly menu context;
+they do not mirror arbitrary user remappings of the host clipboard commands.
 
 `scripts/test-live-editing-preview-production.ts` belongs to `test:browser` and
 the rendered targeted plan. It uses trusted native input with production Workers

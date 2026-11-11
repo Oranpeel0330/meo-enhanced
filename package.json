@@ -58,12 +58,12 @@
       {
         "command": "meoEnhanced.preview.cut",
         "title": "%command.preview.cut%",
-        "enablement": "false"
+        "enablement": "meoEnhanced.previewClipboardEditable"
       },
       {
         "command": "meoEnhanced.preview.paste",
         "title": "%command.preview.paste%",
-        "enablement": "false"
+        "enablement": "meoEnhanced.previewClipboardEditable"
       },
       {
         "command": "meoEnhanced.outline.expandAll",
@@ -102,6 +102,26 @@
         "command": "meoEnhanced.exportDocx",
         "title": "%command.exportDocx%",
         "icon": "$(file)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "meoEnhanced.preview.cut",
+        "key": "ctrl+x",
+        "mac": "cmd+x",
+        "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly"
+      },
+      {
+        "command": "meoEnhanced.preview.copy",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly"
+      },
+      {
+        "command": "meoEnhanced.preview.paste",
+        "key": "ctrl+v",
+        "mac": "cmd+v",
+        "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly"
       }
     ],
     "customEditors": [

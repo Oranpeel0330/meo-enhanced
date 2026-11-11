@@ -11,8 +11,13 @@ try {
     const command = `meoEnhanced.preview.${action}`;
     const descriptor = manifest.contributes.commands.find((entry: any) => entry.command === command);
     assert.ok(descriptor);
-    assert.equal(descriptor.enablement, action === 'copy' ? undefined : 'false');
+    assert.equal(descriptor.enablement, action === 'copy' ? undefined : 'meoEnhanced.previewClipboardEditable');
     assert.equal(manifest.contributes.menus.commandPalette.find((entry: any) => entry.command === command)?.when, 'false');
+    const binding = manifest.contributes.keybindings.find((entry: any) => entry.command === command);
+    const key = action === 'copy' ? 'c' : action === 'cut' ? 'x' : 'v';
+    assert.equal(binding.key, `ctrl+${key}`);
+    assert.equal(binding.mac, `cmd+${key}`);
+    assert.equal(binding.when, 'webviewId == meoEnhanced.editor && webviewSection == preview-readonly');
     for (const language of ['package.nls.json', 'package.nls.zh-cn.json']) {
       const labels = await Bun.file(language).json();
       assert.ok(labels[`command.preview.${action}`]);
@@ -102,7 +107,7 @@ try {
       assert.equal(await page.evaluate(() => (window as any).__menuFocusTarget), 'preview-frame',
         'The host must remember Preview before its menu borrows focus');
       assert.deepEqual(await page.evaluate(() => (window as any).__menuContext),
-        { webviewSection: 'preview-readonly', preventDefaultContextMenuItems: true },
+        { webviewSection: 'preview-readonly', 'meoEnhanced.previewClipboardEditable': false, preventDefaultContextMenuItems: true },
         'Reading content must use the readonly host menu');
       assert.equal(await page.evaluate(() => {
         const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
@@ -176,6 +181,7 @@ try {
         await page.mouse.click(point.x, point.y, { button: 'right' });
         assert.deepEqual(await page.evaluate(() => (window as any).__menuContext), {
           webviewSection: editable ? 'preview-input' : 'preview-readonly',
+          'meoEnhanced.previewClipboardEditable': editable,
           preventDefaultContextMenuItems: !editable
         }, `${surface}/${large}: ${selector} must publish its actual editing capability`);
       }

@@ -59,7 +59,16 @@ exports.run = async () => {
     };
     const readMenuItems = () => page.evaluate(() => [...document.querySelectorAll('.context-view .action-label')]
       .filter(label => label.getBoundingClientRect().height > 0)
-      .map(label => ({ label: label.textContent.trim(), disabled: !!label.closest('[aria-disabled="true"], .disabled') })));
+      .map(label => ({ label: label.textContent.trim(), disabled: !!label.closest('[aria-disabled="true"], .disabled'),
+        keybinding: label.closest('.action-menu-item')?.querySelector('.keybinding')?.textContent.trim() || '' })));
+    const readMenuLayout = () => page.evaluate(() => {
+      const menu = [...document.querySelectorAll('.context-view .monaco-menu')].find(element => element.getBoundingClientRect().height > 0);
+      const row = menu.querySelector('.action-menu-item'), label = row.querySelector('.action-label');
+      const rect = menu.getBoundingClientRect(), style = getComputedStyle(label);
+      return { width: rect.width, height: rect.height, rowHeight: row.getBoundingClientRect().height,
+        fontFamily: style.fontFamily, fontSize: style.fontSize, lineHeight: style.lineHeight };
+    });
+    const previewMenus = [];
     const expectQuickInput = async (surface, gesture, commands) => {
       await page.waitForFunction(() => {
         const widget = document.querySelector('.quick-input-widget');
@@ -127,6 +136,9 @@ exports.run = async () => {
       assert.equal(await preview.evaluate(() => getSelection().toString()), selected);
       const sentinel = `MEO_PREVIEW_CONTEXT_COPY_${surface}`;
       await vscode.env.clipboard.writeText(sentinel);
+      await chord('c');
+      await expectClipboard(selected, `${surface}: native Ctrl+C`);
+      await vscode.env.clipboard.writeText(sentinel);
       await page.mouse.click(bounds.x + points.left + 10, bounds.y + points.y, { button: 'right' });
       await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
         .some(label => /^(Copy|复制)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0), { timeout: 5000 });
@@ -137,6 +149,15 @@ exports.run = async () => {
       }
       assert.equal(menuItems.find(item => /^(Copy|复制)$/.test(item.label))?.disabled, false);
       assert.equal(menuItems.length, 3, 'Readonly clipboard entries must replace, not duplicate, the defaults');
+      assert.ok(menuItems.every(item => item.keybinding), 'Preview must show the native clipboard shortcut column');
+      previewMenus.push({ surface, items: menuItems, layout: await readMenuLayout() });
+      await page.waitForFunction(() => {
+        let element = [...document.querySelectorAll('.context-view .monaco-menu')].find(node => node.getBoundingClientRect().height > 0);
+        if (!element) return false;
+        if (element.getAnimations({ subtree: true }).some(animation => animation.playState === 'running')) return false;
+        for (; element; element = element.parentElement) if (Number(getComputedStyle(element).opacity) < 0.999) return false;
+        return true;
+      });
       await page.screenshot({ path: path.join(output, `context-menu-${surface}.png`) });
       const copy = await page.evaluate(() => {
         const label = [...document.querySelectorAll('.context-view .action-label')]
@@ -170,6 +191,8 @@ exports.run = async () => {
       assert.equal(inputMenuItems.length, 3);
       assert.ok(inputMenuItems.every(item => !item.disabled), 'Editable inputs must retain the enabled native menu');
       await page.keyboard.press('Escape');
+      await chord('c');
+      await expectClipboard('Editable field.', `${surface}: native input Ctrl+C`);
       await vscode.commands.executeCommand('editor.action.clipboardCopyAction');
       await expectClipboard('Editable field.', `${surface}: input`);
       await vscode.commands.executeCommand('editor.action.clipboardCutAction');
@@ -198,6 +221,13 @@ exports.run = async () => {
       const items = await readMenuItems();
       assert.equal(items.length, 3);
       assert.ok(items.every(item => !item.disabled), `${mode}: native editing menus must stay enabled`);
+      const layout = await readMenuLayout();
+      for (const preview of previewMenus) {
+        assert.deepEqual(preview.items.map(item => item.keybinding), items.map(item => item.keybinding),
+          `${preview.surface}: clipboard shortcut labels must match the native editor menu`);
+        assert.deepEqual(preview.layout, layout, `${preview.surface}: native menu dimensions and typography must match ${mode}`);
+      }
+      report.menuComparison = { preview: previewMenus, native: { mode, items, layout } };
       await page.keyboard.press('Escape');
       report.runs.push({ surface: mode, gesture: 'enabled native context menu', exact: true });
     }

@@ -4286,6 +4286,7 @@ function bindPreviewContextMenu(frame: HTMLIFrameElement, signal: AbortSignal): 
       && (input.localName === 'textarea' || ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes((input as HTMLInputElement).type));
     frame.dataset.vscodeContext = JSON.stringify({
       webviewSection: editable ? 'preview-input' : 'preview-readonly',
+      'meoEnhanced.previewClipboardEditable': editable,
       preventDefaultContextMenuItems: !editable
     });
     // Nested focus does not reach VS Code's last-focused-element tracker.
