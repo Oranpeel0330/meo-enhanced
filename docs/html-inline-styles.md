@@ -30,11 +30,13 @@ there is no separate CSS property completion catalog to synchronize.
 | Paint | Gradients, box/text shadows, outlines and static SVG fill/stroke declarations; `fill-rule` and `clip-rule` accept `nonzero`/`evenodd` |
 | Ink and visibility | `color`, `background-color`, color/gradient `background`, ordinary document `display` values, `visibility`, `opacity` including percentages |
 
-These properties accept `inherit`, `initial` and `unset`. Supported lengths use
+These properties accept `inherit`, `initial`, `unset`, `revert` and `revert-layer`. Supported lengths use
 `px`, `em`, `rem`, `ex`, `ch`, `lh`, `rlh`, `cm`, `mm`, `q`, `in`, `pt`, `pc`,
-`vw`, `vh`, `vmin`, `vmax`, and percentages where the property allows them.
+`vw`, `vh`, `vmin`, `vmax`, modern viewport/container units, and percentages where the property allows them.
 Unitless zero is valid. Colors accept named colors, transparent/current color,
 3/4/6/8-digit hex, and ordinary comma or space-form `rgb`/`rgba`/`hsl`/`hsla`.
+Modern color functions including `oklch`, `oklab`, `lab`, `lch`, `hwb`,
+`color`, `color-mix` and `light-dark` are retained for browser validation.
 Sizing functions such as `calc`, `min`, `max` and `clamp`, and document custom
 properties with `var`, are accepted. Custom property names retain their case;
 editor-owned `--meo-*` and `--vscode-*` variables remain reserved.
@@ -63,15 +65,17 @@ actual parent container's content width, including authored padding. Table and
 column widths, min/max widths and `table-layout` remain subject to that fit;
 `table-layout` is not an author-controlled property in this policy.
 
-## Deliberately outside this subset
+## Static CSS and resource boundaries
 
-The shared policy does not enable viewport-fixed positioning, clipping or
-internal scrolling, vertical writing, animation/transitions, filters, editor
-variables, `url()`, stylesheet imports, font loading or `!important`.
+Static transforms, filters, clipping, internal overflow, vertical writing,
+font shorthand, pseudo-element content and `!important` are supported.
+Resource URLs, imports and font loading use the shared stylesheet resource path.
+Viewport-fixed positioning, animation/transitions and editor variables remain
+outside this static-document subset.
 Selectors and document `<style>` elements use the scoped stylesheet path
 described in the compatibility contract.
 Source can retain these declarations; they are omitted from the rendered result.
-Font lists select already available fonts and never load a font resource.
+Font lists retain installed-font fallbacks and can select document-owned font faces.
 
 Style changes follow the existing HTML block and geometry consumers. No polling,
 per-element scheduler, whole-document style scan or second layout engine is added.

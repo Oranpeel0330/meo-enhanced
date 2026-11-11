@@ -27,6 +27,7 @@ import {
   supportedHtmlBlockTags,
   supportedHtmlTags, supportedInlineHtmlTags, normalizeHtmlAttribute, isHtmlUrlAttribute
 } from '../../../src/shared/htmlPolicy';
+import { isSupportedHtmlTag, isCustomHtmlTag } from '../../../src/shared/htmlPolicy';
 import { createHtmlDocumentStyles, collectHtmlDocumentStyles, readHtmlDocumentStyles } from './htmlDocumentStyles';
 import { usesBackgroundMarkdownStructure } from '../editor/backgroundMarkdownStructure';
 import { resolveHtmlResources } from './htmlResources';
@@ -356,7 +357,7 @@ export function collectRenderableHtmlBlocks(state: EditorState, tree: Tree = res
       const fragments = splitHtmlBlockFragments(source);
       const tail = source.slice(fragments.at(-1)?.to ?? 0);
       const incomplete = !fragments.length || scanHtmlTags(tail).some(tag => !tag.closing && !tag.selfClosing);
-      if (incomplete && supportedHtmlTags.has(getHtmlRootTagName(source) ?? '')) {
+      if (incomplete && isSupportedHtmlTag(getHtmlRootTagName(source) ?? '')) {
         const gap = state.doc.sliceString(previous.to, node.from);
         previous.bridged ||= Boolean(gap.trim());
         previous.parts ??= [{ tagFrom: 0, sourceFrom: previous.from }];
@@ -445,7 +446,7 @@ function sanitizeElementTree(root: ParentNode): HtmlContentIssue[] {
   for (const element of Array.from(root.querySelectorAll<HTMLElement>('*'))) {
     const tagName = element.tagName.toLowerCase();
     if (tagName === 'style') { element.remove(); continue; }
-    if (!supportedHtmlTags.has(tagName)) {
+    if (!isSupportedHtmlTag(tagName)) {
       issues.push({ kind: 'tag', name: tagName });
       const shell = (element.cloneNode(false) as Element).outerHTML;
       const close = shell.lastIndexOf('</');
@@ -467,10 +468,6 @@ function sanitizeElementTree(root: ParentNode): HtmlContentIssue[] {
         continue;
       }
       if (normalized !== attribute.value) element.setAttribute(attribute.name, normalized);
-      if ((name === 'href' || name === 'src') && !isSafeHtmlUrl(attribute.value, name)) {
-        issues.push({ kind: 'url', name: `${tagName}.${name}` });
-        element.removeAttribute(attribute.name);
-      }
       if (name === 'align' && ['p', 'div'].includes(tagName)) {
         const align = normalizeHtmlAlign(attribute.value);
         if (align) element.setAttribute('align', align);
@@ -824,6 +821,10 @@ function createSanitizedHtml(
       element.removeAttribute(name);
     }
   }
+  if (view) for (const element of template.content.querySelectorAll('svg image[href]')) {
+    element.setAttribute('data-meo-html-href', element.getAttribute('href')!);
+    element.removeAttribute('href');
+  }
   enhanceLinks(template.content, inline, uiLanguage);
   return template.content;
 }
@@ -867,7 +868,7 @@ const htmlResourceControllers = new WeakMap<HTMLElement, AbortController>();
 const htmlBlockWidgets = new WeakMap<HTMLElement, HtmlBlockWidget>();
 const boundHtmlDetails = new WeakSet<HTMLDetailsElement>();
 
-function attachHtmlResources(root: HTMLElement): void {
+function attachHtmlResources(root: HTMLElement, view: EditorView): void {
   let controller = htmlResourceControllers.get(root);
   if (!controller) {
     controller = new AbortController();
@@ -877,7 +878,12 @@ function attachHtmlResources(root: HTMLElement): void {
   const signal = controller.signal;
   resolveHtmlResources(root, { signal,
     resolve: resolveConfiguredImageSrc,
-    commit: apply => { if (!signal.aborted && root.isConnected) apply(); } });
+    commit: apply => {
+      if (signal.aborted || !root.isConnected) return;
+      const viewport = getViewportController(view);
+      if (viewport) viewport.preserveDocumentAnchorWhileMutation(apply, true);
+      else apply();
+    } });
 }
 
 function disposeHtmlResources(root: HTMLElement): void {
@@ -996,7 +1002,7 @@ class HtmlBlockWidget extends UiLanguageSensitiveWidget {
       contentRoot.appendChild(content);
     }
     root.appendChild(contentRoot);
-    attachHtmlResources(root);
+    attachHtmlResources(root, view);
 
     this.prepareDetails(contentRoot, root, view);
 
@@ -1054,7 +1060,7 @@ class HtmlBlockWidget extends UiLanguageSensitiveWidget {
       });
       const first = current.firstElementChild;
       root.style.textAlign = normalizeHtmlAlign(first?.getAttribute('align') ?? null) ?? '';
-      attachHtmlResources(root);
+      attachHtmlResources(root, view);
     } else if (previous.block.startLine !== this.block.startLine) {
       const delta = this.block.startLine - previous.block.startLine;
       for (const element of current.querySelectorAll<HTMLElement>('[data-meo-html-source-line]')) {
@@ -1206,7 +1212,7 @@ class InlineHtmlWidget extends UiLanguageSensitiveWidget {
     );
     if (content) contentRoot.appendChild(content);
     wrapper.appendChild(contentRoot);
-    attachHtmlResources(wrapper);
+    attachHtmlResources(wrapper, view);
     const firstElement = contentRoot.firstElementChild;
     if (firstElement) {
       const tagName = firstElement.tagName.toLowerCase();
@@ -1259,7 +1265,8 @@ function addInlineHtmlDecorations(
     if (overlapsBlock(line.from, line.to)) continue;
     for (const fragment of splitHtmlBlockFragments(line.text)) {
       const source = line.text.slice(fragment.from, fragment.to);
-      if (!inlineTags.has(getHtmlRootTagName(source) ?? '') || !isSupportedHtmlWithComments(source)) continue;
+      const tag = getHtmlRootTagName(source) ?? '';
+      if (!(inlineTags.has(tag) || isCustomHtmlTag(tag)) || !isSupportedHtmlWithComments(source)) continue;
       const from = line.from + fragment.from;
       const to = line.from + fragment.to;
       // Only actual HTML syntax may replace source; code, escapes, comments and scripts are literal.

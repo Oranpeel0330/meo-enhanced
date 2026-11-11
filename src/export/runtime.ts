@@ -16,6 +16,7 @@ import { buildPresetPreviewStyles } from '../preview/presetStyles';
 import type { ResolvedWikiResources } from '../foundation/wikiReference';
 import { githubPictureMedia } from '../shared/githubPicture';
 import { assessLargeDocument } from '../foundation/largeDocument';
+import { resolveExportHtmlStyles } from './htmlStyles';
 
 export type ExportRuntimeBuildHtmlOptions = {
   wikiResources?: ResolvedWikiResources;
@@ -80,7 +81,11 @@ async function renderExportHtmlDocument(
   } finally {
     highlighter?.dispose();
   }
-  const { html: bodyHtml, hasMermaid, hasMath } = rendered;
+  const { hasMermaid, hasMath } = rendered;
+  const bodyHtml = await resolveExportHtmlStyles(rendered.html, {
+    markdownFilePath: options.sourceDocumentPath, target: options.target,
+    outputFilePath: options.outputFilePath, workspaceRootPath: options.workspaceRootPath
+  });
 
   const stylesCss = options.target === 'docx'
     ? buildExportStyles(environment, 'light')
@@ -140,6 +145,7 @@ export function preparePreviewDocument(options: PreviewDocumentOptions, windowed
     uiLanguage: options.uiLanguage,
     showComments: environment.previewShowComments === true,
     deferImages: true,
+    deferStyles: true,
     deferDisplayMath: assessLargeDocument(options.markdownText).boundedEditorWork,
     windowedPresentation: windowed,
     deferCodeHighlight: true,

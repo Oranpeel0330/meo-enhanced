@@ -60,7 +60,8 @@ import { resolveEmbeddedImageSrc, resolveConfiguredImageSrc } from './images';
 import { createPreviewImageActions, previewImageActionStyles } from './previewImageActions';
 import { cacheBustedImageSource } from '../editor/imageReload';
 import { mapHtmlSrcset } from '../../../src/shared/htmlPolicy';
-import { resolveHtmlResources } from './htmlResources';
+import { resolveHtmlResources, resolveHtmlStylesElement } from './htmlResources';
+import { htmlStyleHasResources } from '../../../src/shared/htmlStyleResources';
 import { githubPictureMedia } from '../../../src/shared/githubPicture';
 import {
   createPreviewTableLayoutController,
@@ -1743,6 +1744,20 @@ export function createPreviewController({
       if (commitFrame === null) flushCommits();
     };
     resolveHtmlResources(frameDocument, { signal: abortController.signal, resolve: resolveConfiguredImageSrc, commit: enqueueCommit });
+    const authorStyle = frameDocument.querySelector<HTMLStyleElement>('style[data-meo-preview-styles]');
+    if (authorStyle) resolveHtmlStylesElement(authorStyle, {signal:frameEvents?.signal ?? abortController.signal,commit:apply => {
+      const publish = () => {
+        if (disposed || activeFrameDocument !== frameDocument) return;
+        apply(); sourceMapDirty = true;
+      };
+      if (hasBoundedPreviewResources(frameDocument) && !host.hidden) {
+        void enqueueReadingCommit(frameDocument,publish,reason => {
+          if (host.hidden) publish();
+          else if (reason === 'failed') withViewportTransaction(publish);
+        },() => canCommitReadingElement()).catch(handleWindowError);
+      } else if (host.hidden) publish();
+      else withViewportTransaction(publish);
+    }});
     for (const source of frameDocument.querySelectorAll<HTMLSourceElement>('picture source[data-meo-deferred-image-srcset]')) {
       const rawSrc = source.getAttribute('data-meo-deferred-image-srcset') ?? '';
       source.removeAttribute('data-meo-deferred-image-srcset');
@@ -2603,7 +2618,7 @@ export function createPreviewController({
     };
   };
 
-  const applyAppearanceToFrame = (preserveReadingPosition = false) => {
+  const applyAppearanceToFrame = (preserveReadingPosition = false, forceAuthorStyles = false) => {
     if (disposed) return;
     cancelElementReveal();
     appearanceRetention?.release();
@@ -2712,6 +2727,9 @@ export function createPreviewController({
     // This is a presentation-only update of the same frame and document. A
     // cross-surface semantic projection would race this exact reading offset.
     styleElement.textContent = payload.styles[appearance];
+    if (frameEvents) resolveHtmlStylesElement(styleElement, { signal: frameEvents.signal, force: forceAuthorStyles, commit: apply => {
+      if (isCurrent()) withViewportTransaction(() => { apply(); sourceMapDirty = true; keepPosition(); });
+    } });
     // A queued image commit can capture a reading anchor before ResizeObserver
     // reports this style change. Never let it project the previous geometry.
     sourceMapDirty = true;
@@ -2771,6 +2789,11 @@ export function createPreviewController({
       );
     }
   };
+
+  const refreshAuthorStyles = () => {
+    if (latestPayload && htmlStyleHasResources(latestPayload.styles[appearance])) applyAppearanceToFrame(true,true);
+  };
+  window.addEventListener('meo-html-styles-changed', refreshAuthorStyles);
 
   const setAppearance = (
     nextAppearance: PreviewAppearance,
@@ -4095,6 +4118,7 @@ export function createPreviewController({
       frameGeneration += 1;
       mermaidPresentationGeneration += 1;
       previewMermaidRenderer.dispose();
+      window.removeEventListener('meo-html-styles-changed', refreshAuthorStyles);
       previewViewportResources?.dispose();
       previewViewportResources = null;
       unsubscribePreviewCodeHighlight();

@@ -31,6 +31,7 @@ import { defaultInputAssistance, isEditorCommandId, type EditingPreferences } fr
 import { createElement, Heading, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, List, ListOrdered, SquareCheck, ListTree, Hash, Code, SquareCode, Terminal, Quote, Minus, Plus, Table2, Link, Unlink, Brackets, Sigma, Image, Bold, Italic, Strikethrough, Search, FileCode2, Undo2, Redo2, RotateCcw, PanelLeftRightDashed, Settings, Settings2, Check, ChevronRight, ArrowRight, Ellipsis, Sun, Moon, SunMoon, Languages, Type, SlidersHorizontal, CircleQuestionMark, ExternalLink, Heart, History, Info } from 'lucide';
 import { createCodicon } from './helpers/codicons';
 import { setImageSrcResolver, initializeImageHandling, resolveImageSrc, settleImageSrcRequest, handleSavedImagePath, handleImagePaste, refreshWikiImagePresentations } from './helpers/images';
+import { initializeHtmlStyles, acceptHtmlStyles } from './adapters/htmlStylesTransport';
 import { createGitClient } from './helpers/gitClient';
 import { createOutlineController } from './helpers/outline';
 import { normalizeWikiTarget, replaceWikiLinkStatuses, initializeWikiLinkHandling, collectWikiLinkTargets, requestWikiLinkStatuses, scheduleWikiLinkStatusRefresh, setWikiLinkRefreshContext, cancelPendingWikiStatusRefresh, handleResolvedWikiLinks } from './helpers/wikiLinks';
@@ -168,6 +169,7 @@ function createCompatibleVsCodeApi(): CompatibleVsCodeWebviewApi {
 
 const vscode = createCompatibleVsCodeApi();
 initializeImageHandling(vscode);
+initializeHtmlStyles(message => vscode.postMessage(message));
 initializeWikiLinkHandling(vscode);
 initializeLocalLinkHandling(vscode);
 
@@ -4186,6 +4188,14 @@ window.addEventListener('message', (event) => {
 
   if (message.type === 'resolvedImageSrc') {
     settleImageSrcRequest(message);
+    return;
+  }
+  if (message.type === 'resolvedHtmlStyles') {
+    acceptHtmlStyles(message);
+    return;
+  }
+  if (message.type === 'htmlStylesChanged') {
+    window.dispatchEvent(new Event('meo-html-styles-changed'));
     return;
   }
 

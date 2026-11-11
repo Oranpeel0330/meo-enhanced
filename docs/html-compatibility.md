@@ -15,7 +15,8 @@ style or resource policy.
 
 Supported content includes document structure and text semantics, lists,
 disclosures, tables and column/cell attributes, pictures and image candidates,
-native audio/video controls, ordinary form controls, static SVG and MathML.
+native audio/video controls, ordinary form controls, static SVG and MathML,
+open non-modal dialogs, legacy font/list/table presentation and inert custom tags.
 The exported tag and attribute sets are the authoritative catalog used by
 source assistance and both renderers. Generic `class`, `aria-*` and `data-*`
 attributes are supported; editor-owned classes, IDs and source/resource markers
@@ -52,9 +53,22 @@ an existing closing tag.
 
 See [inline styles](html-inline-styles.md) for the declaration policy. Document
 `style` elements use the same declaration validation. Selectors are scoped to
-the reading document, excluding exposed HTML source and preview labels. Only
-conditional `media`, `supports` and `container` rules are retained; imports,
-font registration and executable/resource CSS are filtered.
+the reading document, excluding exposed HTML source, preview labels and editor
+controls. Conditional `media`, `supports`, `container`, `layer` and `scope` rules
+are retained. Static formatting includes transforms, filters, clipping/overflow,
+vertical writing, pseudo-element content and important declarations.
+
+Document `<link rel="stylesheet" href="effects.css">` and CSS imports load local,
+HTTPS and applicable data resources through the shared stylesheet resource owner.
+The link resolves from the Markdown file; imports, images and fonts resolve from
+the stylesheet containing them. Chinese names, spaces, nested imports, media/layer
+conditions and import cycles are covered. Local HTML/DOCX assets are embedded;
+PDF uses its existing file-resource pipeline. Author font faces receive private
+family names so they cannot replace workbench fonts. New stylesheet resources
+follow the default secure-content policy; existing HTTP image/media handling is
+independent. Scripts, events and executable CSS remain filtered.
+Saving a CSS document in VS Code refreshes dependent author styles through the
+existing save notification. Obsolete replies cannot overwrite newer styles.
 
 Author HTML, including inline fragments and their children, retains the browser's
 native box sizing on both surfaces, including native control defaults. Reader
@@ -80,7 +94,14 @@ capabilities can differ (for example, native media and advanced CSS in Word).
 `bun scripts/test-html-content.ts --styles-only` covers the shared policy and
 production Live, Preview and Source side Preview in ordinary and optimized
 documents, including computed grid/flex/CSS-variable styles, SVG/MathML,
-controls, pictures, CommonMark containers, source preservation and unchanged
+controls, pictures, external stylesheet resources, actual font loading, stale
+stylesheet replies, CommonMark containers, source preservation and unchanged
 node identity. `scripts/test-html-content.ts` also owns HTML editing, selection,
 history and mode transitions. `scripts/test-github-readme-compatibility.ts`
 retains the independent GitHub reference corpus.
+
+`bun scripts/test-vscode-html-compatibility.ts --code <Code executable>` compares
+26 static HTML/CSS witnesses with the installed built-in Markdown Preview under
+default security. Font namespacing, embedded assets and MEO's documented literal
+HTML-code rule are checked explicitly. It uses a disposable profile and records
+the VS Code version and per-case result.

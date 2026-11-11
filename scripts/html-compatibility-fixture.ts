@@ -62,10 +62,10 @@ export function checkHtmlCompatibilityExport(): void {
     assert.match(html, /class="compat-grid" aria-label="HTML example" data-kind="example"/);
     assert.match(html, /viewBox="0 0 24 16"/); assert.match(html, /<strong>Mixed Markdown<\/strong>/);
     assert.match(html, /text-shadow:5px 5px 5px #FF0000/);
-    assert.match(html, /@scope /); assert.doesNotMatch(html, /@import|action=/);
+    assert.match(html, /@scope /); assert.doesNotMatch(html, /action=/);
   }
   const mixed = renderMarkdownToHtml({ markdownText: '<div><custom-html>Unknown</custom-html><p>Still rendered</p><script>window.bad="<img>"</script></div>', markdownFilePath: '/fixture/compatibility.md', target: 'html' }).html;
-  assert.match(mixed, /<p>Still rendered<\/p>/); assert.doesNotMatch(mixed, /<script>|<custom-html>/);
+  assert.match(mixed, /<p>Still rendered<\/p>/); assert.match(mixed, /<custom-html>Unknown<\/custom-html>/); assert.doesNotMatch(mixed, /<script>/);
   for (const value of ['javascript:alert(1)', 'java\nscript:alert(1)', '\u0000javascript:alert(1)', 'data:text/html,test']) assert.equal(isSafeHtmlUrl(value, 'href'), false, value);
   assert.equal(normalizeHtmlAttribute('p', 'data-meo-preview-block', '0'), null);
   assert.equal(normalizeHtmlAttribute('p', 'onclick', 'alert(1)'), null);

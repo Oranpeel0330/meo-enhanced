@@ -8,9 +8,11 @@ import { renderMarkdownToHtml } from '../src/export/renderMarkdown';
 import { decodeInitMessage } from '../src/protocol/readyInit';
 import { assessLargeDocument } from '../src/foundation/largeDocument';
 import { htmlCompatibilityFixture, htmlCompatibilityImage, htmlCompatibilityDoubleImage, checkHtmlCompatibilityExport } from './html-compatibility-fixture';
+import { htmlStyleResourceFixture, checkHtmlStyleResources, resolveFixtureHtmlStyles } from './html-style-resources';
 
 const fixture = `Before witness.
 ${htmlCompatibilityFixture}
+${htmlStyleResourceFixture}
 
 <div id="strong-colors">
 <strong id="strong-default">Default strong</strong>
@@ -56,12 +58,14 @@ async function frames(page: import('puppeteer-core').Page, count = 8): Promise<v
 export async function checkHtmlStyleRendering(): Promise<void> {
   checkHtmlStylePolicy();
   checkHtmlCompatibilityExport();
+  await checkHtmlStyleResources();
   for (const target of ['html', 'pdf', 'docx'] as const) {
     const html = renderMarkdownToHtml({ markdownText: fixture, markdownFilePath: '/fixture/html-styles.md', target }).html;
     assert.match(html, /border:3px solid #3b82f6/); assert.match(html, /font-weight:450/);
     assert.match(html, /list-style:square inside/); assert.match(html, /object-fit:cover/);
     const unsafe = renderMarkdownToHtml({ markdownText: '<div style="border:expression(alert(1));padding:var(--vscode-editor-font-size);position:fixed;color:red !important">Safe</div>', markdownFilePath: '/fixture/html-styles.md', target }).html;
-    assert.doesNotMatch(unsafe, /expression|var\(|position:|!important/);
+    assert.doesNotMatch(unsafe, /expression|var\(|position:/);
+    assert.match(unsafe, /color:red !important/);
   }
   const github = exportRuntime.renderPreviewDocument({ markdownText: '<div id="github-style" style="border:3px solid red;color:red;padding:12px">GitHub text</div>', sourceDocumentPath: '/fixture/html-styles.md', uiLanguage: 'en', preset: 'github-readme' });
   // The built-in GitHub preset has its own HTML compatibility policy.
@@ -81,11 +85,16 @@ export async function checkHtmlStyleRendering(): Promise<void> {
         const page = await browser.newPage(), errors: string[] = [], imageRequests: string[] = [];
         const documents = new Map<string, ReturnType<typeof createPreviewDocument>>();
         let previewSource = '';
+        const heldStyles: Array<() => void> = [];
+        let savedStyleChanged = false;
+        let inlineStyleRequests = 0;
         let resolveReadyPageId!: (pageId: string) => void;
         const readyPageId = new Promise<string>(resolve => { resolveReadyPageId = resolve; });
         page.on('pageerror', error => errors.push(String(error)));
         try {
-          await page.setViewport({width:1200,height:1500});
+          // All formatting witnesses must be inside the actual Live reading
+          // window; offscreen widgets are deliberately unmounted.
+          await page.setViewport({width:1200,height:1800});
           await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}</style><div id="app"></div>');
           await page.addStyleTag({path:'webview/src/styles.css'});
           await page.evaluate(code => {
@@ -110,6 +119,12 @@ export async function checkHtmlStyleRendering(): Promise<void> {
               return {type:'resolvedImageSrc',requestId:message.requestId,
                 result:{ok:true,value:{resolvedUrl:String(message.url).includes('compat-picture')
                   ? String(message.url).includes('-2x') ? htmlCompatibilityDoubleImage : htmlCompatibilityImage : message.url}}};
+            }
+            if (message.type === 'resolveHtmlStyles') {
+              if (message.css.startsWith('x{')) inlineStyleRequests++;
+              const css = (await resolveFixtureHtmlStyles(message.css)).replace('rgb(16,78,112)',savedStyleChanged ? 'rgb(18,80,114)' : 'rgb(16,78,112)');
+              if (message.css.includes('updated.css')) await new Promise<void>(resolve => heldStyles.push(resolve));
+              return {type:'resolvedHtmlStyles',requestId:message.requestId,result:{ok:true,value:{css}}};
             }
             if (message.type === 'requestPreviewDocument') return {type:'previewDocumentResult',requestId:message.requestId,documentId:message.documentId,
               result:{ok:true,value:await documents.get(message.documentId)!.run(message.operation)}};
@@ -150,6 +165,36 @@ export async function checkHtmlStyleRendering(): Promise<void> {
             return Boolean(doc?.querySelector('#styled-box') && doc.querySelector('#empty-border') && doc.querySelector('#empty-background'));
           }, {}, surface === 'live');
           await frames(page, 12);
+          await page.waitForFunction(live => {
+            const doc = live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
+            const node = doc?.getElementById('compat-external');
+            return node && doc!.defaultView!.getComputedStyle(node).color === 'rgb(16, 78, 112)';
+          },{},surface === 'live');
+          const resources = await page.evaluate(live => {
+            const doc = live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+            const node = doc.getElementById('compat-external')!, ink = doc.defaultView!.getComputedStyle(node);
+            return {color:ink.color,image:ink.backgroundImage,transform:ink.transform,overflow:ink.overflow,
+              before:doc.defaultView!.getComputedStyle(node,'::before').content,
+              family:ink.fontFamily,list:doc.defaultView!.getComputedStyle(doc.getElementById('compat-alpha')!).listStyleType};
+          },surface === 'live');
+          assert.equal(resources.color,'rgb(16, 78, 112)'); assert.match(resources.image,/data:image\/png/);
+          assert.equal(resources.transform,'matrix(1, 0, 0, 1, 7, 0)'); assert.equal(resources.overflow,'auto');
+          assert.equal(resources.before,'"Loaded "'); assert.match(resources.family,/meo-html-font-/); assert.equal(resources.list,'upper-alpha');
+          assert.equal(await page.evaluate(live => {
+            const doc=live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+            return doc.defaultView!.getComputedStyle(doc.getElementById('compat-order')!).color;
+          },surface === 'live'),'rgb(2, 3, 4)','External and inline stylesheet cascade order must match on every surface');
+          await page.waitForFunction(live => {
+            const doc = live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
+            return doc && [...doc.fonts].some(face => face.family.includes('meo-html-font-') && face.status === 'loaded');
+          },{},surface === 'live');
+          const modern = await page.evaluate(live => {
+            const doc = live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+            const style = doc.defaultView!.getComputedStyle(doc.getElementById('compat-modern')!);
+            return {font:style.fontSize,writing:style.writingMode,filter:style.filter,color:style.color,custom:doc.getElementById('compat-custom')!.tagName,
+              leakedFont:[...doc.fonts].some(face => face.family === 'Resource Font')};
+          },surface === 'live');
+          assert.deepEqual(modern,{font:'18px',writing:'vertical-rl',filter:'grayscale(1)',color:'oklch(0.6 0.15 30)',custom:'CUSTOM-BOX',leakedFont:false});
           await page.waitForFunction(live => {
             const doc = live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
             const stylesReady = !live || [...document.querySelectorAll('.cm-editor > style')].some(style => style.textContent?.includes('.compat-grid'));
@@ -287,7 +332,73 @@ export async function checkHtmlStyleRendering(): Promise<void> {
             for (const context of strongColors.contexts) assert.equal(context.color, context.parentColor, label);
             assert.equal(strongColors.plain.color, appearance === 'dark' ? strongColors.defaultDark : strongColors.plain.parentColor, label);
           }
+          await page.waitForFunction(live => live
+            ? document.querySelector<HTMLElement>('.editor-loading')?.hidden === true && document.querySelector<HTMLElement>('.editor-host')?.inert === false
+            : document.querySelector<HTMLElement>('.preview-loading')?.hidden === true
+              && document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.documentElement.inert === false,
+          {},surface === 'live');
           if (!large) await page.screenshot({path:`.local/html-style-audit/${surface}-${appearance}.png`});
+          if (!large && appearance === 'light') {
+            const point = await page.evaluate(live => {
+              const frame=document.querySelector<HTMLIFrameElement>('.preview-frame');
+              const doc=live ? document : frame!.contentDocument!;
+              const box=doc.getElementById('compat-external')!.getBoundingClientRect();
+              const outer=live ? {left:0,top:0} : frame!.getBoundingClientRect();
+              return {x:outer.left+box.left+box.width/2,y:outer.top+box.top+box.height/2};
+            },surface === 'live');
+            await page.mouse.move(point.x,point.y); await page.mouse.wheel({deltaY:30});
+            await page.waitForFunction(live => {
+              const doc=live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
+              return (doc?.getElementById('compat-external')?.scrollTop ?? 0)>0;
+            },{},surface === 'live');
+          }
+          if (!large && appearance === 'light' && surface !== 'preview') {
+            const changeLink = async (before: string, after: string) => page.evaluate(({before,after}) => {
+              const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
+              const from = view.state.doc.toString().indexOf(before);
+              if (from < 0) throw new Error('Missing stylesheet link');
+              view.dispatch({changes:{from,to:from+before.length,insert:after},selection:{anchor:0},userEvent:'input.type'});
+            },{before,after});
+            const colorReady = async (color: string) => page.waitForFunction(({live,color}) => {
+              const doc = live ? document : document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
+              const node = doc?.getElementById('compat-external');
+              return node && doc!.defaultView!.getComputedStyle(node).color === color;
+            },{},{live:surface === 'live',color});
+            savedStyleChanged = true;
+            await page.evaluate(() => window.dispatchEvent(new MessageEvent('message',{data:{type:'htmlStylesChanged'}})));
+            await colorReady('rgb(18, 80, 114)');
+            savedStyleChanged = false;
+            await page.evaluate(() => window.dispatchEvent(new MessageEvent('message',{data:{type:'htmlStylesChanged'}})));
+            await colorReady('rgb(16, 78, 112)');
+            await changeLink('样式/效果 演示.css','样式/updated.css');
+            const deadline = Date.now()+10_000;
+            while (!heldStyles.length && Date.now()<deadline) await new Promise(resolve => setTimeout(resolve,20));
+            assert.ok(heldStyles.length,'The obsolete stylesheet response must actually be pending');
+            await changeLink('样式/updated.css','样式/alternate.css');
+            await colorReady('rgb(30, 90, 140)');
+            heldStyles.splice(0).forEach(release => release());
+            await frames(page,8);
+            await colorReady('rgb(30, 90, 140)');
+            await changeLink('样式/alternate.css','样式/效果 演示.css');
+            await colorReady('rgb(16, 78, 112)');
+            if (surface === 'live') {
+              await page.click('#compat-external');
+              await page.waitForSelector('.meo-md-html-live-result #compat-external');
+              const before = inlineStyleRequests;
+              await page.evaluate(() => {
+                (window as any).__htmlStyleResourceNode=document.getElementById('compat-external');
+                const view=(document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
+                const from=view.state.doc.toString().indexOf('External resources')+'External resources'.length;
+                view.dispatch({selection:{anchor:from}}); view.focus();
+              });
+              await page.keyboard.type(' edited');
+              await page.waitForFunction(() => document.getElementById('compat-external')?.textContent === 'External resources edited');
+              await frames(page,8);
+              assert.equal(await page.evaluate(() => (window as any).__htmlStyleResourceNode === document.getElementById('compat-external')),true,
+                'Editing styled text must retain its DOM node');
+              assert.equal(inlineStyleRequests,before,'Editing styled text must retain its already resolved background');
+            }
+          }
           // A prose edit uses the same production adapter; unchanged HTML DOM must survive it.
           if (surface !== 'preview') {
             const from = text.indexOf('Before witness.') + 6;
@@ -315,7 +426,8 @@ export async function checkHtmlStyleRendering(): Promise<void> {
             },{},surface === 'live');
             await page.evaluate(() => {
               const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-              const text = view.state.doc.toString(), from = text.indexOf('<style>'), end = text.indexOf('</style>',from)+8;
+              const text = view.state.doc.toString(), from = text.lastIndexOf('<style>',text.indexOf('.compat-grid {')), end = text.indexOf('</style>',from)+8;
+              if (from < 0) throw new Error('Missing grid stylesheet');
               view.dispatch({changes:{from,to:end,insert:''},selection:{anchor:0},userEvent:'input.type'});
             });
             await page.waitForFunction(live => {

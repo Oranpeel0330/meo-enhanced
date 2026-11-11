@@ -1,5 +1,15 @@
 {
   "separate": {
+    "scripts/test-vscode-html-compatibility.ts": {
+      "kind": "native",
+      "command": "bun scripts/test-vscode-html-compatibility.ts --code <Code executable>",
+      "reason": "Compares static HTML/CSS, linked resources, fonts and SVG against the real built-in Markdown Preview with default security in a disposable profile."
+    },
+    "scripts/test-vscode-html-compatibility.cjs": {
+      "kind": "native",
+      "command": "scripts/test-vscode-html-compatibility.cjs is loaded by scripts/test-vscode-html-compatibility.ts",
+      "reason": "Native built-in reference and production HTML renderer comparison, with explicit font isolation, embedded asset and literal-code expectations."
+    },
     "scripts/test-vscode-resource-loading.ps1": {
       "kind": "native",
       "command": "./scripts/test-vscode-resource-loading.ps1 -CodePath <Code.exe>",
@@ -794,6 +804,8 @@
       "scripts/test-virtual-block-scroll-stability.ts",
       "scripts/test-vscode-auto-save-endurance.cjs",
       "scripts/test-vscode-html-copy.cjs",
+      "scripts/test-vscode-html-compatibility.ts",
+      "scripts/test-vscode-html-compatibility.cjs",
       "scripts/test-vscode-html-copy.ps1",
       "scripts/test-vscode-preview-shortcuts.cjs",
       "scripts/test-vscode-preview-shortcuts.ps1",

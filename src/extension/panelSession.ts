@@ -2,6 +2,7 @@ import type { createVscodeDocumentStatistics } from '../host/vscodeDocumentStati
 import type { createVscodeSidebarOutline } from '../host/vscodeSidebarOutline';
 import { DEFAULT_EDITOR_LINE_HEIGHT } from '../foundation/editorLineHeight';
 import { runEditorService } from '../host/editorServices';
+import { resolveDocumentHtmlStyles } from '../shared/documentLinks';
 import type { createImageDimensionCatalog } from '../host/imageDimensions';
 import { onDidChangeWikiResources } from '../host/wikiResources';
 import { collectWikiReferences } from '../foundation/wikiReference';
@@ -1073,6 +1074,16 @@ export function createPanelSessionController(params: PanelSessionControllerParam
       case 'openImageExternally':
         await openImageExternally(raw.url, documentUri);
         return;
+      case 'resolveHtmlStyles': {
+        try {
+          const css = await resolveDocumentHtmlStyles(raw.css, documentUri);
+          await postToWebview({ type: 'resolvedHtmlStyles', requestId: raw.requestId, result: { ok: true, value: { css } } });
+        } catch (error) {
+          await postToWebview({ type: 'resolvedHtmlStyles', requestId: raw.requestId, result: { ok: false,
+            error: { code: 'operation-failed', message: error instanceof Error ? error.message : 'Failed to resolve document styles' } } });
+        }
+        return;
+      }
       case 'resolveImageSrc': {
         let response: ResolvedImageSrcResponse;
         try {
@@ -1351,6 +1362,7 @@ export function createPanelSessionController(params: PanelSessionControllerParam
   });
 
   const documentSaveSubscription = vscode.workspace.onDidSaveTextDocument((savedDocument) => {
+    if (/\.css$/i.test(savedDocument.uri.path ?? '')) runBackground(postToWebview({ type: 'htmlStylesChanged' }), 'htmlStylesChanged');
     if (savedDocument.uri.toString() !== documentKey) {
       return;
     }

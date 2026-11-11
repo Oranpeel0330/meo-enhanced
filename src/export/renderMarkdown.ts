@@ -26,6 +26,7 @@ import {
   supportedHtmlTags, normalizeHtmlAttribute, mapHtmlSrcset, getHtmlTagNames, getHtmlRootTagName,
   renderedHtmlTagNames, canonicalHtmlTagName, canonicalHtmlAttributeName
 } from '../shared/htmlPolicy';
+import { isSupportedHtmlTag, isCustomHtmlTag } from '../shared/htmlPolicy';
 import { inspectHtmlStylesheets } from '../shared/htmlStylesheet';
 import { splitHtmlBlockFragments } from '../foundation/htmlSyntax';
 import type { UiLanguage } from '../foundation/uiLanguage';
@@ -86,6 +87,8 @@ export type RenderMarkdownOptions = {
   includeTableOfContents?: boolean;
   /** Preview resolves local and network images after the reading frame is ready. */
   deferImages?: boolean;
+  /** Preview carries author CSS in its presentation styles, independently of mounted content. */
+  deferStyles?: boolean;
   /** Preview leaves workspace-root links for Host URI resolution. */
   deferLocalLinks?: boolean;
   /** Large Preview generates display formulas in its existing viewport observer. */
@@ -335,7 +338,8 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
     md.renderer.rules.html_block = (nodes, index, ...args) => nodes[index]!.meta?.meoSourceFootnote?.render()
       ?? renderHtml(nodes, index, ...args);
   }
-  const authorStyles = github ? '' : bodyTokens.filter(node => node.type === 'html_block')
+  const authorStyles = github ? '' : bodyTokens.flatMap(node => node.type === 'html_block' ? [node]
+    : node.children?.filter(child => child.type === 'html_inline') ?? [])
     .map(node => inspectHtmlStylesheets(node.content).css).filter(Boolean).join('\n');
   hasMermaid ||= bodyTokens.some(node => node.type === 'fence'
     && (github ? node.info.trim().split(/\s+/)[0] : normalizeFenceLanguage(node.info)) === 'mermaid');
@@ -363,10 +367,12 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
       ? renderGithubFrontmatter(originalSourceLines, extractedFrontmatter.body.sourceLines[0] ?? originalSourceLines.length + 1)
       : extractedFrontmatter.frontmatterHtml;
   const sanitize = (rawHtml: string): RenderMarkdownResult => {
+  const customTags = github ? [] : [...new Set(getHtmlTagNames(rawHtml).filter(isCustomHtmlTag))];
   const html = sanitizeHtml(github ? replaceGithubEmoji(linkifyGithubFilteredHtml(addGithubDetailsSummary(stripGithubSelectMarkup(rawHtml))), deferImageSrc) : rawHtml, {
     allowedTags: [
       ...sanitizeHtml.defaults.allowedTags,
       ...(github ? [] : renderedHtmlTagNames),
+      ...customTags,
       ...(github ? [...githubHtmlTags, 'input'] : []),
       'mark',
       'details',
@@ -400,6 +406,7 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
       'polyline'
     ],
     allowedAttributes: renderedHtmlAttributes({
+      ...Object.fromEntries(customTags.map(tag => [tag, getSupportedHtmlAttributes(tag)])),
       ...(github ? { input: ['type', 'disabled', 'checked', 'aria-label'] } : {}),
       ...(github ? Object.fromEntries(Object.entries(githubHtmlAttributes).filter(([tag]) => !['*', 'a', 'img', 'ol', 'th', 'td', 'p', 'div', 'span', 'details'].includes(tag))) : {}),
       ...(github ? { source: ['srcset', 'data-meo-deferred-image-srcset'] } : {}),
@@ -572,7 +579,7 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
       deferredInline?.prepareAll();
       const rendered = sanitize(prefix + md.renderer.render(bodyTokens, md.options, environment)
         + (options.sourceFootnotes ? '' : preparedMarkdown.footnotesHtml));
-      return authorStyles && !options.contentOnly ? { ...rendered, html: `<style>${authorStyles}</style>${rendered.html}` } : rendered;
+      return authorStyles && !options.contentOnly && !options.deferStyles ? { ...rendered, html: `<style>${authorStyles}</style>${rendered.html}` } : rendered;
     }
   };
 }
@@ -678,7 +685,7 @@ function installSafeHtmlTransform(
             delete attributes.srcset;
           } else attributes.srcset = rewritten;
         }
-        for (const name of ['src', 'poster']) if (attributes[name]) {
+        for (const name of ['src', 'poster', ...(tagName.toLowerCase() === 'image' ? ['href'] : [])]) if (attributes[name]) {
           const rewritten = rewriteImageSrc(attributes[name]!);
           if (rewritten.deferredSrc) {
             const ordinaryImage = tagName.toLowerCase() === 'img' && name === 'src' && !attributes['data-meo-html-srcset'];
@@ -693,7 +700,9 @@ function installSafeHtmlTransform(
   const sanitizeRawSource = (source: string, tokenType: string): string => {
     source = inspectHtmlStylesheets(source).html;
     if (!source.trim()) return '';
-    if (isSupportedHtmlSource(source) && getHtmlTagNames(source).some(tag => !supportedHtmlTags.has(tag))) {
+    safeHtmlSanitizerOptions.allowedTags = [...renderedHtmlTagNames, ...getHtmlTagNames(source).filter(isCustomHtmlTag)];
+    for (const tag of getHtmlTagNames(source).filter(isCustomHtmlTag)) allowedAttributes[tag] = getSupportedHtmlAttributes(tag);
+    if (isSupportedHtmlSource(source) && getHtmlTagNames(source).some(tag => !isSupportedHtmlTag(tag))) {
       return sanitizeHtml(source, safeHtmlSanitizerOptions);
     }
     if (tokenType === 'html_block' && isSupportedHtmlSource(source)) {
@@ -787,7 +796,7 @@ function installSafeHtmlTransform(
     // Inline author HTML has no block wrapper. Mark its sanitized root so the
     // reading layout can apply the same native box rules as Live HTML content.
     if (!githubSanitize && preserveSourceStyles && htmlNode?.type === 'html_inline'
-      && supportedHtmlTags.has(getHtmlRootTagName(source) ?? '')) {
+      && isSupportedHtmlTag(getHtmlRootTagName(source) ?? '')) {
       rendered = rendered.replace(/^(\s*<[a-z][a-z\d-]*)(?=[\s>])/i, '$1 data-meo-html-content=""');
     }
     if (githubSanitize && Array.isArray(htmlNode.meta?.meoGithubHeadingIds)) {

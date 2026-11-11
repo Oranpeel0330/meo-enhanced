@@ -11,6 +11,7 @@ const REMOTE_OR_INLINE_RE = /^(?:https?:|data:|blob:)/i;
 type ExportImageTarget = 'html' | 'pdf' | 'docx';
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.css': 'text/css',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.ogv': 'video/ogg', '.vtt': 'text/vtt',
   '.avif': 'image/avif',
@@ -157,7 +158,7 @@ function toEmbeddedImageDataUrl(filePath: string, cache?: Map<string, string | n
   let embedded: string | null = null;
   try {
     const content = fs.readFileSync(filePath);
-    const mimeType = IMAGE_MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+    const mimeType = exportAssetMimeType(filePath);
     embedded = `data:${mimeType};base64,${content.toString('base64')}`;
   } catch {
     embedded = null;
@@ -165,6 +166,10 @@ function toEmbeddedImageDataUrl(filePath: string, cache?: Map<string, string | n
 
   cache?.set(filePath, embedded);
   return embedded;
+}
+
+export function exportAssetMimeType(filePath: string): string {
+  return IMAGE_MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
 }
 
 function safeDecodeURIComponent(value: string): string {

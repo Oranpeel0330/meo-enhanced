@@ -88,7 +88,7 @@ const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAw
 const source = [
   'HTML fragment acceptance', '', 'Prelude paragraph.', '',
   'Inline <span style="color:red">**bold** <span>nested</span></span>, <u>underlined</u>, <kbd>Ctrl</kbd>, and <ruby>字<rt>zi</rt></ruby>.', '',
-  '<p id="center" align="center" style="color:red;position:fixed;background-image:url(https://example.com/x)" onclick="alert(1)">',
+  '<p id="center" align="center" style="color:red;position:fixed;background-image:url(http://example.com/x)" onclick="alert(1)">',
   '  <a href="#target">English</a> · <strong>简体中文</strong>',
   '  <a href="https://example.com/docs">Docs</a>',
   '</p>', '',
@@ -121,7 +121,7 @@ const source = [
   '<div><p>First raw paragraph.</p>', '', '<p>Second raw paragraph.</p></div>', '',
   '<script>window.__htmlExecuted=1;const raw="<div>";</script>', '',
   '<p id="after-script">After unsupported script</p>', '',
-  '<custom-html>Unsupported source remains visible</custom-html>', '',
+  '<unsupportedhtml>Unsupported source remains visible</unsupportedhtml>', '',
   '<!-- visible comment -->', '', 'Tail paragraph.', '', '$$', 'x^2 + 1', '$$'
 ].join('\n');
 
@@ -152,7 +152,7 @@ function checkExport(): void {
     assert.match(html, /<code>\*\*literal\*\* &lt;tag&gt;<\/code>/);
     assert.match(html, /<div id="html-test-top"><\/div>/);
     assert.match(html, /<div hidden="hidden">Hidden content<\/div>/);
-    assert.match(html, /&lt;custom-html&gt;/);
+    assert.match(html, /&lt;unsupportedhtml&gt;/);
     assert.doesNotMatch(html, /onclick=|position:fixed|background-image|meo-md-html-invisible-source/);
     assert.doesNotMatch(html, /visible comment/);
   }
@@ -839,7 +839,7 @@ async function main(): Promise<void> {
           .map(node => node.getBoundingClientRect().height),
         hiddenLinkButtons: root.querySelectorAll('#hidden-children .meo-md-html-link-button').length,
         hiddenRows: root.querySelectorAll('.meo-md-html-invisible-source').length,
-        unsupported: root.textContent?.includes('<custom-html>'),
+        unsupported: root.textContent?.includes('<unsupportedhtml>'),
         warning: Boolean(root.querySelector('.meo-md-html-warning')),
         comment: root.textContent?.includes('<!-- visible comment -->') };
     });

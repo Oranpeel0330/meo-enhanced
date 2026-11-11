@@ -3,6 +3,9 @@ import { EditorView, ViewPlugin } from '@codemirror/view';
 import { IterMode, type Tree } from '@lezer/common';
 import { inspectHtmlStylesheets } from '../../../src/shared/htmlStylesheet';
 import { isCompleteMarkdownStructure, markdownStructureIdentity } from '../editor/markdownStructure';
+import { htmlStyleHasResources, withoutHtmlStyleResources } from '../../../src/shared/htmlStyleResources';
+import { resolveHtmlStyles } from '../adapters/htmlStylesTransport';
+import { getViewportController } from './viewportController';
 
 const cache = new WeakMap<Text, { tree: Tree; css: string }>();
 
@@ -13,9 +16,9 @@ export function collectHtmlDocumentStyles(doc: Text, tree: Tree): string {
   if (previous?.tree === tree) return previous.css;
   const sheets: string[] = [];
   tree.iterate({ mode: IterMode.IgnoreMounts, enter(node) {
-    if (node.name !== 'HTMLBlock') return;
+    if (node.name !== 'HTMLBlock' && node.name !== 'HTMLTag') return;
     const source = doc.sliceString(node.from, node.to);
-    if (/<style\b/i.test(source)) sheets.push(inspectHtmlStylesheets(source).css);
+    if (/<(?:style|link)\b/i.test(source)) sheets.push(inspectHtmlStylesheets(source).css);
     return false;
   } });
   const css = sheets.filter(Boolean).join('\n');
@@ -37,9 +40,17 @@ export function readHtmlDocumentStyles(doc: Text, tree: Tree): string | undefine
 export function createHtmlDocumentStyles(readTree: (state: EditorState) => Tree, usesWorker: (state: EditorState) => boolean) {
   return ViewPlugin.fromClass(class {
     readonly element: HTMLStyleElement;
+    source = '';
+    pending: AbortController | undefined;
+    readonly resourceChanged = () => {
+      if (!htmlStyleHasResources(this.source)) return;
+      this.source = '';
+      this.refresh();
+    };
     constructor(readonly view: EditorView) {
       this.element = view.dom.ownerDocument.createElement('style');
       view.dom.append(this.element);
+      view.dom.ownerDocument.defaultView?.addEventListener('meo-html-styles-changed', this.resourceChanged);
       this.refresh();
     }
     update(): void { this.refresh(); }
@@ -50,8 +61,23 @@ export function createHtmlDocumentStyles(readTree: (state: EditorState) => Tree,
       const identity = markdownStructureIdentity(tree);
       const css = known?.tree === identity ? known.css : !usesWorker(this.view.state) && isCompleteMarkdownStructure(tree, doc.length)
         ? collectHtmlDocumentStyles(doc, tree) : undefined;
-      if (css !== undefined && this.element.textContent !== css) this.element.textContent = css;
+      if (css === undefined || css === this.source) return;
+      this.source = css;
+      this.pending?.abort();
+      if (!htmlStyleHasResources(css)) { this.element.textContent = css; return; }
+      const pending = this.pending = new AbortController();
+      void resolveHtmlStyles(css, pending.signal).then(resolved => {
+        if (pending.signal.aborted || this.source !== css || !this.element.isConnected) return;
+        const accepted = resolved ?? withoutHtmlStyleResources(css);
+        const apply = () => { this.element.textContent = accepted; this.view.requestMeasure(); };
+        const viewport = getViewportController(this.view);
+        if (viewport) viewport.preserveDocumentAnchorWhileMutation(apply, true);
+        else apply();
+      });
     }
-    destroy(): void { this.element.remove(); }
+    destroy(): void {
+      this.view.dom.ownerDocument.defaultView?.removeEventListener('meo-html-styles-changed', this.resourceChanged);
+      this.pending?.abort(); this.element.remove();
+    }
   });
 }

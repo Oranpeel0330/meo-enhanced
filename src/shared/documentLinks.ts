@@ -2,6 +2,10 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { parser as markdownParser } from '@lezer/markdown';
 import * as vscode from 'vscode';
+import { createHtmlStyleResources } from '../export/htmlStyles';
+import { resolveHtmlStyleResources } from './htmlStyleResources';
+import { sanitizeHtmlStylesheet } from './htmlStyle';
+import { exportAssetMimeType } from '../export/assetPaths';
 import { safeDecodeURIComponent } from '../agents/resourceMatching';
 import { WIKI_IMAGE_SCHEME, WIKI_LINK_SCHEME, wikiTargetFromImageSrc } from '../foundation/wikiReference';
 import { resolveWikiResource } from '../host/wikiResources';
@@ -207,6 +211,24 @@ export async function uriExists(uri: vscode.Uri): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function resolveDocumentHtmlStyles(css: string, document: vscode.Uri): Promise<string> {
+  const signal = AbortSignal.timeout(12_000);
+  const resources = createHtmlStyleResources({ markdownFilePath: document.fsPath, target: 'html' }, signal);
+  if (document.scheme === 'file') return resolveHtmlStyleResources(css, resources);
+  const read = resources.read;
+  resources.resolve = (url, base) => new URL(url, base ?? document.toString()).href;
+  resources.read = async url => {
+    if (/^(?:https:|data:)/i.test(url)) return read(url);
+    return { css: sanitizeHtmlStylesheet(new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.parse(url)))), url };
+  };
+  resources.asset = async url => {
+    if (/^(?:https:|data:)/i.test(url)) return url;
+    const uri = vscode.Uri.parse(url);
+    return `data:${exportAssetMimeType(uri.path)};base64,${Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('base64')}`;
+  };
+  return resolveHtmlStyleResources(css, resources);
 }
 
 export async function resolveWebviewImageSrc(

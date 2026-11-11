@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { inspectHtmlStyle, sanitizeHtmlStyle, sanitizeHtmlStylesheet } from '../src/shared/htmlPolicy';
+import { namespaceHtmlFontFamilies } from '../src/shared/htmlStyleResources';
 
 export function checkHtmlStylePolicy(): void {
   const supported: Record<string, string[]> = {
@@ -34,11 +35,14 @@ export function checkHtmlStylePolicy(): void {
     'flex-wrap': ['wrap'], 'box-shadow': ['0 2px 4px #3338'],
     'background-image': ['linear-gradient(90deg, red, blue)'],
     '--custom': ['12px'],
+    transform: ['translateX(7px)'], filter: ['grayscale(1)'], overflow: ['auto'],
+    'writing-mode': ['vertical-rl'], content: ['"Prefix "'],
   };
   let checks = 0;
   for (const [name, values] of Object.entries(supported)) for (const value of [...values, 'inherit', 'initial', 'unset']) {
     const result = inspectHtmlStyle(`${name}:${value}`);
-    assert.equal(result.style, `${name}: ${value}`, `${name}:${value}`);
+    const rendered = name === 'font-family' ? namespaceHtmlFontFamilies(value) : value;
+    assert.equal(result.style, `${name}: ${rendered}`, `${name}:${value}`);
     assert.deepEqual([result.invalid, result.unsupported], [[], []]); checks += 1;
   }
   for (const source of ['border:2px solid dotted', 'border:2px 4px solid', 'border:-1px solid red', 'border-color:imaginarycolor',
@@ -47,12 +51,12 @@ export function checkHtmlStylePolicy(): void {
     'text-decoration:none underline', 'border-spacing:2px -1px', 'aspect-ratio:1/0',
     'object-position:left right', 'font-family:url(https://example.com/font)', 'color:rgb(bad)',
     'fill-rule:bad', 'clip-rule:bad',
-    'background:url(https://example.com/image)', 'color:var(--vscode-editor-foreground)',
-    'color:red !important', 'color:r\\65 d', 'background-image:url(javascript:alert(1))']) {
+    'background:url(http://example.com/image)', 'color:var(--vscode-editor-foreground)',
+    'color:red !bad', 'color:r\\65 d', 'background-image:url(javascript:alert(1))']) {
     const result = inspectHtmlStyle(source);
     assert.equal(result.style, '', source); assert.equal(result.invalid.length, 1, source); checks += 1;
   }
-  for (const name of ['animation', 'transition', 'filter', 'table-layout', '--vscode-test', '--meo-test', 'constructor', '__proto__']) {
+  for (const name of ['animation', 'transition', 'table-layout', '--vscode-test', '--meo-test', 'constructor', '__proto__']) {
     assert.deepEqual(inspectHtmlStyle(`${name}:bad`).unsupported, [name]); checks += 1;
   }
   for (const source of ['width:calc(100% - 1px)', 'margin:clamp(0px,1vw,10px)', 'color:var(--custom)']) {
@@ -60,8 +64,12 @@ export function checkHtmlStylePolicy(): void {
   }
   assert.equal(inspectHtmlStyle('--Brand:red;color:var(--Brand)').style, '--Brand: red; color: var(--Brand)', 'CSS custom property names are case-sensitive');
   const sheet = sanitizeHtmlStylesheet('@import "https://example.invalid/leak.css"; @font-face{font-family:Leak;src:url(x)} .note{display:flex;gap:12px;color:red} @media(min-width:1px){.note{padding:4px}} .bad{background:url(javascript:alert(1))}');
-  assert.match(sheet, /^@scope /); assert.match(sheet, /display:flex;gap:12px;color:red/); assert.match(sheet, /@media/);
-  assert.doesNotMatch(sheet, /@import|@font-face|javascript:|url\(/);
+  assert.match(sheet, /@meo-import "https:\/\/example.invalid\/leak.css"/); assert.match(sheet, /display:flex;gap:12px;color:red/); assert.match(sheet, /@media/);
+  assert.match(sheet, /@font-face/); assert.doesNotMatch(sheet, /javascript:/);
+  assert.equal(sanitizeHtmlStyle('color:red !important'), 'color: red !important');
+  assert.equal(inspectHtmlStyle('display:none!important;display:block').properties.display, 'none');
+  assert.equal(sanitizeHtmlStyle('width:50dvw'), 'width: 50dvw');
+  assert.equal(sanitizeHtmlStyle('color:oklch(60% .15 30)'), 'color: oklch(60% .15 30)');
   assert.match(sanitizeHtmlStylesheet('.body,[data-name="body"]{color:red}'), /\.body,\[data-name="body"\]/, 'root rewriting must retain class and attribute selectors');
   const ordered = 'border: 1px solid red; border-left: 4px dashed blue; border: 2px dotted green; border-top-width: 5px';
   const border = inspectHtmlStyle(ordered);

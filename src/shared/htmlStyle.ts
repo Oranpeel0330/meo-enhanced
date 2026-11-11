@@ -1,4 +1,5 @@
 import { parse, type Container } from 'postcss';
+import { isSafeHtmlStyleUrl, mapHtmlStyleUrls, htmlFontFaceName, namespaceHtmlFontFamilies, namespaceHtmlFontVariables } from './htmlStyleResources';
 
 type StyleValidator = (value: string) => boolean;
 export type HtmlStyleInspection = {
@@ -10,7 +11,7 @@ export type HtmlStyleInspection = {
 };
 
 const number = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
-const wide = /^(?:inherit|initial|unset)$/i;
+const wide = /^(?:inherit|initial|unset|revert|revert-layer)$/i;
 const namedColors = new Set(('aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent currentcolor').split(' '));
 
 /** Delimiters inside a quoted family or color function belong to that value. */
@@ -38,7 +39,7 @@ function split(source: string, delimiter: ';' | ',' | '/' | ' '): string[] | nul
 }
 
 function length(value: string, percent = true, negative = false): boolean {
-  const match = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(px|em|rem|ex|ch|lh|rlh|cm|mm|q|in|pt|pc|vw|vh|vmin|vmax|%)?$/i.exec(value);
+  const match = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(px|em|rem|ex|ch|lh|rlh|cm|mm|q|in|pt|pc|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|%)?$/i.exec(value);
   return Boolean(match && Number.isFinite(+match[1]!) && (negative || +match[1]! >= 0)
     && (match[2] ? percent || match[2] !== '%' : +match[1]! === 0));
 }
@@ -53,6 +54,7 @@ const sequence = (validate: StyleValidator, maximum: number): StyleValidator => 
   return Boolean(values?.length && values.length <= maximum && values.every(validate));
 };
 const color: StyleValidator = value => {
+  if (/^(?:oklch|oklab|lch|lab|color|color-mix|light-dark|hwb)\(/i.test(value)) return safeValue(value);
   if (namedColors.has(value.toLowerCase()) || /^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/i.test(value)) return true;
   const match = /^(rgba?|hsla?)\(([^()]*)\)$/i.exec(value);
   if (!match) return false;
@@ -102,8 +104,12 @@ const listPosition = keywords('inside outside');
 const sides = ['top', 'right', 'bottom', 'left'];
 const logicalSides: Record<string, string> = { 'block-start': 'top', 'block-end': 'bottom', 'inline-start': 'left', 'inline-end': 'right' };
 const margin: StyleValidator = value => value.toLowerCase() === 'auto' || length(value, true, true);
-const safeValue: StyleValidator = value => value.length > 0 && !/[\\{}<>\u0000]/.test(value)
-  && !/(?:url|expression|image-set|paint)\s*\(|@|(?:--(?:meo|vscode)-)/i.test(value);
+const safeValue: StyleValidator = value => {
+  if (!value.length || /[\\{}<>\u0000]/.test(value) || /(?:expression|image-set|paint)\s*\(|@|(?:--(?:meo|vscode)-)/i.test(value)) return false;
+  let safe = true;
+  mapHtmlStyleUrls(value, url => { safe &&= isSafeHtmlStyleUrl(url); return url; });
+  return safe;
+};
 const calculation: StyleValidator = value => /^(?:calc|min|max|clamp|var)\(/i.test(value) && safeValue(value)
   && split(value, ' ') !== null;
 const rules: Record<string, StyleValidator> = {
@@ -178,7 +184,14 @@ for (const name of ('flex flex-basis flex-grow flex-shrink flex-direction flex-w
 rules.position = keywords('static relative absolute sticky');
 for (const name of ['top', 'right', 'bottom', 'left', 'inset', 'inset-inline', 'inset-block']) rules[name] = safeValue;
 rules['z-index'] = value => value === 'auto' || /^-?\d+$/.test(value);
-rules.background = value => color(value) || /gradient\(/i.test(value) && safeValue(value);
+rules.background = value => color(value) || /(?:gradient|url)\(/i.test(value) && safeValue(value);
+for (const name of ('font font-stretch font-kerning font-feature-settings font-variation-settings font-optical-sizing '
+  + 'transform transform-origin transform-box translate rotate scale filter backdrop-filter '
+  + 'overflow overflow-x overflow-y overflow-clip-margin text-overflow white-space-collapse text-wrap text-wrap-mode text-wrap-style '
+  + 'writing-mode text-orientation direction unicode-bidi content quotes counter-reset counter-increment counter-set '
+  + 'list-style-image clip-path mask mask-image mask-size mask-position mask-repeat '
+  + 'stroke-dasharray stroke-dashoffset stroke-linecap stroke-linejoin stroke-miterlimit fill-rule clip-rule '
+  + 'border-start-start-radius border-start-end-radius border-end-start-radius border-end-end-radius').split(' ')) rules[name] ??= safeValue;
 for (const axis of ['width', 'height', 'inline-size', 'block-size']) {
   for (const prefix of ['', 'min-', 'max-']) rules[prefix + axis] = value => length(value)
     || keywords(`${prefix === 'max-' ? 'none' : 'auto'} min-content max-content fit-content`)(value);
@@ -235,20 +248,37 @@ export function inspectHtmlStyle(source: string, direction: 'ltr' | 'rtl' = 'ltr
   const withoutComments = source.replace(/(["'])(?:[^\\]|\\.)*?\1|\/\*[\s\S]*?\*\//g,
     value => value.startsWith('/*') ? ' ' : value);
   const declarations: string[] = [], properties: Record<string, string> = Object.create(null);
-  const unsupported = new Set<string>(), invalid = new Set<string>();
+  const unsupported = new Set<string>(), invalid = new Set<string>(), priorities = new Set<string>();
   for (const declaration of split(withoutComments, ';') ?? [withoutComments]) {
     const colon = declaration.indexOf(':');
     if (colon < 0) { if (declaration.trim()) invalid.add(declaration.trim().split(/\s+/)[0]!); continue; }
     const rawName = declaration.slice(0, colon).trim();
-    const name = rawName.startsWith('--') ? rawName : rawName.toLowerCase(), value = declaration.slice(colon + 1).trim();
+    const name = rawName.startsWith('--') ? rawName : rawName.toLowerCase();
+    const rawValue = declaration.slice(colon + 1).trim();
+    const important = /!\s*important\s*$/i.test(rawValue);
+    const value = rawValue.replace(/!\s*important\s*$/i, '').trim();
     const custom = /^--[a-z][\w-]*$/i.test(name) && !/^--(?:meo|vscode)-/i.test(name);
     const validate = custom ? safeValue : Object.hasOwn(rules, name) ? rules[name] : undefined;
     if (validate && !/[!\\{}<>\u0000]/.test(value) && (wide.test(value) || validate(value) || calculation(value))) {
-      declarations.push(`${name}: ${value}`);
-      boxProjection(properties, name, value, direction);
+      const rendered = name === 'font-family' ? namespaceHtmlFontFamilies(value)
+        : name === 'font' ? value.replace(/(\b(?:\d*\.)?\d+(?:px|pt|pc|em|rem|%)(?:\s*\/\s*[\w.%]+)?\s+)(.+)$/i,
+          (_match, prefix: string, family: string) => prefix + namespaceHtmlFontFamilies(family)) : value;
+      declarations.push(`${name}: ${rendered}${important ? ' !important' : ''}`);
+      const projection: Record<string, string> = Object.create(null);
+      boxProjection(projection, name, value, direction);
+      for (const [property, projected] of Object.entries(projection)) {
+        if (important || !priorities.has(property)) properties[property] = projected;
+        if (important) priorities.add(property);
+      }
     } else (validate ? invalid : unsupported).add(name);
   }
-  return { style: declarations.join('; '), unsupported: [...unsupported], invalid: [...invalid], properties };
+  let style = declarations.join('; ');
+  if (declarations.some(declaration => /^font-family:\s*var\(/.test(declaration))) {
+    const sheet = parse(`x{${style}}`);
+    namespaceHtmlFontVariables(sheet);
+    style = sheet.first!.toString().slice(2,-1);
+  }
+  return { style, unsupported: [...unsupported], invalid: [...invalid], properties };
 }
 
 export function sanitizeHtmlStyle(source: string): string { return inspectHtmlStyle(source).style; }
@@ -258,28 +288,67 @@ export function sanitizeHtmlStyle(source: string): string { return inspectHtmlSt
 export function sanitizeHtmlStylesheet(source: string): string {
   try {
     const sheet = parse(source);
+    namespaceHtmlFontVariables(sheet);
+    type CssNode = NonNullable<Container['nodes']>[number];
+    const imports = new Map<CssNode, string>(), fonts: string[] = [];
+    const importOrder: CssNode[] = [], permittedImports = new Set<CssNode>();
+    let acceptsImports = true;
+    for (const node of [...sheet.nodes]) {
+      if (node.type === 'comment' || node.type === 'atrule' && /^charset$/i.test(node.name)) continue;
+      if (node.type === 'atrule' && /^layer$/i.test(node.name) && !node.nodes && acceptsImports && /^[\w.,\s-]+$/.test(node.params)) {
+        imports.set(node,node.toString()); importOrder.push(node); node.remove(); continue;
+      }
+      if (node.type === 'atrule' && /^import$/i.test(node.name) && acceptsImports) { permittedImports.add(node); importOrder.push(node); }
+      else acceptsImports = false;
+    }
     const clean = (container: Container): void => {
       for (const node of [...(container.nodes ?? [])]) {
         if (node.type === 'comment') node.remove();
         else if (node.type === 'atrule') {
-          if (!/^(?:media|supports|container)$/i.test(node.name) || !node.nodes
+          if (/^import$/i.test(node.name)) {
+            const match = /^(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s)]+))\s*\)|"([^"]*)"|'([^']*)')(?:\s+([\s\S]*))?$/.exec(node.params);
+            const url = match && (match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5]);
+            if (permittedImports.has(node) && url && isSafeHtmlStyleUrl(url) && !/[{}<>\\]/.test(match![6] ?? '')) imports.set(node,`@meo-import ${JSON.stringify(url)}${match![6] ? ' ' + match![6] : ''};`);
+            node.remove();
+          } else if (/^font-face$/i.test(node.name)) {
+            for (const child of [...(node.nodes ?? [])]) {
+              if (child.type !== 'decl' || !/^(?:font-family|src|font-style|font-weight|font-stretch|font-display|unicode-range|size-adjust|ascent-override|descent-override|line-gap-override)$/i.test(child.prop) || !safeValue(child.value) || child.important) child.remove();
+              else {
+                child.prop = child.prop.toLowerCase();
+                if (child.prop === 'font-family') child.value = `"${htmlFontFaceName(child.value)}"`;
+              }
+            }
+            if (node.nodes?.some(child => child.type === 'decl' && child.prop === 'src')) {
+              let font = node.toString(), parent = node.parent;
+              while (parent?.type === 'atrule') {
+                const condition = parent as import('postcss').AtRule;
+                font = `@${condition.name} ${condition.params}{${font}}`;
+                parent = parent.parent;
+              }
+              fonts.push(font);
+            }
+            node.remove();
+          } else if (/^layer$/i.test(node.name) && !node.nodes && /^[\w.,\s-]+$/.test(node.params)) continue;
+          else if (!/^(?:media|supports|container|layer|scope)$/i.test(node.name) || !node.nodes
             || /[{}<>\\]|url\s*\(/i.test(node.params)) node.remove();
           else clean(node);
         } else if (node.type === 'rule') {
-          if (/[{}<>\\]|@|:host|::slotted/i.test(node.selector)) { node.remove(); continue; }
-          node.selector = node.selector.replace(/:root\b|(^|[\s>,+~(])(?:html|body)(?=$|[\s>,+~.#[:)])/g,
+          if (/[{}<>\\]|@|:host|::slotted|\b(?:cm-|meo-)|\bdata-(?:meo-|source-)/i.test(node.selector)) { node.remove(); continue; }
+          node.selector = node.selector.replace(/:root\b|(^|[\s>,+~(])(?:html|body)(?=$|[\s>,+~.#[:)])/gi,
             (_match, prefix: string | undefined) => `${prefix ?? ''}:scope`)
             .replace(/:scope(?:\s*>\s*|\s+):scope/g, ':scope');
           clean(node);
           if (!node.nodes?.length) node.remove();
         } else if (node.type === 'decl') {
+          if (!node.prop.startsWith('--')) node.prop = node.prop.toLowerCase();
           const accepted = inspectHtmlStyle(`${node.prop}:${node.value}`).style;
-          if (!accepted || node.important) node.remove();
+          if (!accepted) node.remove();
+          else if (/^(?:font|font-family)$/.test(node.prop)) node.value = accepted.slice(accepted.indexOf(':') + 1).trim();
         }
       }
     };
     clean(sheet);
     const css = sheet.toString();
-    return css.trim() ? `@scope (.meo-export-doc, .cm-content) to (.meo-md-html-source-range, .meo-md-html-invisible-source, .meo-md-html-result-status) {${css}}` : '';
+    return importOrder.map(node => imports.get(node) ?? '').join('\n') + fonts.join('\n') + (css.trim() ? `@scope (.meo-export-doc, .cm-content) to (.meo-md-html-source-range, .meo-md-html-invisible-source, .meo-md-html-result-status, .meo-md-block-header, .meo-md-html-comment, .meo-preview-code-copy, .meo-source-format-btn) {${css}}` : '');
   } catch { return ''; }
 }

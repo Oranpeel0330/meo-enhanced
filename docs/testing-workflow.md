@@ -475,6 +475,18 @@ IME ownership, shared placement and bilingual light/dark/narrow screenshots unde
 `bun scripts/test-html-content.ts --styles-only` isolates the shared style-policy
 and production rendering checks. Its imported style-policy suite covers valid and
 invalid values, duplicate/shorthand order, logical sides and incomplete declarations.
+The same owner checks linked CSS with Chinese/spaced paths, nested and cyclic
+imports, conditional layers, embedded images/fonts for HTML/PDF/DOCX, actual
+browser font loading, static custom tags, important declarations, modern colors,
+transforms, overflow and vertical writing. Live and Source-side Preview replace
+a held stylesheet request and reject its late result after a newer link wins.
+The separate native command `bun scripts/test-vscode-html-compatibility.ts --code
+<Code executable>` compares 26 witnesses with the real installed built-in Preview
+and records explicit font isolation, embedded-resource and literal-code differences.
+Build first for its production smoke. The same native owner then opens MEO Preview,
+verifies Host-loaded CSS/imports/fonts/backgrounds and saves the linked CSS through
+the VS Code API to verify automatic refresh. Cold Webview admission has its own
+120-second budget; subsequent resource checks retain their 30-second conditions.
 The same focused contract includes the common HTML compatibility fixture:
 document/inline semantics, scoped styles, grid/flex and custom properties,
 static SVG/MathML, native controls/media, loaded pictures and CommonMark containers.

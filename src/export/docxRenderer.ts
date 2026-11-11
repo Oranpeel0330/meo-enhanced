@@ -122,8 +122,16 @@ function replaceExportRoot(originalHtml: string, replacementRootHtml: string): s
 
 function normalizeHtmlFragments(root: Element): void {
   const inlineAliases = new Set(['abbr', 'kbd', 'small', 'q', 'ruby', 'rt', 'rp']);
+  const originalFamilies = (value: string) => value.replace(/(["'])meo-html-font-[\da-f]+\1\s*,\s*/gi,'');
   const visit = (element: Element, inheritedWhitespace = 'normal'): void => {
     if (classNames(element).includes('meo-export-code-block')) return;
+    // Word's converter takes the first family instead of trying browser font
+    // fallbacks. Keep the author's installed family after browser materialization.
+    if (element.attribs.style) element.attribs.style = originalFamilies(element.attribs.style);
+    if (element.name === 'font' && element.attribs.face) element.attribs.face = originalFamilies(element.attribs.face);
+    if (element.name === 'style') for (const child of element.children) {
+      if (child.type === 'text') child.data = originalFamilies(child.data);
+    }
     const declaredWhitespace = inspectHtmlStyle(element.attribs.style ?? '').properties['white-space']?.toLowerCase();
     const whitespace = declaredWhitespace === 'inherit' || declaredWhitespace === 'unset' ? inheritedWhitespace
       : declaredWhitespace === 'initial' ? 'normal'

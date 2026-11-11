@@ -1,8 +1,9 @@
 import morphdom from 'morphdom';
+import { preserveHtmlStyleResources } from './htmlResources';
 
 const authoredNativeContent = new WeakMap<Element, string>();
 const authoredDetailsOpen = new WeakMap<Element, boolean>();
-const nativeContentSelector = 'picture,audio,video,img[srcset],input,select,textarea';
+const nativeContentSelector = 'picture,audio,video,img[srcset],svg image,input,select,textarea';
 const boundControlSelector = '.meo-md-image,.meo-md-html-comment,.meo-md-html-link-button,.meo-md-html-inline-link-button';
 
 /** Capture authored identity before URLs, line metadata or controls are projected. */
@@ -61,6 +62,7 @@ export function updateHtmlContentDom(current: HTMLElement, next: HTMLElement, di
     childrenOnly: true,
     getNodeKey: node => keys.get(node) ?? (node.nodeType === Node.ELEMENT_NODE && (node as Element).id ? `authored:${(node as Element).id}` : undefined),
     onBeforeElUpdated(from, to) {
+      preserveHtmlStyleResources(from,to);
       const open = authoredDetailsOpen.get(to);
       if (open !== undefined) {
         if (authoredDetailsOpen.get(from) === open) (to as HTMLDetailsElement).open = (from as HTMLDetailsElement).open;

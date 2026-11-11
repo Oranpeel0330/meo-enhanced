@@ -55,6 +55,7 @@ const markdown = [
   '### Details',
   '',
   '中文正文与 English text.',
+  '<p style="font-family:Arial,serif">Explicit installed font</p>',
   '',
   '```ts',
   'const answer = 42;',
@@ -153,6 +154,9 @@ try {
   });
   assert.deepEqual(fs.readFileSync(coloredPath).subarray(0, 2).toString('ascii'), 'PK');
   const coloredXml = await readArchiveXml(coloredPath, 'word/document.xml');
+  const fontTable = await readArchiveXml(coloredPath,'word/fontTable.xml');
+  assert.match(fontTable,/w:name="Arial"/,'Word retains the installed font after browser-private aliases');
+  assert.doesNotMatch(fontTable,/meo-html-font-/);
   assert.match(coloredXml, /Review comment for DOCX/, 'visible Preview comments must be visible in DOCX');
   assert.match(coloredXml, /<w:instrText[^>]*> TOC \\h \\o "1-6" \\z \\u <\/w:instrText>/);
   assert.match(coloredXml, /<w:hyperlink[^>]*w:anchor="meo_heading_1"[^>]*>[^]*Document title/, 'cached TOC entries must be visible and link to heading bookmarks');

@@ -33,8 +33,10 @@ import { decodePreviewPresetsChanged, decodePreviewPresetRequest, decodePreviewP
 
 import { decodeImageLocationRequest, decodeImageLocationResponse, decodeImageStorageChangedEvent, type ImageLocationRequest, type ImageLocationResponse, type ImageStorageChangedEvent } from './imageStorage';
 import { decodeUpdateUiColorsRequest, decodeUiColorsResult, type UpdateUiColorsRequest, type UiColorsResult } from './uiColors';
+import { decodeResolveHtmlStylesRequest, decodeResolvedHtmlStylesResponse, decodeHtmlStylesChanged, type ResolveHtmlStylesRequest, type ResolvedHtmlStylesResponse, type HtmlStylesChanged } from './htmlStyles';
 
 export type WebviewToHostMessage =
+  | ResolveHtmlStylesRequest
   | WorkspaceDocumentsRequest | WorkspaceDocumentsClose | DocumentOperationResponse
   | ExtensionFeaturesRequest
   | DocumentContentRequest
@@ -66,6 +68,8 @@ export type WebviewToHostMessage =
   | BlockExportResponse;
 
 export type HostToWebviewMessage =
+  | ResolvedHtmlStylesResponse
+  | HtmlStylesChanged
   | WorkspaceDocumentsResponse | WorkspaceDocumentsChanged | DocumentOperationRequest
   | ExtensionFeaturesEvent
   | DocumentContentResponse
@@ -104,7 +108,8 @@ export type HostToWebviewMessage =
   | GitBaselineChangedEvent;
 
 export function decodeWebviewToHostMessage(value: unknown): WebviewToHostMessage | null {
-  return decodeWorkspaceDocumentsRequest(value)
+  return decodeResolveHtmlStylesRequest(value)
+    ?? decodeWorkspaceDocumentsRequest(value)
     ?? decodeDocumentOperationResponse(value)
     ?? decodeDocumentContentRequest(value)
     ?? decodeExtensionFeaturesRequest(value)
@@ -140,7 +145,9 @@ export function decodeHostToWebviewMessage(value: unknown): HostToWebviewMessage
   const imageDimensions = decodeImageIntrinsicSizesEvent(value);
   if (imageDimensions) return imageDimensions;
   if (value && typeof value === 'object' && 'type' in value && value.type === 'openPreviewPresetSettings') return { type: 'openPreviewPresetSettings' };
-  return decodeWorkspaceDocumentsResponse(value)
+  return decodeHtmlStylesChanged(value)
+    ?? decodeResolvedHtmlStylesResponse(value)
+    ?? decodeWorkspaceDocumentsResponse(value)
     ?? decodeDocumentOperationRequest(value)
     ?? decodeDocumentContentResponse(value)
     ?? decodeExtensionFeaturesEvent(value)

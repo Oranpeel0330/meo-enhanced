@@ -5,10 +5,15 @@ import { sanitizeHtmlStylesheet } from './htmlStyle';
 /** Extract only real style elements, never Markdown code. The caller supplies
  * HTML tokens from its authoritative Markdown parse. */
 export function inspectHtmlStylesheets(source: string): { css: string; html: string } {
-  if (!/<style\b/i.test(source)) return { css: '', html: source };
+  if (!/<(?:style|link)\b/i.test(source)) return { css: '', html: source };
   const ranges: Array<{ from: number; to: number; css: string }> = [];
   const visit = (nodes: readonly ChildNode[]): void => {
     for (const node of nodes) {
+      if ('attribs' in node && node.name === 'link' && node.startIndex !== null && node.endIndex !== null) {
+        const css = /(?:^|\s)stylesheet(?:\s|$)/i.test(node.attribs.rel ?? '') && !('disabled' in node.attribs) && node.attribs.href
+          ? sanitizeHtmlStylesheet(`@import ${JSON.stringify(node.attribs.href)}${node.attribs.media ? ' ' + node.attribs.media : ''};`) : '';
+        ranges.push({ from: node.startIndex, to: node.endIndex + 1, css });
+      }
       if ('children' in node && 'attribs' in node && node.name === 'style' && node.startIndex !== null && node.endIndex !== null) {
         const text = node.children.map(child => child.type === 'text' ? child.data : '').join('');
         const css = !node.attribs.type || /^text\/css$/i.test(node.attribs.type) ? sanitizeHtmlStylesheet(text) : '';
