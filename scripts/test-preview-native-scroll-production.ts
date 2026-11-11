@@ -51,11 +51,26 @@ async function record(page: Page, animated: boolean) {
 async function result(page: Page) {
   return page.evaluate(() => {
     const scope = window as any, trace = scope.__nativeTrace, scroll = scope.__nativeScrollElement as Element;
-    return { wheels: trace.wheels as Array<{ trusted: boolean; prevented: boolean; delta: number; top: number }>,
+    return { wheels: trace.wheels as Array<{ trusted: boolean; prevented: boolean; delta: number; top: number;
+      writeCount: number; compensation: number }>,
       writes: trace.writes as Array<{ before: number; after: number }>, initial: trace.initial as number, top: scroll.scrollTop,
-      samples: trace.samples as Array<{ top: number; witness: number | null; source: number; reading: number | null; epoch: number; compensation: number }>,
+      samples: trace.samples as Array<{ top: number; height: number; witness: number | null; source: number; reading: number | null; epoch: number; compensation: number }>,
       visualDelta: trace.witness.isConnected ? trace.witness.getBoundingClientRect().top - trace.witnessTop as number : null };
   });
+}
+
+function accountForSettledResourceGeometry(value: Awaited<ReturnType<typeof result>>, destination: number,
+  receipt?: { writeCount: number; compensation: number }): void {
+  let compensation = 0;
+  for (const write of value.writes.slice(receipt?.writeCount ?? 0)) {
+    // Even a same-value scrollTop write can cancel native motion. Every write
+    // must start at the fully reached destination plus earlier layout changes.
+    assert.ok(Math.abs(write.before - destination - compensation) <= 2,
+      `Resource geometry interrupted unfinished native motion: ${JSON.stringify(value.writes)}`);
+    compensation += write.after - write.before;
+  }
+  value.top -= compensation;
+  for (const sample of value.samples) sample.top -= sample.compensation - (receipt?.compensation ?? 0);
 }
 
 async function settleNativeMotion(page: Page): Promise<void> {
@@ -139,7 +154,9 @@ try {
             if (trace) { trace.writes.push({ before, after }); trace.compensation += after - before; }
           } });
         doc.addEventListener('wheel', event => {
-          scope.__nativeTrace?.wheels.push({ trusted: event.isTrusted, prevented: event.defaultPrevented, delta: event.deltaY, top: scroll.scrollTop });
+          const trace = scope.__nativeTrace;
+          trace?.wheels.push({ trusted: event.isTrusted, prevented: event.defaultPrevented, delta: event.deltaY, top: scroll.scrollTop,
+            writeCount: trace.writes.length, compensation: trace.compensation });
           // CDP wheel is instantaneous in headless Chromium. Change only this
           // test's platform default, after recording whether production consumed
           // the trusted event; the browser still owns every animation frame.
@@ -160,7 +177,7 @@ try {
               trace.epoch++;
               reading = trace.reading?.getBoundingClientRect() ?? null;
             }
-            trace.samples.push({ top: scroll.scrollTop,
+            trace.samples.push({ top: scroll.scrollTop, height: scroll.scrollHeight,
               compensation: trace.compensation,
               witness: trace.witness.isConnected ? trace.witness.getBoundingClientRect().top : null,
               reading: reading?.top ?? null, epoch: trace.epoch,
@@ -195,6 +212,7 @@ try {
       // The compositor can progress between issuing CDP input and actual wheel
       // delivery. Compare against receipt, not the earlier automation command.
       const received = reverse.wheels[0]!;
+      if (testCase.name === 'nearby-resources') accountForSettledResourceGeometry(reverse, received.top - 240, received);
       assert.ok(received.trusted && !received.prevented && Math.abs(reverse.top - received.top + 240) <= 2,
         `${testCase.name}: reversal was delayed ${JSON.stringify(reverse)}`);
       const reverseTail = reverse.samples.slice(-8).map(sample => sample.top);
@@ -218,19 +236,11 @@ try {
         const crossing = await result(page);
         if (testCase.name === 'nearby-resources') {
           // Cold resources can legitimately change height after native motion.
-          // Every correction must begin at the fully reached destination; an
-          // early write would cancel the remaining animation and fail here.
-          let compensation = 0;
-          for (const write of crossing.writes) {
-            assert.ok(Math.abs(write.before - crossing.initial - delta - compensation) <= 2,
-              `Resource geometry interrupted unfinished native motion: ${JSON.stringify(crossing.writes)}`);
-            compensation += write.after - write.before;
-          }
-          crossing.top -= compensation;
-          for (const sample of crossing.samples) sample.top -= sample.compensation;
+          accountForSettledResourceGeometry(crossing, crossing.initial + delta);
         }
         assert.ok(Math.abs(crossing.top - crossing.initial - delta) <= 2,
           `Cold window interrupted native motion: ${JSON.stringify({ initial: crossing.initial, top: crossing.top, writes: crossing.writes })}`);
+        let settledReflowFrames = 0;
         for (let index = 1; index < crossing.samples.length; index++) {
           const previous = crossing.samples[index - 1]!, current = crossing.samples[index]!;
           assert.notEqual(current.reading, null, `${testCase.name}: cold window left the reading viewport blank`);
@@ -242,7 +252,14 @@ try {
           // A single reading anchor cannot keep both sides of that expansion
           // fixed. Native-motion frames retain the original witness bound;
           // every post-motion correction was separately checked above.
-          const resourceLayoutChanged = testCase.name === 'nearby-resources' && current.compensation !== previous.compensation;
+          const atDestination = Math.abs(previous.top - crossing.initial - delta) <= 2
+            && Math.abs(current.top - crossing.initial - delta) <= 2;
+          // Reflow below the accepted anchor may change document height without
+          // a scrollTop correction. This exception starts only after arrival.
+          const settledReflow = atDestination && current.height !== previous.height;
+          if (settledReflow) settledReflowFrames++;
+          const resourceLayoutChanged = testCase.name === 'nearby-resources'
+            && (current.compensation !== previous.compensation || settledReflow);
           if (!resourceLayoutChanged && current.epoch === previous.epoch && current.reading !== null && previous.reading !== null) {
             assert.ok(Math.abs(current.reading - previous.reading + current.top - previous.top) <= 2,
               `${testCase.name}: cold window displaced its painted reading witness: ${JSON.stringify({ previous, current, writes: crossing.writes })}`);
@@ -255,7 +272,7 @@ try {
           `${testCase.name}: cold window did not synchronize Source`);
         if (testCase.name === 'long-list' || 'split' in testCase) assert.ok(await page.$eval('.preview-frame', frame => (frame as HTMLIFrameElement).contentDocument!
           .querySelectorAll('[data-meo-container-part] > li').length < 256), 'Native motion must keep bounded DOM');
-        console.log(`${testCase.name} cold boundary: ${crossing.top - crossing.initial}px native progress, ${crossing.writes.length} geometry writes`);
+        console.log(`${testCase.name} cold boundary: ${crossing.top - crossing.initial}px native progress, ${crossing.writes.length} geometry writes, ${settledReflowFrames} settled reflow frames`);
       }
       if (preview) for (const delta of [3600, -3600]) await crossWindow(delta);
       if (preview) {

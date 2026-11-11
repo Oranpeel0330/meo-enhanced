@@ -23,7 +23,9 @@ try {
       scope.Worker = class extends NativeWorker {
         postMessage(data: any, ...args: any[]) {
           if (scope.__codeReading.active && typeof data?.code === 'string') {
-            scope.__codeReading.requests.push({ code: data.code, time: performance.now() });
+            const time = performance.now();
+            scope.__codeReading.requests.push({ code: data.code, time,
+              scrolling: time - scope.__codeReading.lastWheel < 250 });
           }
           return (NativeWorker.prototype.postMessage as any).call(this, data, ...args);
         }
@@ -69,6 +71,10 @@ try {
           return top > bounds.height * 0.65 ? 90 : top < bounds.height * 0.25 ? -60 : index % 8 < 4 ? 18 : -18;
         }, { position: text.indexOf('readingRow10_0'), index });
         await page.mouse.wheel({ deltaY: delta });
+        // CDP command completion is not the renderer's wheel delivery. Admit
+        // each real event before sending the next or retiring the frame probe.
+        await page.waitForFunction(expected => (window as any).__codeReading.wheels.length === expected,
+          {}, index + 1);
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       const result = await page.evaluate(() => {
@@ -79,13 +85,14 @@ try {
         return { wheels: probe.wheels, visible: visible.length, colored: colored.length,
           delay: colored.length ? colored[0].time - visible[0].time : null,
           geometryDrift: Math.max(...geometry) - Math.min(...geometry),
+          preparedWhileScrolling: probe.requests.some((request: any) => request.scrolling && request.code.includes('readingRow10_0')),
           requests: probe.requests.map((request: any) => request.code) };
       });
       console.log(JSON.stringify({ large, ...result, requests: result.requests.map((code: string) => code.slice(0, 35)) }));
       assert.equal(result.wheels.length, 54);
       assert.ok(result.wheels.every(Boolean), 'Reading uses trusted wheel events');
       assert.ok(result.visible >= 20, 'The new block must remain visible during sustained scrolling');
-      assert.ok(result.requests.some((code: string) => code.includes('readingRow10_0')), 'A short block in a warm language must prepare during scrolling');
+      assert.ok(result.preparedWhileScrolling, 'A short block in a warm language must prepare during scrolling');
       assert.ok(result.colored >= 12, 'Prepared code must become colored while native scrolling continues');
       assert.ok(result.geometryDrift <= 2, 'Coloring must retain the reading witness throughout native motion');
       assert.ok(!result.requests.some((code: string) => code.includes('readingRow11_0')), 'Cold languages must retain their original scroll admission');

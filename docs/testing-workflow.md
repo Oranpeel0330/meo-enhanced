@@ -689,6 +689,10 @@ gap rather than writing `scrollTop`, which would abandon native animation. The
 split cases also retain Source's position marker ahead of the reading flow and
 cover 125% DPI. The list repeats the crossing before smaller gestures warm its
 height map; all cases preserve document content and the editor selection.
+The nearby-resource case accepts layout corrections only after reaching the full
+native destination, including reversal. After arrival, a real document-height
+change may reflow another paragraph without moving the accepted anchor; native
+motion retains its original witness bounds.
 Physical mouse-wheel and trackpad inertia/feel still require device testing;
 CDP packets and native `smooth` calls do not establish that evidence.
 The tall-Mermaid viewport contract checks each trusted pixel-wheel event's target,
@@ -2407,6 +2411,9 @@ documents through trusted continuous wheels. A new short block in a warm languag
 must prepare and become colored before scrolling stops; cold languages, oversized
 fences and distant content must stay deferred. It retains the document text and
 the reading witness throughout coloring, with timing reported diagnostically.
+The driver acknowledges each trusted wheel receipt and verifies token dispatch
+inside the native gesture window; CDP command completion and idle work alone
+cannot acknowledge the contract.
 The background-Shiki contract separately checks that worker failure, pending
 grammar loading and disposal cannot report a reusable language; the lifecycle
 contract keeps the main-thread fallback out of scrolling preparation.
