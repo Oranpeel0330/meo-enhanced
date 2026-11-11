@@ -21,10 +21,11 @@ New-Item -ItemType Directory -Force $profileUser,$workspace,$extensions | Out-Nu
   {"key":"ctrl+k ctrl+m","command":"workbench.action.showCommands"}
 ]
 '@ | Set-Content -LiteralPath (Join-Path $profileUser 'keybindings.json') -Encoding utf8
-'{"git.openRepositoryInParentFolders":"never","workbench.startupEditor":"none"}' | Set-Content -LiteralPath (Join-Path $profileUser 'settings.json') -Encoding utf8
+'{"git.openRepositoryInParentFolders":"never","workbench.startupEditor":"none","window.menuStyle":"custom"}' | Set-Content -LiteralPath (Join-Path $profileUser 'settings.json') -Encoding utf8
 $env:MEO_SHORTCUT_OUTPUT=$output
 $env:MEO_SHORTCUT_BROWSER_URL='http://127.0.0.1:'+ $Port
 $entry=Join-Path $PSScriptRoot 'test-vscode-preview-shortcuts.cjs'
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 $launchArgs=@('--new-window','--skip-welcome','--skip-release-notes','--disable-updates','--disable-workspace-trust',('--remote-debugging-port='+$Port),('--user-data-dir="'+$profileDirectory+'"'),('--extensions-dir="'+$extensions+'"'),('--extensionDevelopmentPath="'+$repoRoot+'"'),('--extensionTestsPath="'+$entry+'"'),('"'+$workspace+'"'))
 $child=Start-Process -FilePath $codeExecutable -ArgumentList $launchArgs -WindowStyle Hidden -RedirectStandardOutput (Join-Path $output 'stdout.log') -RedirectStandardError (Join-Path $output 'stderr.log') -PassThru
 try {

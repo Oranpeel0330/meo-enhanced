@@ -2895,6 +2895,16 @@ do not authorize or start long-running workflows.
 
 ### Adding or changing tests
 
+`scripts/test-preview-context-menu-production.ts` belongs to `test:browser` and
+the rendered targeted plan. Trusted drags and right clicks cover full/side
+Preview in ordinary and actually windowed documents. It checks host coordinates,
+selection and viewport retention, inner cancellation, synthetic-event isolation,
+refresh/reopen listener lifetime, host Copy routing and read-only Cut isolation. The windowed case also
+copies a logical selection across unmounted blocks through the existing owner.
+`scripts/test-vscode-preview-shortcuts.ps1` separately checks the real workbench
+menu, read-only command isolation and native input clipboard operations in a
+disposable profile, restoring previous clipboard text.
+
 `scripts/test-live-editing-preview-production.ts` belongs to `test:browser` and
 the rendered targeted plan. It uses trusted native input with production Workers
 and renderers, pairing ordinary/optimized documents, both Mermaid layouts, HTML,

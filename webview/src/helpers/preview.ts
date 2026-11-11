@@ -2450,6 +2450,7 @@ export function createPreviewController({
       });
       bindFontSizeWheel?.(frameDocument, signal);
       bindPreviewShortcuts(frame, onShortcut, signal);
+      bindPreviewContextMenu(frame, signal);
       const keepPosition = () => {
         if (
           disposed ||
@@ -4264,6 +4265,42 @@ function bindPreviewLinks(
       activateLink(event);
     }
   }, { capture: true, signal });
+}
+
+function bindPreviewContextMenu(frame: HTMLIFrameElement, signal: AbortSignal): void {
+  for (const type of ['copy', 'cut', 'paste'] as const) {
+    frame.ownerDocument.defaultView?.addEventListener(type, event => {
+      if (!event.isTrusted || event.defaultPrevented || frame.ownerDocument.activeElement !== frame) return;
+      // Host commands target the outer Document's retained Source selection.
+      // The focused reading Document owns copying and native input controls;
+      // cancel the outer command even when its read-only body cannot edit.
+      event.preventDefault();
+      event.stopPropagation();
+      frame.contentDocument?.execCommand(type);
+    }, { capture: true, signal });
+  }
+  frame.contentWindow?.addEventListener('contextmenu', event => {
+    if (!event.isTrusted || event.defaultPrevented) return;
+    // Nested focus does not reach VS Code's last-focused-element tracker.
+    // Publish the existing frame focus before its menu borrows that focus.
+    if (frame.ownerDocument.activeElement === frame) {
+      frame.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    }
+    // VS Code owns the menu on the outer Webview. Keep focus and selection in
+    // the reading document so its clipboard commands still reach this frame.
+    const bounds = frame.getBoundingClientRect();
+    const forwarded = new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, view: window,
+      clientX: bounds.left + frame.clientLeft + event.clientX,
+      clientY: bounds.top + frame.clientTop + event.clientY,
+      screenX: event.screenX, screenY: event.screenY,
+      button: event.button, buttons: event.buttons,
+      ctrlKey: event.ctrlKey, altKey: event.altKey,
+      shiftKey: event.shiftKey, metaKey: event.metaKey
+    });
+    frame.dispatchEvent(forwarded);
+    if (forwarded.defaultPrevented) event.preventDefault();
+  }, { signal });
 }
 
 function bindPreviewShortcuts(

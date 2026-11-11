@@ -228,7 +228,7 @@
     "scripts/test-vscode-preview-shortcuts.ps1": {
       "kind": "native",
       "command": "./scripts/test-vscode-preview-shortcuts.ps1 -CodePath <Code.exe>",
-      "reason": "Starts the native VS Code preview shortcut acceptance host; requires a selected VS Code installation."
+      "reason": "Starts the native VS Code Preview keyboard, context-menu and clipboard acceptance host; requires a selected VS Code installation."
     },
     "scripts/test-vscode-preview-shortcuts.cjs": {
       "kind": "native",
@@ -704,6 +704,7 @@
       "scripts/test-preview-preset-preferences-browser.ts",
       "scripts/test-preview-presets-browser.ts",
       "scripts/test-preview-reading-surface-production.ts",
+      "scripts/test-preview-context-menu-production.ts",
       "scripts/test-preview-rendered-actions.ts",
       "scripts/test-preview-shortcuts-production.ts",
       "scripts/test-preview-table-bands-production.ts",

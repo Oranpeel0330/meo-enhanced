@@ -152,6 +152,7 @@ function targetedCommands(
         script('scripts/test-mermaid-module-runtime.ts'),
         script('scripts/test-mermaid-editing.ts'),
         script('scripts/test-preview-rendered-actions.ts'),
+        script('scripts/test-preview-context-menu-production.ts'),
         script('scripts/test-preview-image-actions.ts'),
         script('scripts/test-live-rendered-image-copy.ts'),
         script('scripts/test-rendered-block-action-state.ts'),

@@ -16,6 +16,7 @@
 | --- | --- | --- |
 | MEO 侧栏大纲 | 最近聚焦文档的标题树；侧栏借用焦点时保持；三种模式滚动和编辑后的跳转正确，标题身份变化时刷新旧树项，迟到点击不跳向同名项；标题无图标，视图标题统一为 MEO Outline，只高亮当前标题；`meoEnhanced.outline.expandAll` 展开全部六级标题，原生全部折叠继续可用；只订阅当前面板，隐藏、关闭和重载正确释放或恢复；中英文及深浅色切换保持状态 | [协议、投影与生命周期](../scripts/test-sidebar-outline.ts)、[生产编辑器与文档规模](../scripts/test-sidebar-outline-browser.ts)、[隔离原生工作台](../scripts/test-vscode-sidebar-outline.ps1)（真实按钮、两万标题、中英文、明暗截图及重新启动）；最低支持版本另验 |
 | Live / Source / Preview 切换 | 文档一致；每个可见帧有内容；阅读位置和可编辑组件选区连续 | [模式矩阵](../scripts/test-mode-transition-matrix.ts)、[选区连续性](../scripts/test-mode-selection-continuity.ts) |
+| Preview 选区右键与复制 | 完整与侧边预览沿用 VS Code 菜单，位置准确且只打开一次；保留选区、焦点与阅读位置，复制当前预览文字与完整逻辑选区，不误取源码旧选区；宿主剪切粘贴不误改源码；已处理的右键不转发，刷新与重开不重复监听 | [生产右键与宿主复制](../scripts/test-preview-context-menu-production.ts)覆盖普通及实际窗口化文档；[隔离 VS Code 宿主](../scripts/test-vscode-preview-shortcuts.ps1)验证真实菜单及系统剪贴板；最终安装包与用户菜单配置另验 |
 | 巨型代码块的无障碍预览 | 读屏模式保留全部代码行，避免全文备用高亮和装饰节点阻塞切换；屏外代码进入真实无障碍树，行号不被朗读；完整复制、深处查找和运行时读屏开关正常 | [强制 Chromium 无障碍的生产回归](../scripts/test-preview-code-accessibility.ts)；`--normal-launch` 提供独立启动对照。真实 VS Code 安装包及 NVDA 等读屏软件的交互另验 |
 | Source 当前行高亮 | 普通行、引用及代码行使用 VS Code 原生背景色，保留半透明度，不绘制矩形描边 | [当前行样式](../scripts/test-source-active-line.ts)；覆盖 Light / Dark 2026、自定义半透明和透明背景 |
 | 状态栏文档统计 | 活动 MEO 文档显示行数与字数；Live / Source 的正文、原生单元格和多格选区正确计数，Preview 不显示编辑光标；切换、关闭和大文档更新不串用结果 | [计数、协议和生命周期](../scripts/test-document-statistics.ts)、[真实拖选与单元格](../scripts/test-document-statistics-selection.ts)；最终安装包另验工作台状态栏与中英文提示 |
