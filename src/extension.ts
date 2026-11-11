@@ -244,6 +244,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<Docume
   context.subscriptions.push(documentViews, extensionFeatures);
   const provider = new MarkdownWebviewProvider(context, agentReviewHandoff, appearanceSettings, editingPreferences, createVscodeImageStorage(), customPreviewPresets, documentViews, extensionFeatures, shutdownRecovery);
   context.subscriptions.push(vscode.commands.registerCommand('meoEnhanced.managePreviewPresets', () => provider.managePreviewPresets()));
+  // Disabled readonly menu entries must also stay inert when called directly.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('meoEnhanced.preview.copy', () => vscode.commands.executeCommand('editor.action.clipboardCopyAction')),
+    vscode.commands.registerCommand('meoEnhanced.preview.cut', () => undefined),
+    vscode.commands.registerCommand('meoEnhanced.preview.paste', () => undefined)
+  );
   void provider.initializeGitWatcher();
   provider.initializeDevelopmentStyleWatcher();
 

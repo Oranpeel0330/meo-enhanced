@@ -52,6 +52,20 @@
     ],
     "commands": [
       {
+        "command": "meoEnhanced.preview.copy",
+        "title": "%command.preview.copy%"
+      },
+      {
+        "command": "meoEnhanced.preview.cut",
+        "title": "%command.preview.cut%",
+        "enablement": "false"
+      },
+      {
+        "command": "meoEnhanced.preview.paste",
+        "title": "%command.preview.paste%",
+        "enablement": "false"
+      },
+      {
         "command": "meoEnhanced.outline.expandAll",
         "title": "%command.outline.expandAll%",
         "icon": "$(expand-all)"
@@ -124,6 +138,37 @@
       ]
     },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "meoEnhanced.preview.copy",
+          "when": "false"
+        },
+        {
+          "command": "meoEnhanced.preview.cut",
+          "when": "false"
+        },
+        {
+          "command": "meoEnhanced.preview.paste",
+          "when": "false"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "meoEnhanced.preview.cut",
+          "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly",
+          "group": "5_cutcopypaste@1"
+        },
+        {
+          "command": "meoEnhanced.preview.copy",
+          "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly",
+          "group": "5_cutcopypaste@2"
+        },
+        {
+          "command": "meoEnhanced.preview.paste",
+          "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly",
+          "group": "5_cutcopypaste@3"
+        }
+      ],
       "view/title": [
         {
           "command": "meoEnhanced.outline.expandAll",

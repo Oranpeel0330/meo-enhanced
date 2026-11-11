@@ -6,8 +6,22 @@ import { browser, server, open, frames } from './input-presentation-test-helpers
 const selectedText = 'Select this text.';
 let primaryError: unknown;
 try {
+  const manifest = await Bun.file('package.json').json();
+  for (const action of ['copy', 'cut', 'paste']) {
+    const command = `meoEnhanced.preview.${action}`;
+    const descriptor = manifest.contributes.commands.find((entry: any) => entry.command === command);
+    assert.ok(descriptor);
+    assert.equal(descriptor.enablement, action === 'copy' ? undefined : 'false');
+    assert.equal(manifest.contributes.menus.commandPalette.find((entry: any) => entry.command === command)?.when, 'false');
+    for (const language of ['package.nls.json', 'package.nls.zh-cn.json']) {
+      const labels = await Bun.file(language).json();
+      assert.ok(labels[`command.preview.${action}`]);
+    }
+  }
   for (const large of [false, true]) for (const surface of ['full', 'side'] as const) {
     const text = '# Reading\n\n' + selectedText + '\n\n'
+      + '<textarea>Editable value.</textarea>\n\n<input value="Readonly value" readonly>\n\n<input type="checkbox">\n\n'
+      + '<fieldset disabled><textarea>Disabled value.</textarea></fieldset>\n\n'
       + (large ? 'Reading content with enough paragraphs to require a bounded window.\n\n'.repeat(5000) : 'Other content.')
       + '\n\nDocument end.';
     assert.equal(assessLargeDocument(text).windowedPreview, large);
@@ -34,6 +48,7 @@ try {
           scope.__contextMenus.push({ x: event.clientX, y: event.clientY,
             target: (event.target as Element).className });
           scope.__menuFocusTarget = scope.__hostLastFocused?.className;
+          scope.__menuContext = JSON.parse((event.target as HTMLElement).dataset.vscodeContext ?? '{}');
           if (scope.__consumeContextMenu) event.preventDefault();
         });
       });
@@ -86,6 +101,9 @@ try {
       assert.equal(after.canceled, true, 'A handled host menu must suppress the inner browser menu');
       assert.equal(await page.evaluate(() => (window as any).__menuFocusTarget), 'preview-frame',
         'The host must remember Preview before its menu borrows focus');
+      assert.deepEqual(await page.evaluate(() => (window as any).__menuContext),
+        { webviewSection: 'preview-readonly', preventDefaultContextMenuItems: true },
+        'Reading content must use the readonly host menu');
       assert.equal(await page.evaluate(() => {
         const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
         doc.addEventListener('copy', event => {
@@ -148,6 +166,19 @@ try {
           'Host copy must retain the existing complete logical selection, including unmounted blocks');
       }
       assert.equal(await returned.frame.evaluate(() => document.documentElement.dataset.meoPreviewWindowed === 'true'), large);
+      for (const [selector, editable] of [['textarea', true], ['input[readonly]', false], ['input[type="checkbox"]', false], ['fieldset textarea', false]] as const) {
+        const point = await page.evaluate(selector => {
+          const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!;
+          const bounds = frame.getBoundingClientRect();
+          const rect = frame.contentDocument!.querySelector(selector)!.getBoundingClientRect();
+          return { x: bounds.left + rect.left + Math.min(8, rect.width / 2), y: bounds.top + rect.top + rect.height / 2 };
+        }, selector);
+        await page.mouse.click(point.x, point.y, { button: 'right' });
+        assert.deepEqual(await page.evaluate(() => (window as any).__menuContext), {
+          webviewSection: editable ? 'preview-input' : 'preview-readonly',
+          preventDefaultContextMenuItems: !editable
+        }, `${surface}/${large}: ${selector} must publish its actual editing capability`);
+      }
       assert.equal(host.readHost(), updatedText, 'Reading menus and copy must not edit the document');
       assert.deepEqual(host.errors, []);
       console.log(`PASS ${surface} ${large ? 'windowed' : 'ordinary'} Preview context menu: coordinates, selection, host copy, cancellation and refresh`);

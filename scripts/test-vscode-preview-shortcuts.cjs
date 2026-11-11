@@ -57,6 +57,9 @@ exports.run = async () => {
         await new Promise(resolve => setTimeout(resolve, 40));
       }
     };
+    const readMenuItems = () => page.evaluate(() => [...document.querySelectorAll('.context-view .action-label')]
+      .filter(label => label.getBoundingClientRect().height > 0)
+      .map(label => ({ label: label.textContent.trim(), disabled: !!label.closest('[aria-disabled="true"], .disabled') })));
     const expectQuickInput = async (surface, gesture, commands) => {
       await page.waitForFunction(() => {
         const widget = document.querySelector('.quick-input-widget');
@@ -80,6 +83,10 @@ exports.run = async () => {
     await expectQuickInput('live', 'Ctrl+Alt+P', true);
     for (const surface of ['preview', 'side']) {
       report.phase = surface;
+      if (surface === 'side') {
+        await vscode.workspace.getConfiguration('workbench').update('colorTheme', 'Light Modern', vscode.ConfigurationTarget.Global);
+        await page.waitForFunction(() => !!document.querySelector('.monaco-workbench.vs'));
+      }
       await frame.$eval(`[data-mode="${surface === 'preview' ? 'preview' : 'source'}"]`, button => button.click());
       if (surface === 'side') await frame.$eval('.source-preview-button', button => button.click());
       await frame.waitForFunction(() => document.querySelector('.preview-status')?.hidden === true
@@ -123,6 +130,13 @@ exports.run = async () => {
       await page.mouse.click(bounds.x + points.left + 10, bounds.y + points.y, { button: 'right' });
       await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
         .some(label => /^(Copy|复制)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0), { timeout: 5000 });
+      const menuItems = await readMenuItems();
+      for (const pattern of [/^(Cut|剪切)$/, /^(Paste|粘贴)$/]) {
+        assert.equal(menuItems.find(item => pattern.test(item.label))?.disabled, true,
+          `${surface}: read-only Preview must disable ${pattern} (${JSON.stringify(menuItems)})`);
+      }
+      assert.equal(menuItems.find(item => /^(Copy|复制)$/.test(item.label))?.disabled, false);
+      assert.equal(menuItems.length, 3, 'Readonly clipboard entries must replace, not duplicate, the defaults');
       await page.screenshot({ path: path.join(output, `context-menu-${surface}.png`) });
       const copy = await page.evaluate(() => {
         const label = [...document.querySelectorAll('.context-view .action-label')]
@@ -146,6 +160,16 @@ exports.run = async () => {
         input.value = 'Editable field.';
         input.focus({ preventScroll: true }); input.select();
       });
+      const inputPoint = await preview.$eval('textarea', input => {
+        const rect = input.getBoundingClientRect(); return { x: rect.left + 8, y: rect.top + rect.height / 2 };
+      });
+      await page.mouse.click(bounds.x + inputPoint.x, bounds.y + inputPoint.y, { button: 'right' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
+        .some(label => /^(Paste|粘贴)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0), { timeout: 5000 });
+      const inputMenuItems = await readMenuItems();
+      assert.equal(inputMenuItems.length, 3);
+      assert.ok(inputMenuItems.every(item => !item.disabled), 'Editable inputs must retain the enabled native menu');
+      await page.keyboard.press('Escape');
       await vscode.commands.executeCommand('editor.action.clipboardCopyAction');
       await expectClipboard('Editable field.', `${surface}: input`);
       await vscode.commands.executeCommand('editor.action.clipboardCutAction');
@@ -154,6 +178,28 @@ exports.run = async () => {
       await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
       await preview.waitForFunction(() => document.querySelector('textarea').value === 'Native pasted input', { timeout: 5000 });
       report.runs.push({ surface, gesture: 'native input Copy / Cut / Paste', exact: true });
+      await vscode.commands.executeCommand('meoEnhanced.preview.cut');
+      await vscode.commands.executeCommand('meoEnhanced.preview.paste');
+    }
+    for (const mode of ['live', 'source']) {
+      report.phase = `${mode}-context-menu`;
+      await frame.$eval(`[data-mode="${mode}"]`, button => button.click());
+      await frame.waitForFunction(mode => document.querySelector('#app')?.dataset.mode === mode
+        && !document.querySelector('.mode-group [aria-busy="true"]'), {}, mode);
+      const mount = await page.$eval('iframe', element => {
+        const rect = element.getBoundingClientRect(); return { x: rect.left, y: rect.top };
+      });
+      const point = await frame.$eval('.editor-host .cm-content', element => {
+        const rect = element.getBoundingClientRect(); return { x: rect.left + 10, y: rect.top + 10 };
+      });
+      await page.mouse.click(mount.x + point.x, mount.y + point.y, { button: 'right' });
+      await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
+        .some(label => /^(Copy|复制)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0));
+      const items = await readMenuItems();
+      assert.equal(items.length, 3);
+      assert.ok(items.every(item => !item.disabled), `${mode}: native editing menus must stay enabled`);
+      await page.keyboard.press('Escape');
+      report.runs.push({ surface: mode, gesture: 'enabled native context menu', exact: true });
     }
     assert.equal(fs.readFileSync(file, 'utf8'), text, 'Host shortcuts must not change the document');
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));

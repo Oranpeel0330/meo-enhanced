@@ -94,6 +94,8 @@
 
 - Preview 正文和留白支持与外部控件一致的全局快捷键，使用当前用户绑定及平台规则。完整 Preview 和 Source 侧边 Preview 均保持全局作用域；选字、复制、滚动、正文输入控件与输入法保持原行为，不向其他编辑器转发编辑、撤销或全选命令。
 
+- Preview 正文的右键菜单沿用 VS Code 的菜单样式，“剪切”和“粘贴”保持可见但置灰禁用，“复制”可用。可编辑文本输入框使用宿主默认菜单；只读输入框和非文本控件使用正文的只读菜单。菜单范围只属于当前预览，不改变 Live、Source 或其他 Webview 的编辑菜单。
+
 - Preview 优先处理 MEO 当前绑定的全局命令，未处理的真实命令按键沿用 VS Code 的 Webview 键盘通路，由宿主解析用户绑定及组合快捷键。原生阅读和输入操作保留在正文；转发事件不重复执行 MEO 命令，不硬编码命令中心的快捷键或命令 ID。
 
 - 所有分段控件由 `webview/src/adapters/segmentedControl.ts` 创建，开关使用 `webview/src/adapters/menuSwitch.ts`；共同样式集中在 `webview/src/styles.css`。调整共享外观时先改共同来源，再检查特殊尺寸的使用处。

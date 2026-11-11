@@ -2899,8 +2899,12 @@ do not authorize or start long-running workflows.
 the rendered targeted plan. Trusted drags and right clicks cover full/side
 Preview in ordinary and actually windowed documents. It checks host coordinates,
 selection and viewport retention, inner cancellation, synthetic-event isolation,
-refresh/reopen listener lifetime, host Copy routing and read-only Cut isolation. The windowed case also
-copies a logical selection across unmounted blocks through the existing owner.
+refresh/reopen listener lifetime, host Copy routing and read-only Cut isolation.
+It checks readonly menu context versus editable and readonly native controls. Native
+acceptance requires Cut/Paste to be visibly disabled on reading content, enabled
+in editable inputs, and these menu commands to stay out of the command palette.
+The windowed case also copies a logical selection across unmounted blocks through
+the existing owner.
 `scripts/test-vscode-preview-shortcuts.ps1` separately checks the real workbench
 menu, read-only command isolation and native input clipboard operations in a
 disposable profile, restoring previous clipboard text.

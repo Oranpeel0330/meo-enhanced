@@ -4281,6 +4281,13 @@ function bindPreviewContextMenu(frame: HTMLIFrameElement, signal: AbortSignal): 
   }
   frame.contentWindow?.addEventListener('contextmenu', event => {
     if (!event.isTrusted || event.defaultPrevented) return;
+    const input = (event.target as Element | null)?.closest<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+    const editable = !!input && !input.matches(':disabled') && !input.readOnly
+      && (input.localName === 'textarea' || ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes((input as HTMLInputElement).type));
+    frame.dataset.vscodeContext = JSON.stringify({
+      webviewSection: editable ? 'preview-input' : 'preview-readonly',
+      preventDefaultContextMenuItems: !editable
+    });
     // Nested focus does not reach VS Code's last-focused-element tracker.
     // Publish the existing frame focus before its menu borrows that focus.
     if (frame.ownerDocument.activeElement === frame) {
