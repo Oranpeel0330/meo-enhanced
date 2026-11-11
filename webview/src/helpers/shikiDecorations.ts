@@ -42,6 +42,7 @@ export const shikiRefreshEffect = StateEffect.define<null>();
 const FONT_STYLE_ITALIC = 1;
 const FONT_STYLE_BOLD = 2;
 const FONT_STYLE_UNDERLINE = 4;
+const MAX_READING_PROJECTION_MARKS = 512;
 type TokenNeeded = (language: string, code: string) => boolean;
 const pendingTokenDecoration = Decoration.mark({
   attributes: {
@@ -494,7 +495,8 @@ const shikiPlugin = ViewPlugin.fromClass(
       const documentTop = this.view.documentTop;
       let pending = false, safe = true, inspected = 0;
       this.decorations.between(this.view.viewport.from, this.view.viewport.to, (from, _to, decoration) => {
-        if (++inspected > 512) { safe = false; return false; }
+        // Dense decoration sets keep the original idle-time projection path.
+        if (++inspected > MAX_READING_PROJECTION_MARKS) { safe = false; return false; }
         if (!decoration.spec.shikiPending) return;
         pending = true;
         if (documentTop + this.view.lineBlockAt(from).top < bottom) { safe = false; return false; }

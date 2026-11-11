@@ -19,6 +19,7 @@ import {
 } from './mermaidDiagram';
 
 const PREVIEW_MERMAID_CACHE_LIMIT = 100;
+const PREVIEW_MERMAID_BATCH_SIZE = 2;
 const previewMermaidSvgCache = new Map<string, string>();
 
 function isNearPreviewViewport(block: HTMLElement, frameDocument: Document): boolean {
@@ -43,7 +44,7 @@ function previewMermaidContext(document: Document, appearance: PreviewAppearance
     revision: document.documentElement.dataset.meoPreviewPresetRevision ?? '', palette, themeKey: JSON.stringify(palette) };
 }
 
-function pendingMermaidBlocks(document: Document, context: PreviewMermaidContext) {
+function pendingNearbyMermaidBlocks(document: Document, context: PreviewMermaidContext) {
   const height = document.defaultView?.innerHeight ?? 0;
   return (getPreviewViewportResources(document, 'mermaid')
     ?? Array.from(document.querySelectorAll<HTMLElement>('.meo-export-mermaid[data-source-b64]')))
@@ -68,7 +69,7 @@ function previewMermaidCacheKey(context: PreviewMermaidContext, index: number, s
 async function commitPreviewMermaidResults(document: Document, context: PreviewMermaidContext,
   ready: readonly PreparedDiagram[], errors: readonly HTMLElement[], onRendered: (() => void) | undefined,
   isCurrent: () => boolean, commit: PreviewMermaidCommit): Promise<void> {
-  if (!isCurrent() || !ready.length && !errors.length) return;
+  if (!isCurrent() || (!ready.length && !errors.length)) return;
   await commit(() => {
     if (!isCurrent()) return;
     for (const { block, source, svg } of ready) {
@@ -93,11 +94,11 @@ async function commitPreviewMermaidResults(document: Document, context: PreviewM
 
 /** Cached SVGs use no mutable Mermaid engine state. Their existing reading
  * owner still admits every bounded DOM batch and retires stale completions. */
-async function renderCachedMermaidBlocks(document: Document, appearance: PreviewAppearance,
+async function tryRenderCachedMermaidBlocks(document: Document, appearance: PreviewAppearance,
   onRendered: (() => void) | undefined, isCurrent: () => boolean, commit: PreviewMermaidCommit, isInteracting: () => boolean
 ): Promise<boolean> {
   const context = previewMermaidContext(document, appearance);
-  const blocks = pendingMermaidBlocks(document, context), ready: PreparedDiagram[] = [];
+  const blocks = pendingNearbyMermaidBlocks(document, context), ready: PreparedDiagram[] = [];
   for (const { block, documentIndex } of blocks) {
     const source = decodeBase64Utf8(block.dataset.sourceB64 ?? '');
     const key = previewMermaidCacheKey(context, documentIndex, source), svg = previewMermaidSvgCache.get(key);
@@ -105,12 +106,13 @@ async function renderCachedMermaidBlocks(document: Document, appearance: Preview
     if (!svg) return false;
     cachePreviewMermaidSvg(key, svg); ready.push({ block, source, svg });
   }
-  const size = hasBoundedPreviewResources(document) ? 2 : Math.max(1, ready.length);
+  const size = hasBoundedPreviewResources(document) ? PREVIEW_MERMAID_BATCH_SIZE : Math.max(1, ready.length);
   for (let index = 0; index < ready.length && isCurrent(); index += size) {
     if (!await waitForPreviewGesture(document, isCurrent, isInteracting)) return true;
     await commitPreviewMermaidResults(document, context, ready.slice(index, index + size), [], onRendered, isCurrent, commit);
   }
-  return ready.length === blocks.length;
+  // Every candidate was cached. Cancellation must not fall through to cold work.
+  return true;
 }
 
 export function createPreviewMermaidRenderer(
@@ -134,6 +136,7 @@ export function createPreviewMermaidRenderer(
     activeGroup?.end();
     const preset = frameDocument.documentElement.dataset.meoPreviewPreset ?? 'default';
     const revision = frameDocument.documentElement.dataset.meoPreviewPresetRevision ?? '';
+    // Keep this preflight lazy: a cold block needs no palette/style probes.
     // A preserved SVG can outlive a theme change with the same appearance.
     let themeKey: string | undefined;
     const hasPendingBlocks = (getPreviewViewportResources(frameDocument, 'mermaid') ?? Array.from(frameDocument.querySelectorAll<HTMLElement>(
@@ -150,10 +153,10 @@ export function createPreviewMermaidRenderer(
     const report = (error: unknown) => { if (!(error instanceof MermaidDiagramResourceUnavailableError)) reportError(error); };
     const scheduled = renderTail.catch(() => undefined).then(async () => {
       if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
-      if (previewMermaidSvgCache.size && await renderCachedMermaidBlocks(
+      if (previewMermaidSvgCache.size && await tryRenderCachedMermaidBlocks(
         frameDocument, appearance, onDiagramRendered, requestIsCurrent, commit, isInteracting
       )) return;
-      // Admission can change while a reading owner accepts cached batches.
+      // Recheck the request and gesture before acquiring the cold engine.
       if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
       const group = resources.acquireGroup();
       activeGroup = group;
@@ -213,7 +216,7 @@ async function renderMermaidBlocks(
   if (!isCurrent()) return;
   syncPreviewRenderedActions(frameDocument);
   const context = previewMermaidContext(frameDocument, appearance), { preset, palette } = context;
-  const blocks = pendingMermaidBlocks(frameDocument, context);
+  const blocks = pendingNearbyMermaidBlocks(frameDocument, context);
   if (blocks.length === 0) return;
 
   const mermaid = await loadMermaidRuntime();
@@ -262,7 +265,7 @@ async function renderMermaidBlocks(
     try {
       const cachedSvg = previewMermaidSvgCache.get(cacheKey);
       const normalizedSource = normalizeMermaidDiagramText(source);
-      const result = cachedSvg
+      const svg = cachedSvg
         ? cachedSvg
         : await renderMermaidSvgInDocument(
             mermaid,
@@ -271,7 +274,6 @@ async function renderMermaidBlocks(
             frameDocument
           );
       if (!isCurrent()) return;
-      const svg = result;
       if (!svg) continue;
 
       cachePreviewMermaidSvg(cacheKey, svg);
@@ -279,7 +281,7 @@ async function renderMermaidBlocks(
     } catch {
       failed.push(block);
     }
-    if (hasBoundedPreviewResources(frameDocument) && prepared.length + failed.length >= 2) {
+    if (hasBoundedPreviewResources(frameDocument) && prepared.length + failed.length >= PREVIEW_MERMAID_BATCH_SIZE) {
       if (!await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) return;
       await commitPrepared();
     }

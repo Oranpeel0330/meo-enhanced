@@ -1576,13 +1576,6 @@ export function createPreviewController({
           applyCodeHighlight(frameDocument, true);
         }
         ensureReadableCode(frameDocument, false);
-        if (hasBoundedPreviewResources(frameDocument) && latestPayload?.hasMermaid) {
-          const generation = frameGeneration;
-          void previewMermaidRenderer.render(frameDocument, appearance,
-            () => { sourceMapDirty = true; },
-            () => !disposed && !host.hidden && generation === frameGeneration && activeFrameDocument === frameDocument,
-            mutate => withViewportTransaction(() => { mutate(); sourceMapDirty = true; }));
-        }
         if (moreMath) scheduleViewportHighlight(frameDocument);
       }
     });
