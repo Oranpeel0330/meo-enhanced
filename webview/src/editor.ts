@@ -1,3 +1,4 @@
+import { editorSearch, type SearchOptions, type SearchMatchRange } from './editor/searchPresentation';
 import { readDocumentTextProjection } from './application/documentTextProjection';
 import { createEditorScrollOwnership, editorManagedScroll, editorScrollIntoView } from './editor/scrollEffects';
 import { latexDelimitersFacet } from './editor/mathSyntaxPreference';
@@ -17,10 +18,10 @@ import { nativeSymbolInput, planNativeHtmlCommentToggle } from './editor/nativeT
 import { formatMultipleSelections, toggleHtmlComment, runEditorCommand, secondarySelections } from './editor/commands';
 import type { EditorCommandId } from '../../src/foundation/editingPreferences';
 import { pasteAssistance, insertPlainClipboardText } from './editor/pasteAssistance';
-import { ChangeSet, EditorState, Compartment, Prec, Transaction, StateEffect, StateField, RangeSetBuilder, type Annotation, type ChangeDesc, type ChangeSpec, type TransactionSpec, EditorSelection, type Extension, type SelectionRange, type Text } from '@codemirror/state';
+import { ChangeSet, EditorState, Compartment, Prec, Transaction, StateEffect, type Annotation, type ChangeDesc, type ChangeSpec, type TransactionSpec, EditorSelection, type Extension, type SelectionRange, type Text } from '@codemirror/state';
 import { documentEdit, documentSnapshot } from './adapters/documentSnapshot';
 import type { DocumentText, DocumentTextEdit } from '../../src/foundation/documentSnapshot';
-import { EditorView, keymap, highlightActiveLine, lineNumbers, highlightActiveLineGutter, Decoration, type DecorationSet, type ViewUpdate } from '@codemirror/view';
+import { EditorView, keymap, highlightActiveLine, lineNumbers, highlightActiveLineGutter, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import { defaultKeymap, history, historyKeymap, indentMore, indentLess, isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { markdownKeymap } from '@codemirror/lang-markdown';
@@ -195,7 +196,6 @@ import {
   isLiveInputDerivedWorkReady,
   isLiveInputDerivedWorkRefresh,
   liveInputDerivedWorkExtensions,
-  mapLiveInputDerivedDecorations,
   requestLiveInputDerivedWork,
   requestLiveInputDerivedWorkOnFrame,
   shouldDeferLiveInputDerivedWork,
@@ -216,27 +216,6 @@ declare module '@codemirror/view' {
     EDIT_CONTEXT?: boolean;
   }
 }
-
-type SearchOptions = {
-  wholeWord?: boolean;
-  caseSensitive?: boolean;
-};
-
-type SearchQueryState = {
-  text: string;
-  wholeWord: boolean;
-  caseSensitive: boolean;
-};
-
-type SearchMatchRange = {
-  start: number;
-  end: number;
-};
-
-type SearchMatchFieldValue = {
-  matches: SearchMatchRange[];
-  decorations: DecorationSet;
-};
 
 type InlineSelectionRange = {
   from: number;
@@ -299,120 +278,9 @@ type RevealOptions = { focusEditor?: boolean; align?: 'center' | 'upper' | 'top'
 type EditorFormatAction = TableFormatAction | 'heading' | 'bulletList' | 'numberedList' | 'task' | 'codeBlock' | 'quote' | 'hr' | 'table' | 'image';
 type EditorFormatLevel = number | { cols: number; rows: number };
 
-const setSearchQueryEffect = StateEffect.define<SearchQueryState>();
-type SearchMatchCalculation = { readonly query: SearchQueryState; readonly matches: SearchMatchRange[] };
-// A command that has already calculated post-edit matches can hand that exact
-// result to the decoration field. This prevents Source replacement from
-// materializing and scanning the full post-edit document a second time.
-const setSearchMatchesEffect = StateEffect.define<SearchMatchCalculation>();
 const refreshDecorationsEffect = StateEffect.define();
-const searchMatchStyle = 'color: var(--meo-semantic-searchMatchForeground) !important; -webkit-text-fill-color: var(--meo-semantic-searchMatchForeground) !important;';
-const activeSearchMatchStyle = 'color: var(--meo-semantic-searchMatchActiveForeground) !important; -webkit-text-fill-color: var(--meo-semantic-searchMatchActiveForeground) !important;';
-const searchMatchMark = Decoration.mark({ class: 'meo-search-match', attributes: { style: searchMatchStyle } });
-const activeSearchMatchMark = Decoration.mark({ class: 'meo-search-match meo-search-match-active', attributes: { style: activeSearchMatchStyle } });
 const tableSearchStateEventName = 'meo-search-state-change';
 const codeBlockAncestorNames = new Set(['FencedCode', 'CodeBlock']);
-
-const setSearchAnchorEffect = StateEffect.define<SearchMatchRange | null>();
-const searchAnchorField = StateField.define<SearchMatchRange | null>({
-  create: () => null,
-  update(value, tr) {
-    if (tr.docChanged || tr.selection || tr.effects.some(effect => effect.is(setSearchQueryEffect))) return null;
-    for (const effect of tr.effects) if (effect.is(setSearchAnchorEffect)) return effect.value;
-    return value;
-  }
-});
-
-const buildSearchDecorations = (state: EditorState, matches: SearchMatchRange[]) => {
-  if (!matches.length) {
-    return Decoration.none;
-  }
-
-  const builder = new RangeSetBuilder<Decoration>();
-  const selection = state.selection.main;
-  const active = state.field(searchAnchorField);
-  const selectionFrom = active?.start ?? Math.min(selection.from, selection.to);
-  const selectionTo = active?.end ?? Math.max(selection.from, selection.to);
-  for (const match of matches) {
-    const mark = match.start === selectionFrom && match.end === selectionTo
-      ? activeSearchMatchMark
-      : searchMatchMark;
-    builder.add(match.start, match.end, mark);
-  }
-  return builder.finish();
-};
-
-const searchQueryField = StateField.define({
-  create() {
-    return createSearchQueryState('');
-  },
-  update(value, tr) {
-    for (const effect of tr.effects) {
-      if (effect.is(setSearchQueryEffect)) {
-        return effect.value;
-      }
-    }
-    return value;
-  }
-});
-
-const searchMatchField = StateField.define<SearchMatchFieldValue>({
-  create() {
-    return { matches: [], decorations: Decoration.none };
-  },
-  update(value, tr: Transaction) {
-    let changedQuery: SearchQueryState | null = null;
-    let calculated: SearchMatchCalculation | null = null;
-    for (const effect of tr.effects) {
-      if (effect.is(setSearchQueryEffect)) {
-        changedQuery = effect.value;
-      }
-      if (effect.is(setSearchMatchesEffect)) calculated = effect.value;
-    }
-
-    // A new Find query must read the accepted document even if typing has not
-    // flushed its decorations yet. Other input consumers retain their schedule.
-    if (!changedQuery && !calculated && shouldDeferLiveInputDerivedWork(tr)) {
-      if (!tr.docChanged) return value;
-      const matches = value.matches.map((match) => ({
-        start: tr.changes.mapPos(match.start, 1),
-        end: tr.changes.mapPos(match.end, -1)
-      })).filter((match) => match.end > match.start);
-      return {
-        matches,
-        decorations: mapLiveInputDerivedDecorations(value.decorations, tr)
-      };
-    }
-
-    if (tr.docChanged || changedQuery || isLiveInputDerivedWorkRefresh(tr)) {
-      const searchQuery = changedQuery ?? tr.state.field(searchQueryField);
-      const supplied = calculated
-        && calculated.query.text === searchQuery.text
-        && calculated.query.wholeWord === searchQuery.wholeWord
-        && calculated.query.caseSensitive === searchQuery.caseSensitive
-        ? calculated.matches : null;
-      const matches = supplied ?? (searchQuery.text
-        ? findSearchMatchRanges(readDocumentTextProjection(tr.state.doc), searchQuery.text, searchQuery)
-        : []);
-      return {
-        matches,
-        decorations: buildSearchDecorations(tr.state, matches)
-      };
-    }
-
-    if (tr.selection || tr.effects.some(effect => effect.is(setSearchAnchorEffect))) {
-      return {
-        matches: value.matches,
-        decorations: buildSearchDecorations(tr.state, value.matches)
-      };
-    }
-
-    return value;
-  },
-  provide(field) {
-    return EditorView.decorations.from(field, (value) => value.decorations);
-  }
-});
 
 function lineNumberExtensions(
   _mode: EditableEditorMode,
@@ -1299,9 +1167,9 @@ export function createEditor({
       return;
     }
 
-    const searchQuery = view.state.field(searchQueryField);
+    const searchQuery = editorSearch.query(view.state);
     const selection = view.state.selection.main;
-    const active = view.state.field(searchAnchorField);
+    const active = editorSearch.anchor(view.state);
     const detail = {
       text: searchQuery.text,
       wholeWord: searchQuery.wholeWord,
@@ -1711,12 +1579,12 @@ export function createEditor({
       return false;
     }
 
-    const searchQuery = view.state.field(searchQueryField);
+    const searchQuery = editorSearch.query(view.state);
     if (!searchQuery.text || to - from !== searchQuery.text.length) {
       return false;
     }
 
-    return view.state.field(searchMatchField).matches.some((match) => (
+    return editorSearch.matches(view.state).some((match) => (
       match.start === from && match.end === to
     ));
   };
@@ -2211,14 +2079,14 @@ export function createEditor({
     if (!query) return [];
     const wholeWord = options.wholeWord === true;
     const caseSensitive = options.caseSensitive === true;
-    const activeQuery = view.state.field(searchQueryField);
+    const activeQuery = editorSearch.query(view.state);
     if (
       activeQuery.text === query &&
       activeQuery.wholeWord === wholeWord &&
       activeQuery.caseSensitive === caseSensitive &&
       !isLiveInputDerivedWorkPending(view.state)
     ) {
-      return view.state.field(searchMatchField).matches;
+      return editorSearch.matches(view.state);
     }
     if (
       searchResultCache?.doc === view.state.doc &&
@@ -2228,7 +2096,7 @@ export function createEditor({
     ) {
       return searchResultCache.matches;
     }
-    const matches = findSearchMatchRanges(readDocumentTextProjection(view.state.doc), query, { wholeWord, caseSensitive });
+    const matches = editorSearch.findMatches(readDocumentTextProjection(view.state.doc), query, { wholeWord, caseSensitive });
     searchResultCache = { doc: view.state.doc, query, wholeWord, caseSensitive, matches };
     return matches;
   };
@@ -2243,7 +2111,7 @@ export function createEditor({
     }
 
     const selection = view.state.selection.main;
-    const active = view.state.field(searchAnchorField);
+    const active = editorSearch.anchor(view.state);
     const from = active?.start ?? Math.min(selection.from, selection.to);
     const to = active?.end ?? Math.max(selection.from, selection.to);
     const matches = getSearchMatches(query, searchOptions);
@@ -2291,20 +2159,20 @@ export function createEditor({
     }
 
     const selection = view.state.selection.main;
-    const active = view.state.field(searchAnchorField);
+    const active = editorSearch.anchor(view.state);
     const from = active?.start ?? Math.min(selection.from, selection.to);
     const to = active?.end ?? Math.max(selection.from, selection.to);
     const matches = getSearchMatches(query, options);
-    const matchIndex = findSelectedSearchMatchIndex(matches, from, to);
+    const matchIndex = editorSearch.selectedMatchIndex(matches, from, to);
     if (matchIndex < 0) {
       return { replaced: false, ...findMatch(query, false, options) };
     }
 
     const replacementEnd = from + replacement.length;
     const nextText = view.state.doc.sliceString(0, from) + replacement + view.state.doc.sliceString(to);
-    const remainingMatches = findSearchMatchRanges(nextText, query, options);
-    const searchQuery = createSearchQueryState(query, options);
-    const postEditMatches = setSearchMatchesEffect.of({ query: searchQuery, matches: remainingMatches });
+    const remainingMatches = editorSearch.findMatches(nextText, query, options);
+    const searchQuery = editorSearch.normalizeQuery(query, options);
+    const postEditMatches = editorSearch.calculatedMatchesEffect(searchQuery, remainingMatches);
     const afterReplacement = remainingMatches.findIndex((match) => match.start >= replacementEnd);
     const wrappedMatch = afterReplacement >= 0
       ? afterReplacement
@@ -2735,10 +2603,9 @@ export function createEditor({
       sourcePreparationCompartment.of(lightweightSourceSyntax ? [] : sourceSyntaxPreparation),
       createHtmlSourceEditing(getHtmlEditingRange, supportedHtmlTags),
       modeCompartment.of(startMode === 'live' ? [shikiCodeHighlight, ...liveModeExtensions({ largeDocument: boundedEditorWork, language: modeLanguage() })] : sourceMode(boundedEditorWork, lightweightSourceSyntax, modeLanguage())),
-      searchQueryField,
-      searchAnchorField,
+      editorSearch.extension,
       historySelectionAdapter.extension,
-      Prec.high(searchMatchField),
+      editorSearch.highlightExtension,
       diagnosticDataField,
       diagnosticField,
       createEditorScrollOwnership(),
@@ -2759,7 +2626,7 @@ export function createEditor({
         const liveDerivedRefresh = update.transactions.some(isLiveInputDerivedWorkRefresh);
         const gitDiffResultRefresh = update.transactions.some(isGitDiffResultRefresh);
         const searchQueryChanged = update.transactions.some((transaction) => (
-          transaction.effects.some((effect) => effect.is(setSearchQueryEffect))
+          editorSearch.queryChanged(transaction)
         ));
         const gitBaselineChanged = update.transactions.some((transaction) => (
           transaction.effects.some((effect) => effect.is(setGitBaselineEffect))
@@ -2854,7 +2721,7 @@ export function createEditor({
         // Search indicators consume accepted Document/Selection and must not
         // stand between the public change callback and its owner.
         if (!liveDerivedRefresh && (update.docChanged || update.selectionSet || searchQueryChanged ||
-          update.transactions.some(transaction => transaction.effects.some(effect => effect.is(setSearchAnchorEffect))))) {
+          update.transactions.some(transaction => editorSearch.anchorChanged(transaction)))) {
           requestLiveInputDerivedWork(update.view, searchDerivedConsumer, () => {
             emitSearchStateChange();
             searchOverviewRuler?.refresh({ positionsChanged: update.docChanged || searchQueryChanged });
@@ -3737,9 +3604,9 @@ export function createEditor({
       view, searchOverviewDerivedConsumer, operation
     ),
     getMatches: () => {
-      const matches = view.state.field(searchMatchField).matches;
+      const matches = editorSearch.matches(view.state);
       const selection = view.state.selection.main;
-      const active = view.state.field(searchAnchorField);
+      const active = editorSearch.anchor(view.state);
       const selectionFrom = active?.start ?? Math.min(selection.from, selection.to);
       const selectionTo = active?.end ?? Math.max(selection.from, selection.to);
       return matches.map((match) => ({
@@ -3926,10 +3793,10 @@ export function createEditor({
       return !editorDestroyed && !host?.hidden && !host?.inert;
     },
     getSearchAnchor(): SearchMatchAnchor | null {
-      const matches = view.state.field(searchMatchField).matches;
+      const matches = editorSearch.matches(view.state);
       const selection = view.state.selection.main;
-      const active = view.state.field(searchAnchorField);
-      const index = findSelectedSearchMatchIndex(matches, active?.start ?? selection.from, active?.end ?? selection.to);
+      const active = editorSearch.anchor(view.state);
+      const index = editorSearch.selectedMatchIndex(matches, active?.start ?? selection.from, active?.end ?? selection.to);
       if (index < 0) return null;
       const line = view.state.doc.lineAt(matches[index]!.start).number;
       const occurrence = matches.slice(0, index).filter(match => view.state.doc.lineAt(match.start).number === line).length;
@@ -3937,15 +3804,15 @@ export function createEditor({
     },
     setSearchAnchor(anchor: SearchMatchAnchor | null) {
       if (!anchor) return;
-      const matches = view.state.field(searchMatchField).matches;
+      const matches = editorSearch.matches(view.state);
       const candidates = matches.filter(match => view.state.doc.lineAt(match.start).number === anchor.line);
       const match = candidates[Math.min(anchor.occurrence, candidates.length - 1)];
       if (!match) return;
-      const active = view.state.field(searchAnchorField) ?? view.state.selection.main;
+      const active = editorSearch.anchor(view.state) ?? view.state.selection.main;
       if (('start' in active ? active.start : active.from) === match.start &&
           ('end' in active ? active.end : active.to) === match.end) return;
       // Search presentation changes; the mode owner retains selection and viewport.
-      view.dispatch({ effects: setSearchAnchorEffect.of(match) });
+      view.dispatch({ effects: editorSearch.anchorEffect(match) });
       searchOverviewRuler?.refresh();
     },
     findNext(query: string, options: SearchOptions & { focusEditor?: boolean } = {}) {
@@ -3988,8 +3855,8 @@ export function createEditor({
       return getSearchMatches(query, options).length;
     },
     setSearchQuery(query: string, options: SearchOptions = {}) {
-      const nextQuery = createSearchQueryState(query, options);
-      const currentQuery = view.state.field(searchQueryField);
+      const nextQuery = editorSearch.normalizeQuery(query, options);
+      const currentQuery = editorSearch.query(view.state);
       if (
         currentQuery.text === nextQuery.text &&
         currentQuery.wholeWord === nextQuery.wholeWord &&
@@ -4000,7 +3867,7 @@ export function createEditor({
       view.dispatch({
         annotations: Transaction.userEvent.of('select.search.clear'),
         effects: [
-          setSearchQueryEffect.of(nextQuery),
+          editorSearch.queryEffect(nextQuery),
           setMermaidSearchRevealEffect.of(null),
           setLatexMathSearchRevealEffect.of(null),
           preserveLiveDecorationsForSearchEffect.of(true)
@@ -5085,57 +4952,6 @@ function mapPositionThroughTextChange(position: number, previousText: string, ne
   }
 
   return mapPositionThroughChange(position, change);
-}
-
-function createSearchQueryState(query: string | null | undefined, options: SearchOptions = {}): SearchQueryState {
-  return {
-    text: query ?? '',
-    wholeWord: options.wholeWord === true,
-    caseSensitive: options.caseSensitive === true
-  };
-}
-
-function isWordBoundaryCharacter(value: string): boolean {
-  return /[0-9A-Za-z_]/.test(value);
-}
-
-function isWholeWordRange(text: string, start: number, end: number): boolean {
-  const previous = start > 0 ? text.slice(start - 1, start) : '';
-  const next = end < text.length ? text.slice(end, end + 1) : '';
-  return !isWordBoundaryCharacter(previous) && !isWordBoundaryCharacter(next);
-}
-
-function findSearchMatchRanges(text: string, query: string, options: SearchOptions = {}): SearchMatchRange[] {
-  if (!query) {
-    return [];
-  }
-
-  const haystack = options.caseSensitive ? text : text.toLocaleLowerCase();
-  const needle = options.caseSensitive ? query : query.toLocaleLowerCase();
-  const matches: SearchMatchRange[] = [];
-  let offset = 0;
-  while (offset <= text.length) {
-    const index = haystack.indexOf(needle, offset);
-    if (index < 0) {
-      break;
-    }
-
-    const end = index + query.length;
-    if (!options.wholeWord || isWholeWordRange(text, index, end)) {
-      matches.push({ start: index, end });
-    }
-    offset = end;
-  }
-  return matches;
-}
-
-function findSelectedSearchMatchIndex(matches: SearchMatchRange[], from: number, to: number): number {
-  for (let index = 0; index < matches.length; index += 1) {
-    if (matches[index].start === from && matches[index].end === to) {
-      return index;
-    }
-  }
-  return -1;
 }
 
 function normalizeLiveInlineSelectionForListContent(

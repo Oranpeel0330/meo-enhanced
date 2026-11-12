@@ -355,7 +355,10 @@ accepted. Internal table bands do not imply a fresh Preview document for every
 `scripts/test-preview-table-source-identity.ts` inserts preceding Source paragraphs
 while split Preview independently reads an unchanged ordinary table containing
 HTML, math and footnotes. Both full-DOM and windowed paths must retain original
-row/formula DOM, column widths and every observed compositor paint. Source marker
+row/formula DOM, column widths and every observed compositor paint.
+Before sampling, a trusted wheel establishes the independent reading position
+and the fixture verifies the edited paragraph is fully above that viewport;
+startup can supersede an earlier programmatic scroll. Source marker
 coordinates must belong to the accepted Preview revision, and mapped source-line
 changes must retain the exact fractional glyph witness.
 

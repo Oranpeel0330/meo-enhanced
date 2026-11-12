@@ -66,10 +66,12 @@ const build = await Bun.build({
         : 'export async function createOnigurumaEngine() { return {}; }'
     }));
     builder.onResolve({ filter: /^@shikijs\/langs\// }, ({ path }) => ({
-      path: path.slice('@shikijs/langs/'.length), namespace: 'preview-code-language-test'
+      // Keep the package identity: bare grammar names such as "postcss" can
+      // otherwise collide with real dependencies after import order changes.
+      path, namespace: 'preview-code-language-test'
     }));
     builder.onLoad({ filter: /.*/, namespace: 'preview-code-language-test' }, ({ path }) => ({
-      loader: 'js', contents: `export default { name: ${JSON.stringify(path)} };`
+      loader: 'js', contents: `export default { name: ${JSON.stringify(path.slice('@shikijs/langs/'.length))} };`
     }));
   } }]
 });

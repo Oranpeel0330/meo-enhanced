@@ -30,6 +30,18 @@ try {
       }, position);
       const box = await page.$eval('.preview-frame', element => { const r = element.getBoundingClientRect(); return { x: r.left + 150, y: r.top + 180 }; });
       await page.mouse.move(box.x, box.y); await page.mouse.wheel({ deltaY: 1 }); await frames(page, 16);
+      // Startup layout can supersede the earlier programmatic scroll. Establish
+      // the independent reading position through a real gesture before sampling.
+      const distance = await page.evaluate(() => document.querySelector<HTMLIFrameElement>('.preview-frame')!
+        .contentDocument!.querySelector('tbody tr')!.getBoundingClientRect().top - 30);
+      await page.mouse.wheel({ deltaY: distance });
+      await page.waitForFunction(() => {
+        const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+        const row = doc.querySelector('tbody tr')!.getBoundingClientRect();
+        const edited = Array.from(doc.querySelectorAll('p')).find(node => node.textContent?.startsWith('Intro-target'));
+        return doc.scrollingElement!.scrollTop > 0 && Math.abs(row.top - 30) <= 2
+          && edited !== undefined && edited.getBoundingClientRect().bottom < 0;
+      });
       const baseline = await page.evaluate(() => {
         const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!, doc = frame.contentDocument!;
         const row = doc.querySelector<HTMLTableRowElement>('tbody tr')!; (window as any).__prefixRow = row;
