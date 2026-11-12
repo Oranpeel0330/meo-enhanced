@@ -6,7 +6,7 @@ import { normalizeLinkDestination, isLikelyLocalLinkDestination as isLikelyLocal
 export { isLikelyLocalLinkTarget };
 
 const localLinkStatusByTarget = new Map<string, boolean>();
-let vscodeApi: any = null;
+let vscodeApi: Pick<VsCodeWebviewApi, 'postMessage'> | null = null;
 let localLinkTransport: LocalLinkResolutionTransport = {
   resolve: async () => ({ ok: false, error: { code: 'operation-failed', message: 'Local Link handling is not initialized' } }),
   accept: () => false
@@ -21,7 +21,7 @@ export interface LocalLinkRefreshContext {
 
 let refreshContext: LocalLinkRefreshContext | null = null;
 
-export const initializeLocalLinkHandling = (vscode: any): void => {
+export const initializeLocalLinkHandling = (vscode: Pick<VsCodeWebviewApi, 'postMessage'>): void => {
   vscodeApi = vscode;
   localLinkTransport = createLocalLinkResolutionTransport((message) => {
     vscodeApi?.postMessage(message);

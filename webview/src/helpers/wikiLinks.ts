@@ -1,5 +1,5 @@
 import { StateField, RangeSetBuilder, EditorState, Transaction } from '@codemirror/state';
-import { Decoration, EditorView } from '@codemirror/view';
+import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { currentSyntaxTree, syntaxTreeChanged } from './markdownSyntax';
 import { createWikiLinkResolutionTransport, type WikiLinkResolutionTransport } from '../adapters/wikiLinkResolutionTransport';
 import type { ResolvedWikiLinksResponse } from '../../../src/protocol/wikiLinkResolution';
@@ -9,7 +9,7 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const wikiLinkStatusByTarget = new Map<string, boolean>();
 const wikiLinkIssues = new Map<string, string>();
 
-let vscodeApi: any = null;
+let vscodeApi: Pick<VsCodeWebviewApi, 'postMessage'> | null = null;
 let wikiLinkTransport: WikiLinkResolutionTransport = {
   resolve: async () => ({ ok: false, error: { code: 'operation-failed', message: 'Wiki Link handling is not initialized' } }),
   accept: () => false
@@ -18,7 +18,7 @@ let wikiLinkGeneration = 0;
 let pendingWikiStatusRefresh: number | null = null;
 const wikiStatusDebounceMs = 1000;
 
-export const initializeWikiLinkHandling = (vscode: any): void => {
+export const initializeWikiLinkHandling = (vscode: Pick<VsCodeWebviewApi, 'postMessage'>): void => {
   vscodeApi = vscode;
   wikiLinkTransport = createWikiLinkResolutionTransport((message) => {
     vscodeApi?.postMessage(message);
@@ -293,12 +293,12 @@ export function replaceWikiLinkStatuses(entries: Array<{ target: string; exists:
 
 const sourceWikiMarkerDeco = Decoration.mark({ class: 'meo-md-wiki-marker' });
 
-function computeSourceWikiMarkers(state: EditorState): any {
-  const builder = new RangeSetBuilder<any>();
+function computeSourceWikiMarkers(state: EditorState): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
   const tree = currentSyntaxTree(state);
 
   tree.iterate({
-    enter(node: any) {
+    enter(node) {
       const ranges = wikiMarkerRanges(state, node);
       if (!ranges) {
         return;
@@ -312,7 +312,7 @@ function computeSourceWikiMarkers(state: EditorState): any {
   return builder.finish();
 }
 
-export const sourceWikiMarkerField = StateField.define<any>({
+export const sourceWikiMarkerField = StateField.define<DecorationSet>({
   create(state: EditorState) {
     try {
       return computeSourceWikiMarkers(state);
@@ -320,7 +320,7 @@ export const sourceWikiMarkerField = StateField.define<any>({
       return Decoration.none;
     }
   },
-  update(markers: any, transaction: Transaction) {
+  update(markers: DecorationSet, transaction: Transaction) {
     if (!transaction.docChanged && !syntaxTreeChanged(transaction)) {
       return markers;
     }
@@ -330,5 +330,5 @@ export const sourceWikiMarkerField = StateField.define<any>({
       return markers;
     }
   },
-  provide: (field: any) => EditorView.decorations.from(field)
+  provide: field => EditorView.decorations.from(field)
 });
