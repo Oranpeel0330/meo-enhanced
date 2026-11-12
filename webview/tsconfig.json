@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
+    "types": ["node"],
     "allowJs": true,
     "checkJs": false,
     "skipLibCheck": true,

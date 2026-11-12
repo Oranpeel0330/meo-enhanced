@@ -790,7 +790,8 @@
     "test:highlight": "bun scripts/test-highlight.ts && bun scripts/test-preview-code-highlight-layout.ts && bun scripts/test-highlight-typing.ts",
     "test:changes-review": "bun scripts/test-changes-review.ts && bun scripts/test-git-diff-background.ts",
     "test:basic-capability-production": "bun scripts/test-basic-capability-production-matrix.ts",
-    "typecheck": "bun run typecheck:extension && bun run typecheck:webview",
+    "typecheck": "bun run typecheck:extension && bun run typecheck:webview && bun run typecheck:scripts",
+    "typecheck:scripts": "tsc -p scripts/tsconfig.json --noEmit",
     "typecheck:extension": "tsc -p tsconfig.json --noEmit",
     "typecheck:webview": "bun scripts/test-webview-strict-config.ts && tsc -p webview/tsconfig.json --noEmit",
     "build": "bun run build:webview && bun run build:extension",
@@ -860,6 +861,7 @@
     "vscode-diff": "3.0.1"
   },
   "devDependencies": {
+    "@types/bun": "1.4.2",
     "@types/js-yaml": "4.0.9",
     "@types/markdown-it": "^14.1.2",
     "@types/sanitize-html": "^2.16.0",

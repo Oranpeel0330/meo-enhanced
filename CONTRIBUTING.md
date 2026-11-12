@@ -6,9 +6,8 @@ that changed.
 
 ## Prerequisites and setup
 
-- Install [Bun](https://bun.sh/). The repository uses Bun for dependency
-  installation, scripts, tests, and builds, but does not currently pin a Bun
-  version in `package.json`.
+- Install [Bun](https://bun.sh/) at the version in [`.bun-version`](.bun-version).
+  Dependency installation, scripts, tests, builds and CI use that toolchain.
 - Use VS Code `^1.94.0`, the compatibility range declared by the extension.
 - The repository does not declare a separate Node.js engine range. Do not infer
   a project-specific Node.js minimum from a local environment.
@@ -44,6 +43,10 @@ contract for the live style path is `bun scripts/test-development-style-refresh.
 ## Develop and verify
 
 Use the tiered workflow in [docs/testing-workflow.md](docs/testing-workflow.md).
+`bun run typecheck` covers the extension (including its `.mts` entry), Webview,
+and shared test infrastructure. The infrastructure entry points are listed in
+`scripts/tsconfig.json`; their imported dependencies are checked too. Browser
+fixtures and individual test scripts retain their runtime behavior checks.
 When adding, moving or changing tests, follow the guide's
 [test registration procedure](docs/testing-workflow.md#adding-or-changing-tests)
 and run `bun run test:inventory`. Agents own this step without a user reminder.

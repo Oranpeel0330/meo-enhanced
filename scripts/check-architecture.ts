@@ -580,7 +580,7 @@ export function inspectArchitecture(repoRoot: string, staged = false): { ok: boo
     const source = sources.find((candidate) => candidate.path === module);
     if (!source) continue;
     const file = sourceFileFor(source);
-    const isFrozenLiteral = (node: ts.Node): boolean => (
+    const isFrozenLiteral = (node: ts.Node): node is ts.CallExpression => (
       ts.isCallExpression(node)
       && ts.isPropertyAccessExpression(node.expression)
       && ts.isIdentifier(node.expression.expression)

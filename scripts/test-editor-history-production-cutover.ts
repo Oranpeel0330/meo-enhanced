@@ -1,3 +1,4 @@
+import { importedCallCount, importedInstanceMethodCallCount } from './source-import-contracts';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -20,17 +21,17 @@ const runtimeSource = readFileSync(
 );
 
 assert.equal(
-  (editorSource.match(/createEditorHistoryApplication\(\)/g) ?? []).length,
+  importedCallCount(editorSource, 'createEditorHistoryApplication'),
   1,
   'production Editor must create exactly one Editor History Application'
 );
 assert.equal(
-  (editorSource.match(/createEditorHistoryEffectAdapter\(\{/g) ?? []).length,
+  importedCallCount(editorSource, 'createEditorHistoryEffectAdapter'),
   1,
   'production Editor must create exactly one Editor History Effect Adapter'
 );
 assert.equal(
-  (editorSource.match(/createEditorHistoryRuntime\(/g) ?? []).length,
+  importedCallCount(editorSource, 'createEditorHistoryRuntime'),
   1,
   'production Editor must create exactly one Editor History Runtime'
 );
@@ -79,8 +80,8 @@ assert.ok(
   externalHistoryInvalidation < equalTextReturn,
   'equal-text external presentation must invalidate pending history restore before returning'
 );
-assert.equal(editorSource.includes('editorHistoryApplication.dispatch('), false);
-assert.equal(editorSource.includes('editorHistoryEffectAdapter.execute('), false);
+assert.equal(importedInstanceMethodCallCount(editorSource, 'createEditorHistoryApplication', 'dispatch'), 0);
+assert.equal(importedInstanceMethodCallCount(editorSource, 'createEditorHistoryEffectAdapter', 'execute'), 0);
 assert.equal(
   /interactionTarget|preferredBlockMode/.test(applicationSource),
   false,

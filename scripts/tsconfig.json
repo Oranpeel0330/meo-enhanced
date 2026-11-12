@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "types": ["bun"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  },
+  "include": [
+    "test-workflow.ts",
+    "check-test-inventory.ts",
+    "check-architecture.ts",
+    "browser-test-helpers.ts",
+    "feature-coverage-report.ts",
+    "source-import-contracts.ts"
+  ]
+}

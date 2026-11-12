@@ -1,3 +1,4 @@
+import { importedCallCount } from './source-import-contracts';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createEditorModeApplication, type EditorMode } from '../webview/src/application/editorMode';
@@ -317,12 +318,12 @@ const adapterSource = readFileSync(new URL('../webview/src/adapters/editorModeEf
 assert.equal(/\b(currentMode|lastEditableMode|pendingText|documentText)\s*=/.test(adapterSource), false);
 const bootstrapSource = readFileSync(new URL('../webview/src/index.ts', import.meta.url), 'utf8');
 assert.equal(
-  (bootstrapSource.match(/editorModeRuntime = createEditorModeRuntime\(/g) ?? []).length,
+  importedCallCount(bootstrapSource, 'createEditorModeRuntime'),
   1,
   'production must create exactly one Editor Mode Runtime'
 );
 assert.equal(
-  (bootstrapSource.match(/const editorModeEffectAdapter = createEditorModeEffectAdapter\(\{/g) ?? []).length,
+  importedCallCount(bootstrapSource, 'createEditorModeEffectAdapter'),
   1,
   'production must create exactly one Editor Mode Effect Adapter'
 );

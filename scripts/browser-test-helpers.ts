@@ -9,9 +9,9 @@ export type TestBrowserLaunchOptions = {
 };
 
 export type TestBrowserLaunchDependencies = {
-  readonly createUserDataDir(): Promise<string>;
-  readonly launch(options: TestBrowserLaunchOptions): Promise<Browser>;
-  readonly cleanupUserDataDir(userDataDir: string): Promise<void>;
+  readonly createUserDataDir: () => Promise<string>;
+  readonly launch: (options: TestBrowserLaunchOptions) => Promise<Browser>;
+  readonly cleanupUserDataDir: (userDataDir: string) => Promise<void>;
 };
 
 type OwnedBrowserState = {
@@ -120,6 +120,8 @@ export async function launchOwnedTestBrowser(
       }
     }
     throwLifecycleErrors([error], cleanupErrors, 'Test browser launch and cleanup failed');
+    // An empty AggregateError has no flattened entries, but launch still failed.
+    throw error;
   }
 }
 

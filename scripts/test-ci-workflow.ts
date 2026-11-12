@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-type WorkflowStep = { run?: unknown; uses?: unknown };
+type WorkflowStep = { run?: unknown; uses?: unknown; with?: Record<string, unknown> };
 type Workflow = {
   name?: string;
   on?: { pull_request?: unknown; push?: { branches?: string[]; tags?: string[] } };
@@ -38,6 +38,12 @@ if (verify?.['runs-on'] !== '${{ matrix.os }}'
 const steps = workflow.jobs?.verify?.steps;
 if (!Array.isArray(steps)) {
   throw new Error('Architecture gate must define the verify job steps');
+}
+
+const bunSetup = steps.find(step => step.uses === 'oven-sh/setup-bun@v2');
+if (bunSetup?.with?.['bun-version-file'] !== '.bun-version'
+  || !/^\d+\.\d+\.\d+$/.test(readFileSync(resolve(repoRoot, '.bun-version'), 'utf8').trim())) {
+  throw new Error('CI must install the repository-pinned Bun toolchain');
 }
 
 const runCommands = steps

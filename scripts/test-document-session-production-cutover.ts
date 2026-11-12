@@ -1,3 +1,4 @@
+import { importedCallCount } from './source-import-contracts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,7 +29,7 @@ assert.equal(packageJson.includes('scripts/test-document-sync.ts'), false);
 assert.equal(gitClient.includes('getSyncedText'), false);
 
 assert.equal(
-  (webviewBootstrap.match(/createDocumentSessionWebviewAdapter\s*\(/g) ?? []).length,
+  importedCallCount(webviewBootstrap, 'createDocumentSessionWebviewAdapter'),
   1,
   'production Bootstrap must create exactly one Document Session Webview Adapter'
 );
@@ -67,7 +68,7 @@ assert.equal(hostSession.includes("case 'saveDocument':"), false);
 assert.equal(hostSession.includes('pendingDraftText'), false);
 assert.equal(hostSession.includes('applyPendingDraftIfNeeded'), false);
 assert.equal(
-  (hostBootstrap.match(/createVscodePendingDraftRecoveryAdapter\s*\(/g) ?? []).length,
+  importedCallCount(hostBootstrap, 'createVscodePendingDraftRecoveryAdapter'),
   1,
   'Host Bootstrap must create exactly one Pending Draft recovery Adapter per Panel Session'
 );

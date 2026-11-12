@@ -158,6 +158,16 @@ async function runOwnedBrowserLifecycleChecks(): Promise<void> {
 
   {
     const fake = createFakeBrowser();
+    const failure = new AggregateError([], 'empty launch failure');
+    const dependencies = createFakeDependencies(fake, 'profile-empty-launch-failure');
+    dependencies.launch = async () => { throw failure; };
+    assert.equal(await captureFailure(() => launchOwnedTestBrowser(dependencies).then(() => undefined)), failure,
+      'An empty aggregate must not turn a failed browser launch into a successful undefined result');
+    assert.deepEqual(dependencies.cleanupPaths, ['profile-empty-launch-failure']);
+  }
+
+  {
+    const fake = createFakeBrowser();
     const launchFailure = new Error('shared entry launch failed');
     const cleanupFailure = new Error('shared entry cleanup failed');
     const dependencies = createFakeDependencies(fake, 'profile-shared-entry', { cleanupFailure });

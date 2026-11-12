@@ -1,3 +1,4 @@
+import { importedCallCount, importedInstanceMethodCallCount } from './source-import-contracts';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -29,16 +30,16 @@ for (const legacyPattern of [
 }
 
 assert.equal(
-  (source.match(/const editorModeApplication = createEditorModeApplication\(\)/g) ?? []).length,
+  importedCallCount(source, 'createEditorModeApplication'),
   1
 );
 assert.equal(
-  (source.match(/const editorModeEffectAdapter = createEditorModeEffectAdapter\(\{/g) ?? []).length,
+  importedCallCount(source, 'createEditorModeEffectAdapter'),
   1
 );
-assert.equal((source.match(/editorModeRuntime = createEditorModeRuntime\(/g) ?? []).length, 1);
-assert.equal(source.includes('editorModeApplication.dispatch('), false);
-assert.equal(source.includes('editorModeEffectAdapter.execute('), false);
+assert.equal(importedCallCount(source, 'createEditorModeRuntime'), 1);
+assert.equal(importedInstanceMethodCallCount(source, 'createEditorModeApplication', 'dispatch'), 0);
+assert.equal(importedInstanceMethodCallCount(source, 'createEditorModeEffectAdapter', 'execute'), 0);
 assert.equal(
   (source.match(/editor\.setMode\(mode, viewport, \{ deferViewportRestore \}\)/g) ?? []).length,
   1,
@@ -78,3 +79,15 @@ assert.equal(
 );
 
 console.log('Editor Mode production cutover guards passed');
+
+// Formatting, renamed imports, comments and shadowed locals do not change the contract.
+const renamed = "import { createEditorModeApplication as build } from './application';\n";
+assert.equal(importedCallCount(renamed + 'const owner = build(\n);', 'createEditorModeApplication'), 1);
+assert.equal(importedCallCount(renamed + '// build()\nconst text = "build()"; function nested(build: () => void) { build(); }', 'createEditorModeApplication'), 0);
+assert.equal(importedCallCount(renamed + 'build(); build();', 'createEditorModeApplication'), 2);
+assert.equal(importedInstanceMethodCallCount(renamed + 'const owner = build(); owner.dispatch({});',
+  'createEditorModeApplication', 'dispatch'), 1);
+assert.equal(importedInstanceMethodCallCount(renamed + 'const owner = build(); function nested(owner: any) { owner.dispatch({}); }',
+  'createEditorModeApplication', 'dispatch'), 0);
+assert.equal(importedInstanceMethodCallCount(renamed + 'let owner; owner = build(); owner?.dispatch({});',
+  'createEditorModeApplication', 'dispatch'), 1);
