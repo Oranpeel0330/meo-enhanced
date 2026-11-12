@@ -91,3 +91,28 @@ assert.equal(importedInstanceMethodCallCount(renamed + 'const owner = build(); f
   'createEditorModeApplication', 'dispatch'), 0);
 assert.equal(importedInstanceMethodCallCount(renamed + 'let owner; owner = build(); owner?.dispatch({});',
   'createEditorModeApplication', 'dispatch'), 1);
+for (const value of ['build()', '(build())', 'build() as any', '<any>build()', 'build()!',
+  'build() satisfies unknown', '((build() as any)!)']) {
+  const declaration = renamed + `const owner = ${value};`;
+  assert.equal(importedCallCount(declaration, 'createEditorModeApplication'), 1);
+  for (const receiver of ['owner', '(owner)', '(owner as any)!']) {
+    assert.equal(importedInstanceMethodCallCount(declaration + `${receiver}.dispatch({});`,
+      'createEditorModeApplication', 'dispatch'), 1, `${value}: wrapped receiver ${receiver}`);
+  }
+  assert.equal(importedInstanceMethodCallCount(renamed + `let owner; owner = ${value}; owner?.dispatch({});`,
+    'createEditorModeApplication', 'dispatch'), 1, `${value}: assigned owner`);
+  assert.equal(importedInstanceMethodCallCount(renamed + `(${value}).dispatch({});`,
+    'createEditorModeApplication', 'dispatch'), 1, `${value}: direct factory result`);
+  assert.equal(importedInstanceMethodCallCount(declaration + 'function nested(owner: any) { owner.dispatch({}); }',
+    'createEditorModeApplication', 'dispatch'), 0, `${value}: a shadowed owner remains independent`);
+  for (const target of ['(owner)', '(owner as any)', '(<any>owner)', 'owner!']) {
+    assert.equal(importedInstanceMethodCallCount(renamed + `let owner; ${target} = ${value}; owner.dispatch({});`,
+      'createEditorModeApplication', 'dispatch'), 1, `${value}: wrapped assignment target ${target}`);
+  }
+}
+for (const binding of ['const owners = [build()];', 'const owner = true ? build() : null;',
+  'let owner; owner ??= build();', 'let holder: any = {}; holder.owner = build();']) {
+  assert.throws(() => importedInstanceMethodCallCount(renamed + binding,
+    'createEditorModeApplication', 'dispatch'), /Unsupported owner binding/,
+  'An unanalysed binding must block the ownership guard instead of appearing safe');
+}
