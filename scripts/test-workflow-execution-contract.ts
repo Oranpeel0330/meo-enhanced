@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs, { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { spyOn } from 'bun:test';
 import { join } from 'node:path';
-import { digest, executeWorkflow, expandTestCommand, prepareWorkflow, readResumeReport, saveReport,
+import { commandIdentity, digest, executeWorkflow, expandTestCommand, prepareWorkflow, readResumeReport, saveReport,
   type TaskResult, type WorkflowReport } from './test-workflow-execution';
 import { hashPaths, workflowFingerprint } from './test-workflow-snapshot';
 import type { TestWorkflowPlan } from './test-workflow-policy';
@@ -21,6 +21,17 @@ try {
   assert.throws(() => expandTestCommand({ args: ['run', 'test:a'] }, { 'test:a': 'bun scripts/a.ts || true' }), /Unsupported/);
   assert.throws(() => expandTestCommand({ args: ['run', 'test:a'] }, {}), /Missing/);
   assert.deepEqual(expandTestCommand({ args: ['run', 'build'] }, {}), [{ args: ['run', 'build'] }]);
+  const mixed = { 'test:mixed': 'bun scripts/test-first.tsx --sampled && node scripts/test-second.cjs' };
+  const expectedMixed = [
+    { args: ['scripts/test-first.tsx', '--sampled'] },
+    { args: ['scripts/test-second.cjs'], runtime: 'node' }
+  ];
+  assert.deepEqual(expandTestCommand({ args: ['run', 'test:mixed'] }, mixed), expectedMixed);
+  assert.deepEqual(expandTestCommand({ args: ['run', 'test:mixed'] }, mixed, 'inventory'), expectedMixed,
+    'Inventory and execution must use the same runtime, arguments and supported extensions');
+  assert.notEqual(commandIdentity({ args: ['scripts/test-first.ts'] }),
+    commandIdentity({ args: ['scripts/test-first.ts'], runtime: 'node' }));
+  assert.throws(() => expandTestCommand({ args: ['run', 'test:mixed', '--ignored'] }, mixed), /arguments/);
 
   const plan: TestWorkflowPlan = { tier: 'release', title: 'fixture', expectedDuration: 'seconds', longRunning: true,
     stages: [
@@ -263,6 +274,12 @@ try {
   assert.equal(result.stdoutHash, digest(readFileSync(result.stdout!)));
   assert.equal(result.stderrHash, digest(readFileSync(result.stderr!)));
   assert.ok(Number.isInteger(result.childPid));
+  const nodeScript = join(root, 'node-child.cjs');
+  writeFileSync(nodeScript, 'console.log(process.versions.bun ? "wrong runtime" : "node runtime witness");');
+  const nodeResult: TaskResult = { id: 'node-child', status: 'running', startedAt: new Date().toISOString() };
+  assert.equal(await runCommand(root, { id: nodeResult.id,
+    command: { args: [nodeScript], runtime: 'node' }, reusable: false }, nodeResult), 0);
+  assert.match(readFileSync(nodeResult.stdout!, 'utf8'), /node runtime witness/);
   console.log('Workflow execution checks passed: complete census, build dependency, bounded concurrency, resume and invalidation.');
 } finally {
   rmSync(root, { recursive: true, force: true });

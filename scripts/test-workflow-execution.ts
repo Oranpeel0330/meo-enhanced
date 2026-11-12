@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import fs, { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TestWorkflowCommand, TestWorkflowPlan } from './test-workflow-policy';
+import { commandIdentity, expandTestCommand } from './test-workflow-commands';
+export { commandIdentity, expandTestCommand } from './test-workflow-commands';
 
 export type WorkflowTask = {
   id: string;
@@ -54,38 +56,12 @@ export function digest(value: string | Buffer): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function commandIdentity(command: TestWorkflowCommand): string {
-  return JSON.stringify([command.args, Object.entries(command.env ?? {}).sort(([a], [b]) => a.localeCompare(b))]);
-}
-
 function verifyEvidence(prior: TaskResult): void {
   if (!prior.stdout || !prior.stderr || !prior.stdoutHash || !prior.stderrHash
     || digest(readFileSync(prior.stdout)) !== prior.stdoutHash
     || digest(readFileSync(prior.stderr)) !== prior.stderrHash) {
     throw new Error(`Missing or changed evidence for ${prior.id}; start a fresh run.`);
   }
-}
-
-// Only test aliases are expanded. Build/typecheck aliases retain their shell
-// prerequisites; unknown test-shell syntax must never silently drop coverage.
-export function expandTestCommand(
-  command: TestWorkflowCommand,
-  scripts: Record<string, string>,
-  ancestors: string[] = []
-): TestWorkflowCommand[] {
-  const [verb, name] = command.args;
-  if (verb !== 'run' || !name?.startsWith('test:')) return [command];
-  if (command.args.length !== 2) throw new Error(`Test alias arguments cannot be expanded: ${name}`);
-  if (ancestors.includes(name)) throw new Error(`Cyclic test alias: ${[...ancestors, name].join(' -> ')}`);
-  const body = scripts[name];
-  if (!body) throw new Error(`Missing test alias: ${name}`);
-  return body.split('&&').flatMap(part => {
-    const text = part.trim();
-    if (!/^bun (?:run [\w:-]+|scripts\/[\w./-]+\.(?:ts|mjs|cjs)(?: [\w=./:-]+)*)$/.test(text)) {
-      throw new Error(`Unsupported test command in ${name}: ${text}`);
-    }
-    return expandTestCommand({ ...command, args: text.slice(4).split(' ') }, scripts, [...ancestors, name]);
-  });
 }
 
 export function prepareWorkflow(plan: TestWorkflowPlan, scripts: Record<string, string>, resources?: Record<string, 'process' | 'exclusive'>, captureBrowser?: string): WorkflowStage[] {

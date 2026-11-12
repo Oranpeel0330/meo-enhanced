@@ -35,7 +35,7 @@ export async function runCommand(directory: string, task: WorkflowTask, result: 
   let error: number | undefined;
   try {
     error = openSync(result.stderr, 'wx');
-    const child = Bun.spawn([process.execPath, ...task.command.args], {
+    const child = Bun.spawn([task.command.runtime === 'node' ? 'node' : process.execPath, ...task.command.args], {
       cwd: process.cwd(), env: { ...process.env, ...task.command.env },
       stdin: 'inherit', stdout: 'pipe', stderr: 'pipe'
     });
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   if (plan.tier === 'quick') console.log('Core checks only: complete affected-feature and relevant document-scale checks before delivery.');
   for (const stage of stages) {
     console.log(`  ${stage.title} (up to ${stage.maxConcurrency} groups)`);
-    for (const task of stage.groups.flat()) console.log(`    ${task.id}. [${task.resource}] bun ${task.command.args.join(' ')}${task.command.env ? ' ' + JSON.stringify(task.command.env) : ''}`);
+    for (const task of stage.groups.flat()) console.log(`    ${task.id}. [${task.resource}] ${task.command.runtime ?? 'bun'} ${task.command.args.join(' ')}${task.command.env ? ' ' + JSON.stringify(task.command.env) : ''}`);
   }
   if (plan.tier === 'release') {
     const commands = stages.flatMap(stage => stage.groups.flat()).filter(task => task.reusable);

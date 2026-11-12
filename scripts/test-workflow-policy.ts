@@ -19,6 +19,7 @@ export type TargetedTestArea =
 
 export type TestWorkflowCommand = {
   args: string[];
+  runtime?: 'bun' | 'node';
   env?: Record<string, string>;
 };
 

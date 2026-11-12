@@ -2,10 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, posix, resolve } from 'node:path';
 import type { TestWorkflowCommand } from './test-workflow-policy';
+import { commandIdentity, expandTestCommand } from './test-workflow-commands';
 import { featureCoveragePath, inspectFeatureCoverage, parseFeatureCoverage, referencesTestPath } from './feature-coverage';
 
 type Exception = { kind: 'targeted' | 'native' | 'endurance'; command: string; reason: string };
-type InventoryCommand = TestWorkflowCommand & { runtime?: 'bun' | 'node' };
+type InventoryCommand = TestWorkflowCommand;
 export type TestInventory = {
   separate: Record<string, Exception>;
   repeats: Array<InventoryCommand & { count: number; reason: string }>;
@@ -13,10 +14,6 @@ export type TestInventory = {
 };
 type Snapshot = Map<string, string>;
 const candidate = (path: string) => /^scripts\/(?:.*\/)?test-[^/]+\.(?:ts|tsx|js|mjs|cjs|ps1)$/.test(path);
-const identity = (command: InventoryCommand) => JSON.stringify([
-  command.runtime ?? 'bun', command.args, Object.entries(command.env ?? {}).sort(([a], [b]) => a.localeCompare(b))
-]);
-
 // All inputs come from one snapshot. In --staged mode, an unstaged registration
 // must not hide an orphan in the commit being checked.
 export function readInventorySnapshot(root: string, staged: boolean): Snapshot {
@@ -54,24 +51,7 @@ export function inspectTestInventory(files: Snapshot, commands: TestWorkflowComm
   const scripts = manifest.scripts as Record<string, string>;
   if (!scripts || !inventory.separate || !Array.isArray(inventory.repeats)) throw new Error('Invalid test inventory configuration');
   const executable: InventoryCommand[] = [];
-  const expand = (command: InventoryCommand, ancestors: string[] = []): InventoryCommand[] => {
-    if (command.args[0] !== 'run') return [command];
-    const name = command.args[1]!;
-    if (ancestors.includes(name)) throw new Error(`Cyclic package script: ${[...ancestors, name].join(' -> ')}`);
-    if (!scripts[name]) throw new Error(`Missing package script: ${name}`);
-    return scripts[name].split('&&').flatMap(part => {
-      const text = part.trim();
-      const alias = /^bun run ([\w:-]+)$/.exec(text);
-      if (alias) return expand({ ...command, args: ['run', alias[1]!] }, [...ancestors, name]);
-      const direct = /^(bun|node) (scripts\/[\w./-]+\.(?:ts|tsx|js|mjs|cjs))(?: ([\w=./:-]+(?: [\w=./:-]+)*))?$/.exec(text);
-      if (direct) return [{ ...command, runtime: direct[1] as 'bun' | 'node', args: [direct[2]!, ...(direct[3]?.split(' ') ?? [])] }];
-      // Build and compiler commands are opaque; test aliases must be auditable.
-      if (name === 'test' || name.startsWith('test:') || /scripts\/test-/.test(text)) {
-        throw new Error(`Unsupported test inventory command in ${name}: ${text}`);
-      }
-      return [];
-    });
-  };
+  const expand = (command: InventoryCommand) => expandTestCommand(command, scripts, 'inventory');
   for (const command of commands) executable.push(...expand(command));
   const reached = new Set(executable.map(command => command.args[0]!));
   const releaseTests = new Set(reached);
@@ -139,12 +119,12 @@ export function inspectTestInventory(files: Snapshot, commands: TestWorkflowComm
   }
   const counts = new Map<string, number>();
   for (const command of executable.filter(command => candidate(command.args[0]!))) {
-    const key = identity(command);
+    const key = commandIdentity(command);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const allowances = new Map<string, number>();
   for (const repeat of inventory.repeats) {
-    const key = identity(repeat);
+    const key = commandIdentity(repeat);
     if (!repeat.reason?.trim() || repeat.count < 2 || !Number.isInteger(repeat.count) || allowances.has(key)) errors.push(`Invalid repeat allowance: ${key}`);
     allowances.set(key, repeat.count);
     if (counts.get(key) !== repeat.count) errors.push(`Stale repeat allowance: ${key}`);
