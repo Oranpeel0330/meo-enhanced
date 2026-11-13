@@ -191,6 +191,15 @@ try {
         unclipped: !!tooltip && tooltip.scrollWidth <= tooltip.clientWidth && tooltip.scrollHeight <= tooltip.clientHeight,
         modalOwner: !!tooltip && tooltip.closest('dialog') === input.closest('dialog') };
     });
+    const widthInfo = '[data-action="contentMaxWidth"] .more-tools-option-info';
+    const showWidthHint = async (text: string) => {
+      await page.hover(widthInfo);
+      await page.waitForFunction(() => {
+        const tooltip = document.querySelector('#document-width-tooltip.is-visible');
+        return tooltip && getComputedStyle(tooltip).opacity === '1';
+      });
+      assert.deepEqual(await hint('[data-action="contentMaxWidth"]'), { visible: true, text, contained: true, unclipped: true, modalOwner: true });
+    };
     for (const mode of ['source', 'live'] as const) for (const large of [false, true]) {
       const sample = '# Width\n\n| A | B |\n| --- | --- |\n| One | Two |\n\n$$x+y$$\n\n'
         + 'Paragraph with enough words to wrap when the reading area changes.\n\n'.repeat(large ? 4500 : 35);
@@ -210,6 +219,9 @@ try {
       });
       await page.click('.more-tools-wrapper > .format-button');
       assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), true, 'the second width row is hidden while limiting is off');
+      await showWidthHint('开启后，限制实时和源码模式下的文档显示宽度。');
+      await page.click(widthInfo);
+      assert.equal(await page.$eval('[data-action="contentMaxWidth"]', e => e.getAttribute('aria-checked')), 'false', 'the information icon does not toggle document width');
       await page.click('[data-action="contentMaxWidth"]');
       assert.equal(await page.$eval('.more-tools-panel', e => (e as HTMLElement).hidden), false, 'toggle keeps the menu open');
       assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), false);
@@ -314,6 +326,16 @@ try {
       assert.equal(await page.$eval(`${quick} .more-tools-control-label`, e => e.textContent), language === 'en' ? 'Maximum width' : '最大文档宽度');
       assert.ok(await page.$eval(`${quick} .more-tools-control-label`, e => e.scrollWidth <= e.clientWidth), 'the complete maximum-width label fits beside its controls');
       await page.screenshot({ path: path.join(folder, `quick-${language}-${appearance}.png`) });
+      const scopeText = language === 'en' ? 'When enabled, limits the displayed document width in Live and Source modes.' : '开启后，限制实时和源码模式下的文档显示宽度。';
+      await showWidthHint(scopeText);
+      await page.screenshot({ path: path.join(folder, `quick-info-${language}-${appearance}.png`) });
+      await page.click(widthInfo);
+      assert.equal(await page.$eval('[data-action="contentMaxWidth"]', e => e.getAttribute('aria-checked')), 'true');
+      await page.focus('[data-action="longCodeBlockFolding"]');
+      await page.keyboard.press('Tab');
+      assert.equal(await page.$eval('[data-action="contentMaxWidth"]', e => e === document.activeElement), true);
+      await page.waitForFunction(() => document.querySelector('#document-width-tooltip.is-visible'));
+      assert.equal((await hint('[data-action="contentMaxWidth"]')).visible, true, 'keyboard focus also exposes the scope explanation');
       const beforeError = await layout(field);
       await fill(field, '7000'); await page.keyboard.press('Enter');
       assert.deepEqual(await layout(field), beforeError);
@@ -333,6 +355,8 @@ try {
       assert.equal((await hint(field)).visible, true, 'returning to an invalid input reveals its explanation');
       await fill(field, '800'); await page.keyboard.press('Enter');
       assert.equal(await page.$eval(field, e => e.hasAttribute('aria-invalid') || e.hasAttribute('aria-describedby')), false, 'correcting the value removes stale validation feedback');
+      await showWidthHint(scopeText);
+      await page.screenshot({ path: path.join(folder, `quick-info-${language}-${appearance}-narrow.png`) });
       await page.setViewport({ width: 1100, height: 780 });
       await page.click('.more-tools-settings-button');
       for (const query of language === 'en' ? ['limit document width', 'maximum width', 'pixels'] : ['限制文档宽度', '最大文档宽度', '像素']) {

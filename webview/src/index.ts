@@ -23,7 +23,7 @@ import type { UiColors } from '../../src/foundation/uiColors';
 import { createPreviewPresetSettings } from './adapters/previewPresetSettings';
 import { decodePreviewPresetPreferences, isPreviewPresetEnabled, isPreviewPresetId, previewPresets, type PreviewPresetId } from '../../src/foundation/previewPresets';
 import { createPreviewPresetTransport } from './adapters/previewPresetTransport';
-import { bindTooltips, createTooltip } from './adapters/tooltip';
+import { bindTooltips, createTooltip, type TooltipPlacement } from './adapters/tooltip';
 import { createEditingPreferencesTransport } from './adapters/editingPreferencesTransport';
 import { createPreviewFontsTransport } from './adapters/previewFontsTransport';
 import { createEditorServicesTransport } from './adapters/editorServicesTransport';
@@ -324,7 +324,7 @@ const appendMoreToolsOptionContent = (
   button: HTMLButtonElement,
   icon: Parameters<typeof createElement>[0],
   labelText: string,
-  description?: { readonly id: string; readonly text: string }
+  description?: { readonly id: string; readonly text: string; readonly placement?: TooltipPlacement }
 ) => {
   const iconElement = document.createElement('span');
   iconElement.className = 'more-tools-option-icon';
@@ -343,7 +343,7 @@ const appendMoreToolsOptionContent = (
   info.className = 'more-tools-option-info';
   info.appendChild(createElement(Info, { width: 13, height: 13, 'aria-hidden': 'true' }));
   const tooltip = createTooltip(info, {
-    id: description.id, content: { text: description.text, kind: 'description' }, focusTarget: button
+    id: description.id, content: { text: description.text, kind: 'description' }, focusTarget: button, placement: description.placement
   });
   info.addEventListener('click', (event) => event.stopPropagation());
   text.append(label, info);
@@ -367,7 +367,10 @@ contentMaxWidthBtn.className = 'more-tools-option more-tools-toggle-option';
 contentMaxWidthBtn.dataset.action = 'contentMaxWidth';
 contentMaxWidthBtn.setAttribute('role', 'menuitemcheckbox');
 contentMaxWidthBtn.setAttribute('aria-label', activeUiStrings.constrainWidth);
-appendMoreToolsOptionContent(contentMaxWidthBtn, DocumentWidth, activeUiStrings.constrainWidth);
+const contentMaxWidthTooltip = appendMoreToolsOptionContent(
+  contentMaxWidthBtn, DocumentWidth, activeUiStrings.constrainWidth,
+  { id: 'document-width-tooltip', text: activeUiStrings.constrainWidthHint, placement: 'top' }
+);
 const contentMaxWidthControl = createContentWidthControl({
   get: () => contentMaxWidth, set: value => setContentMaxWidthValue(value),
   enabled: () => contentMaxWidthEnabled, language: activeUiLanguage
@@ -1328,6 +1331,7 @@ const applyUiLanguage = (language: UiLanguage): void => {
   discardBtn.setAttribute('aria-label', strings.reloadDiskVersion);
   contentMaxWidthBtn.setAttribute('aria-label', strings.constrainWidth);
   contentMaxWidthBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.constrainWidth;
+  contentMaxWidthTooltip?.setContent({ text: strings.constrainWidthHint, kind: 'description' });
   contentMaxWidthLabel.textContent = strings.contentMaxWidthLabel;
   contentMaxWidthControl.present(language);
   sourceLineNumbersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.showLineNumbers;
@@ -4361,6 +4365,7 @@ const terminateWebviewSession = () => {
   editorFontWheel.dispose();
   settingsWindow?.dispose();
   contentMaxWidthControl.dispose();
+  contentMaxWidthTooltip?.dispose();
   feedbackVersionPopover?.dispose();
   largeDocumentTooltip?.dispose();
   tooltipBinding.dispose();
