@@ -296,8 +296,12 @@ async function assertPreviewRuntime() {
       scope.__previewController.setVisible(false);
       const runtime = await scope.__loadMermaidRuntime(), original = runtime.render;
       scope.__coldLiveRequests = 0;
+      scope.__coldLiveRenderScrollStates = [];
       runtime.render = async (...args: any[]) => {
-        if (args[1].includes('ColdLiveGesture')) scope.__coldLiveRequests++;
+        if (args[1].includes('ColdLiveGesture')) {
+          scope.__coldLiveRequests++;
+          scope.__coldLiveRenderScrollStates.push(scope.__isMermaidEditorScrolling(scope.__coldLive.editor));
+        }
         return original.apply(runtime, args);
       };
       const host = document.createElement('div'); host.className = 'editor-host';
@@ -321,6 +325,8 @@ async function assertPreviewRuntime() {
       }
       await page.waitForFunction(() => (window as any).__coldLiveRequests === 1
         && !!(window as any).__coldLive.host.querySelector('.meo-mermaid-svg-wrapper svg'));
+      assert.deepEqual(await page.evaluate(() => (window as any).__coldLiveRenderScrollStates), [false],
+        'cold generation starts only after the actual viewport owner releases native scrolling');
       assert.equal(await page.evaluate(() => (window as any).__coldLive.editor.getText() === (window as any).__coldLive.text), true);
     } finally {
       await page.evaluate(() => { const scope = window as any; scope.__coldLive.restore(); scope.__coldLive.editor.destroy(); scope.__coldLive.host.remove(); });

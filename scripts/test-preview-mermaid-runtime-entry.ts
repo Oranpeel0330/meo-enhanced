@@ -15,8 +15,11 @@ import { createMermaidDiagramPresentationRuntime } from '../webview/src/adapters
 import { createMermaidDiagramPresentationEffectAdapter } from '../webview/src/editor/mermaidDiagramPresentationAdapter';
 import { createMermaidDiagramPresentationFactory } from '../webview/src/editor/mermaidDiagramPresentation';
 import { createPreviewMermaidRenderer } from '../webview/src/helpers/previewMermaid';
+import { getViewportController } from '../webview/src/helpers/viewportController';
 
 (window as typeof window & { __loadMermaidRuntime: typeof loadMermaidRuntime }).__loadMermaidRuntime = loadMermaidRuntime;
+(window as any).__isMermaidEditorScrolling = (editor: ReturnType<typeof createEditor>) =>
+  getViewportController(editor.view)?.isUserScrolling() ?? false;
 
 const mermaidResources = createMermaidDiagramRenderPool({
   initialize: initializeMermaidEditorRuntime,

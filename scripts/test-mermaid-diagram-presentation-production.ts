@@ -265,7 +265,7 @@ async function main(): Promise<void> {
         if (source.includes('OFFSCREEN')) scope.__visibilityCalls.push(source);
         return render(id, source, ...args);
       };
-      scope.__visibilityText = Array.from({ length: 28 }, (_, index) => `Spacer ${index}.`).join('\n')
+      scope.__visibilityText = Array.from({ length: 52 }, (_, index) => `Spacer ${index}.`).join('\n')
         + '\n\n```mermaid\ngraph TD\nOFFSCREEN_OLD-->B\n```\n\n'
         + 'Tail ordinary paragraph with enough source to use the bounded editor.\n'.repeat(6_000);
       scope.__visibilityEditor = scope.MermaidEditingHarness.createEditor({ parent: document.getElementById('app'),
@@ -277,16 +277,28 @@ async function main(): Promise<void> {
     await settleVisibility();
     const hidden = await page.evaluate(() => {
       const scope = window as any, bounds = scope.__visibilityEditor.view.scrollDOM.getBoundingClientRect();
-      const widget = document.querySelector('.meo-mermaid-block')!;
-      return { mounted: !!widget, beyond: widget?.getBoundingClientRect().top - bounds.bottom, height: widget?.getBoundingClientRect().height,
+      const view = scope.__visibilityEditor.view, block = view.lineBlockAt(scope.__visibilityText.indexOf('```mermaid'));
+      const widget = document.querySelector('.meo-mermaid-block');
+      return { beyond: view.documentTop + block.top - bounds.bottom, height: widget?.getBoundingClientRect().height ?? block.height,
         calls: scope.__visibilityCalls.length };
     });
-    assert.ok(hidden.mounted && hidden.beyond > 80, 'the real CodeMirror overscan must mount a diagram outside the physical screen');
+    assert.ok(hidden.beyond > 800, 'the cold diagram must lie beyond the 800px preparation band in this short pane');
     assert.ok(hidden.height > 0, 'a gated diagram must reserve its estimated document height');
-    assert.equal(hidden.calls, 0, 'an offscreen overscan diagram must not start Mermaid layout');
+    assert.equal(hidden.calls, 0, 'a diagram beyond the preparation band must not start Mermaid layout');
+    await page.evaluate(() => {
+      const scope = window as any, view = scope.__visibilityEditor.view;
+      const block = view.lineBlockAt(scope.__visibilityText.indexOf('```mermaid'));
+      view.scrollDOM.scrollTop += view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().bottom - 400;
+    });
+    await page.waitForFunction(() => (window as any).__visibilityCalls.length === 1
+      && !!document.querySelector('.meo-mermaid-svg-wrapper'));
+    assert.ok(await page.evaluate(() => document.querySelector('.meo-mermaid-block')!.getBoundingClientRect().top
+      > (window as any).__visibilityEditor.view.scrollDOM.getBoundingClientRect().bottom),
+      'nearby generation must finish before the diagram enters the physical screen');
     const reveal = () => page.evaluate(() => {
-      const editor = (window as any).__visibilityEditor, widget = document.querySelector('.meo-mermaid-block')!;
-      editor.view.scrollDOM.scrollTop += widget.getBoundingClientRect().top - editor.view.scrollDOM.getBoundingClientRect().top - 60;
+      const scope = window as any, view = scope.__visibilityEditor.view;
+      const block = view.lineBlockAt(scope.__visibilityText.indexOf('```mermaid'));
+      view.scrollDOM.scrollTop += view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top - 60;
     });
     await reveal();
     await page.waitForFunction(() => (window as any).__visibilityCalls.length === 1 && !!document.querySelector('.meo-mermaid-svg-wrapper'));
@@ -323,9 +335,10 @@ async function main(): Promise<void> {
       await editor.setMode('source'); editor.view.scrollDOM.scrollTop = 0;
       await editor.setMode('live');
       for (let frame = 0; frame < 8; frame++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      const widget = document.querySelector('.meo-mermaid-block')!;
-      return { exact: editor.getText() === before, height: widget.getBoundingClientRect().height,
-        svg: !!widget.querySelector('.meo-mermaid-svg-wrapper') };
+      const widget = document.querySelector('.meo-mermaid-block');
+      return { exact: editor.getText() === before,
+        height: widget?.getBoundingClientRect().height ?? editor.view.lineBlockAt(before.indexOf('```mermaid')).height,
+        svg: !!widget?.querySelector('.meo-mermaid-svg-wrapper') };
     });
     assert.deepEqual({ exact: cachedHidden.exact, svg: cachedHidden.svg }, { exact: true, svg: false },
       'mode reentry must preserve exact source and defer cached offscreen SVG DOM too');

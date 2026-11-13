@@ -387,7 +387,37 @@ export async function checkMermaidEditingControlStability(browser: Browser, bund
       await page.waitForFunction(() => !document.querySelector('[data-meo-mermaid-rendering="true"]'));
       assert.equal(await page.evaluate(() => (window as any).MermaidEditingHarness.usesLargeDocumentDerivedWorkBudget(
         (window as any).controlsEditor.view.state)), large, label + ': actual input budget');
-      if (layout === 'side-by-side') await page.waitForSelector('.meo-block-sticky-header:not([hidden]) .meo-mermaid-layout-btn');
+      if (layout === 'side-by-side') {
+        // Caret admission may keep the inline header in view. Exercise the
+        // floating controls only after a real outer-document wheel hides it.
+        const placement = await page.evaluate(() => {
+          const scope = window as any, view = scope.controlsEditor.view;
+          const bounds = view.scrollDOM.getBoundingClientRect();
+          const floating = document.querySelector('.meo-block-sticky-header:not([hidden]) .meo-mermaid-layout-btn');
+          scope.controlsWheel = null;
+          if (!floating) view.scrollDOM.addEventListener('wheel', (event: WheelEvent) => {
+            scope.controlsWheel = event.isTrusted;
+          }, { once: true });
+          return { floating: !!floating, x: bounds.left + 8, y: bounds.top + bounds.height / 2, top: view.scrollDOM.scrollTop };
+        });
+        if (!placement.floating) {
+          await page.mouse.move(placement.x, placement.y);
+          await page.mouse.wheel({ deltaY: 160 });
+          await page.waitForFunction(top => (window as any).controlsWheel === true
+            && (window as any).controlsEditor.view.scrollDOM.scrollTop > top, {}, placement.top);
+        }
+        try { await page.waitForSelector('.meo-block-sticky-header:not([hidden]) .meo-mermaid-layout-btn'); }
+        catch (error) {
+          const geometry = await page.evaluate(() => {
+            const view = (window as any).controlsEditor.view;
+            return { scrollTop: view.scrollDOM.scrollTop, selection: view.state.selection.main.head,
+              scroller: view.scrollDOM.getBoundingClientRect().toJSON(),
+              controls: Array.from(document.querySelectorAll('.meo-mermaid-layout-btn,.meo-block-sticky-header')).map(element =>
+                ({ html: element.outerHTML.slice(0, 500), bounds: element.getBoundingClientRect().toJSON() })) };
+          });
+          throw new Error(`${label}: sticky controls did not become visible: ${JSON.stringify(geometry)}`, { cause: error });
+        }
+      }
       await page.mouse.move(0, 0);
       await page.evaluate(() => {
         const w = window as any;

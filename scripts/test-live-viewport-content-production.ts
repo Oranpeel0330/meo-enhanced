@@ -35,6 +35,7 @@ try {
     const page = await browser.newPage(), host = await open(page, text, false, 'live');
     const name = `${quote ? 'giant-quote-list' : giant ? 'giant-list' : large ? 'optimized' : 'ordinary'}-${mermaid ? 'mermaid' : 'table-math'}`;
     try {
+      const stoppedDiagrams: Array<{ phase: string; visible: boolean; ready: boolean }> = [];
       await frames(page, 12);
       await page.evaluate(({ mermaid, giant }) => {
         const scope = window as any;
@@ -115,6 +116,11 @@ try {
         }
         await page.evaluate(() => { const probe = (window as any).__visibleContent; probe.phase += '-stopped'; probe.countReads = false; });
         await new Promise(resolve => setTimeout(resolve, 800));
+        if (mermaid) {
+          const target = await page.evaluate(() => (window as any).__visibleContent.samples.at(-1).targets[0] as { visible: boolean; ready: boolean });
+          stoppedDiagrams.push({ phase, ...target });
+          assert.ok(target.visible && target.ready, `${name}/${phase}: the complete diagram must appear within the existing stopped-gesture window`);
+        }
       }
       const observation = await page.evaluate(() => {
         const probe = (window as any).__visibleContent; probe.stop(); return { samples: probe.samples as Sample[], wheels: probe.wheels as boolean[], reads: probe.reads as number | undefined, rows: probe.rows as number | undefined };
@@ -131,9 +137,12 @@ try {
         const blankBeforeReady = visible.filter(sample => sample.time < (firstReady ?? Infinity)).length;
         const blankAfterReady = visible.filter(sample => sample.time >= (firstReady ?? Infinity) && !sample.targets.some(target => target.line === line && target.ready)).length;
         const result = { phase, line, frames: visible.length, ready: ready.length, delay, blankBeforeReady, blankAfterReady };
-        // Cold Mermaid may load its real local runtime; warmed results and
-        // synchronous table/formula widgets must fill during the wheel stream.
-        if (visible.length < 8 || ready.length < 8 || (!mermaid || phase !== 'cold') && blankBeforeReady > 4 || blankAfterReady > 1) {
+        // Bounded cold generation yields to native scrolling, then must finish
+        // in the original 800ms stopped window above. Cached diagrams and
+        // synchronous widgets retain every in-gesture frame/blank threshold.
+        const deferredColdDiagram = mermaid && large && phase === 'cold';
+        if (visible.length < 8 || !deferredColdDiagram && ready.length < 8
+          || (!mermaid || phase !== 'cold') && blankBeforeReady > 4 || blankAfterReady > 1) {
           failures.push(`${name}: ${JSON.stringify(result)}`);
         }
         return result;
@@ -141,7 +150,7 @@ try {
       const placeholderFrames = observation.samples.filter(sample => sample.phase !== 'outside' && sample.scrolling && sample.placeholders > 0).length;
       if (placeholderFrames > 4) failures.push(`${name}: ${placeholderFrames} visible placeholder frames`);
       if (giant && observation.reads! + observation.rows! > 20_000) failures.push(`${name}: reading rebuilt distant list content (${observation.reads} line reads, ${observation.rows} iterated rows)`);
-      reports.push({ name, groups, placeholderFrames, reads: observation.reads, rows: observation.rows });
+      reports.push({ name, groups, stoppedDiagrams, placeholderFrames, reads: observation.reads, rows: observation.rows });
       console.log(JSON.stringify({ name, groups, placeholderFrames, reads: observation.reads, rows: observation.rows }));
     } finally { host.dispose(); await page.close(); }
   }

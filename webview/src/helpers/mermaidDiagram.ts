@@ -692,6 +692,7 @@ export class MermaidDiagramWidget extends WidgetType {
   embeddedControlsCleanup: () => void;
   private visibilityObserver: ReadingViewportObserver | null = null;
   private requestCurrentPresentation: (refresh?: boolean) => void = () => {};
+  private cancelScrollWait: (() => void) | null = null;
 
   constructor(
     diagramText: string,
@@ -811,6 +812,8 @@ export class MermaidDiagramWidget extends WidgetType {
   }
 
   toDOM(view?: EditorView) {
+    this.cancelScrollWait?.();
+    this.cancelScrollWait = null;
     const container = document.createElement('div');
     this.container = container;
     this.finishPendingPresentation();
@@ -1016,25 +1019,42 @@ export class MermaidDiagramWidget extends WidgetType {
     this.requestCurrentPresentation = (refresh = false) => {
       if (refresh) needsPresentation = true;
       if (!needsPresentation || (!nearScreen && !this.fullscreenSession) || this.container !== container || !this.presentationHandle) return;
-      if (!refresh && gated && !this.fullscreenSession && getViewportController(view!)?.isUserScrolling()) {
-        // Near-screen content cannot wait for a gesture to end. Admit it once
-        // through the existing frame budget, keeping overscan DOM out of the
-        // scroll event and explicit source/theme updates immediate.
+      const viewport = view && getViewportController(view);
+      const present = () => {
+        if (!needsPresentation || (!nearScreen && !this.fullscreenSession)
+          || this.container !== container || (gated && !container.isConnected) || !this.presentationHandle) return;
+        const identity = getMermaidEditorPresentationIdentity();
+        if (!refresh && gated && !this.fullscreenSession && viewport?.isUserScrolling()
+          && !this.presentationFactory.getCached(mermaidRenderRequest(this.diagramText, identity.themeKey))) {
+          // A frame checkpoint does not authorize expensive cold generation.
+          // The viewport owns the shared gesture deadline, including momentum.
+          if (!this.cancelScrollWait) this.cancelScrollWait = viewport.afterUserScroll(() => {
+            this.cancelScrollWait = null;
+            if (this.container === container && container.isConnected) {
+              requestLiveInputDerivedWorkOnFrame(view!, this, present);
+            }
+          });
+          return;
+        }
+        this.cancelScrollWait?.();
+        this.cancelScrollWait = null;
+        if (this.staleSvg && !container.querySelector('.meo-mermaid-svg-wrapper')) {
+          this.renderSvg(container, this.staleSvg, view, false);
+          container.style.removeProperty('min-height');
+        }
+        needsPresentation = false;
+        this.presentationHandle.present(this.diagramText, identity.themeKey, identity.configKey);
+      };
+      if (!refresh && gated && !this.fullscreenSession && viewport?.isUserScrolling()) {
+        // Cached content still fills during reading through the existing frame
+        // budget. Recheck the cache and gesture at that checkpoint.
         queueMicrotask(() => {
           if (this.container !== container || !container.isConnected) return;
-          requestLiveInputDerivedWorkOnFrame(view!, this, () => {
-            if (needsPresentation && this.container === container && container.isConnected) this.requestCurrentPresentation(true);
-          });
+          requestLiveInputDerivedWorkOnFrame(view!, this, present);
         });
         return;
       }
-      if (this.staleSvg && !container.querySelector('.meo-mermaid-svg-wrapper')) {
-        this.renderSvg(container, this.staleSvg, view, false);
-        container.style.removeProperty('min-height');
-      }
-      const identity = getMermaidEditorPresentationIdentity();
-      needsPresentation = false;
-      this.presentationHandle.present(this.diagramText, identity.themeKey, identity.configKey);
+      present();
     };
     this.visibilityObserver?.disconnect();
     this.visibilityObserver = null;
@@ -1460,6 +1480,8 @@ export class MermaidDiagramWidget extends WidgetType {
 
   destroy() {
     this.finishPendingPresentation();
+    this.cancelScrollWait?.();
+    this.cancelScrollWait = null;
     this.container = null;
     this.visibilityObserver?.disconnect();
     this.visibilityObserver = null;

@@ -1737,7 +1737,9 @@ optimized cold/warm cases move the reading band within one retained list root;
 the giant-list and quoted-list cases also bound line reads and iterated rows
 during that movement. The
 contract belongs to the rendered/viewport targeted plans and release browser
-suite. Cached diagrams must fill during the gesture, while offscreen presentation
+suite. Bounded cold Mermaid generation yields during the gesture and must finish
+within the existing 800ms stopped-gesture observation. Cached diagrams retain all
+in-gesture frame and blank bounds, while offscreen presentation
 continues to use the existing window and resource budgets.
 
 `test-outline-large-startup.ts` protects bounded in-app outline DOM independently
@@ -1799,7 +1801,15 @@ gesture restart between batches, theme invalidation and retirement. Deferred col
 cases use uncached diagram sources, so cache hits cannot bypass their intended
 hold. `bun scripts/test-preview-mermaid-runtime.ts --preview-only` selects its
 Preview/resource cases for focused work; the default release invocation retains
-the independent cold Live scrolling case as well.
+the independent cold Live scrolling case as well. That case also checks the
+actual viewport owner's state when cold generation starts. The viewport-controller
+contract verifies one shared idle deadline, renewed wheel/native momentum,
+cancellation and destruction; pending resources do not poll every frame.
+The production presentation contract separates distant virtual geometry from
+nearby preparation before entry. Mermaid control fixtures establish a floating
+header with a trusted outer-document wheel and observed viewport movement when
+the initial caret admission leaves its inline header visible; input and painted
+control assertions keep their original scope and deadlines.
 
 `scripts/test-preview-reading-work.ts` belongs to `test:large-document-budget`
 as a process-only deterministic contract. It checks one shared admission budget,

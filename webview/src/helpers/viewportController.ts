@@ -402,6 +402,8 @@ export class ViewportController {
   private lastWheelAt = Number.NEGATIVE_INFINITY;
   private lastTouchMoveAt = Number.NEGATIVE_INFINITY;
   private lastNativeScrollAt = Number.NEGATIVE_INFINITY;
+  private readonly scrollIdleCallbacks = new Set<() => void>();
+  private scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private lastScrollDirection: -1 | 0 | 1 = 0;
   private interactionGeneration = 0;
   private navigationGeneration = 0;
@@ -2254,6 +2256,9 @@ export class ViewportController {
 
   destroy(): void {
     this.destroyed = true;
+    this.scrollIdleCallbacks.clear();
+    if (this.scrollIdleTimer !== null) clearTimeout(this.scrollIdleTimer);
+    this.scrollIdleTimer = null;
     this.nativeInputViewport.release();
     this.windowReturnCorrection = null;
     this.clearNavigationReveals();
@@ -3499,6 +3504,7 @@ export class ViewportController {
     this.scrollbarDragStartY = null;
     this.scrollbarDragActive = false;
     this.markInteraction();
+    this.scheduleScrollIdleCallbacks();
     if (startY === null || !event) return;
     const scroll = this.view.scrollDOM, rect = scroll.getBoundingClientRect();
     const top = rect.top + scroll.clientTop;
@@ -3926,6 +3932,38 @@ export class ViewportController {
 
   isScrollbarDragging(): boolean {
     return this.scrollbarDragActive;
+  }
+
+  /** Shares the native gesture deadline instead of giving resources polling loops. */
+  afterUserScroll(operation: () => void): () => void {
+    if (this.destroyed) return () => {};
+    this.scrollIdleCallbacks.add(operation);
+    this.scheduleScrollIdleCallbacks();
+    return () => {
+      this.scrollIdleCallbacks.delete(operation);
+      if (this.scrollIdleCallbacks.size === 0 && this.scrollIdleTimer !== null) {
+        clearTimeout(this.scrollIdleTimer);
+        this.scrollIdleTimer = null;
+      }
+    };
+  }
+
+  private scheduleScrollIdleCallbacks(): void {
+    if (this.destroyed || this.scrollbarDragActive || this.scrollIdleTimer !== null
+      || this.scrollIdleCallbacks.size === 0) return;
+    const remaining = WHEEL_GESTURE_IDLE_MS + 1
+      - (performance.now() - Math.max(this.lastWheelAt, this.lastTouchMoveAt, this.lastNativeScrollAt));
+    this.scrollIdleTimer = setTimeout(() => {
+      this.scrollIdleTimer = null;
+      if (this.destroyed) return;
+      if (this.isUserScrolling()) {
+        this.scheduleScrollIdleCallbacks();
+        return;
+      }
+      const callbacks = [...this.scrollIdleCallbacks];
+      this.scrollIdleCallbacks.clear();
+      for (const callback of callbacks) callback();
+    }, Math.max(0, remaining));
   }
 
   /** Includes native momentum so background rendering can wait beyond the last wheel event. */

@@ -3619,4 +3619,63 @@ for (const windowed of [false, true]) for (const owner of ['editor', 'preview'] 
   } finally { controller.destroy(); }
 }
 
+// Deferred resources share one native-scroll deadline. Momentum extends it,
+// and cancellation/destruction must not leave work or a polling timer behind.
+{
+  const originalNow = performance.now, originalTimeout = globalThis.setTimeout, originalClearTimeout = globalThis.clearTimeout;
+  let now = 0, nextTimer = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  performance.now = () => now;
+  globalThis.setTimeout = ((run: () => void, delay: number) => {
+    const id = ++nextTimer; timers.set(id, { at: now + delay, run }); return id;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((id: number) => { timers.delete(id); }) as typeof clearTimeout;
+  const document = new FakeEventTarget(), dom = new FakeEventTarget();
+  const scroll = Object.assign(new FakeEventTarget(), {
+    ownerDocument: document, scrollTop: 1000, scrollLeft: 0, scrollHeight: 5000,
+    scrollWidth: 900, clientHeight: 500, clientWidth: 900,
+    getBoundingClientRect: () => ({ top: 0, bottom: 500, height: 500 })
+  });
+  const line = { isConnected: true,
+    getBoundingClientRect: () => ({ top: 1200 - scroll.scrollTop, bottom: 1220 - scroll.scrollTop }) };
+  const controller = createTestViewportController({ dom, scrollDOM: scroll,
+    contentDOM: { querySelectorAll: () => [line] }, posAtDOM: () => 42,
+    lineBlockAt: () => ({ from: 42, top: 1200 }), lineBlockAtHeight: () => ({ from: 42, top: 1200 }),
+    requestMeasure: ({ read, write }: any) => write(read())
+  } as any);
+  const advance = (time: number) => {
+    now = time;
+    for (const [id, timer] of [...timers]) if (timer.at <= now) {
+      timers.delete(id); timer.run();
+    }
+  };
+  let completed = 0;
+  try {
+    scroll.dispatch('wheel', { deltaX: 0, deltaY: 100, ctrlKey: false });
+    controller.afterUserScroll(() => { completed++; });
+    const cancel = controller.afterUserScroll(() => { completed += 10; });
+    if (timers.size !== 1) throw new Error('Deferred resources must share one scroll deadline');
+    cancel();
+    now = 100; scroll.scrollTop += 20; scroll.dispatch('scroll', {});
+    now = 200; scroll.scrollTop += 50; scroll.dispatch('scroll', {});
+    advance(251);
+    if (completed !== 0 || timers.size !== 1) throw new Error('Native momentum must extend the resource deadline');
+    now = 400; scroll.dispatch('wheel', { deltaX: 0, deltaY: 100, ctrlKey: false });
+    advance(451);
+    if (completed !== 0 || timers.size !== 1) throw new Error('A renewed wheel must retain pending resources');
+    advance(651);
+    if (completed !== 1 || timers.size !== 0) throw new Error('Only uncancelled work may resume once scrolling settles');
+    const cancelLast = controller.afterUserScroll(() => { completed++; });
+    cancelLast();
+    if (timers.size !== 0) throw new Error('Cancelling the last resource must remove its deadline');
+    controller.afterUserScroll(() => { completed++; });
+    controller.destroy();
+    advance(1000);
+    if (completed !== 1 || timers.size !== 0) throw new Error('Destroy must retire pending resource work');
+  } finally {
+    controller.destroy(); performance.now = originalNow;
+    globalThis.setTimeout = originalTimeout; globalThis.clearTimeout = originalClearTimeout;
+  }
+}
+
 console.log('viewport controller checks passed');
