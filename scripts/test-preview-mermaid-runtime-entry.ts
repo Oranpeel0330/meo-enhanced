@@ -14,7 +14,8 @@ import { createMermaidDiagramPresentationApplication } from '../webview/src/appl
 import { createMermaidDiagramPresentationRuntime } from '../webview/src/adapters/mermaidDiagramPresentationRuntime';
 import { createMermaidDiagramPresentationEffectAdapter } from '../webview/src/editor/mermaidDiagramPresentationAdapter';
 import { createMermaidDiagramPresentationFactory } from '../webview/src/editor/mermaidDiagramPresentation';
-import { createPreviewMermaidRenderer } from '../webview/src/helpers/previewMermaid';
+import { createPreviewMermaidRenderer, readPreviewMermaidWarmupSources } from '../webview/src/helpers/previewMermaid';
+import { createPreviewViewport } from '../webview/src/helpers/previewViewport';
 import { getViewportController } from '../webview/src/helpers/viewportController';
 
 (window as typeof window & { __loadMermaidRuntime: typeof loadMermaidRuntime }).__loadMermaidRuntime = loadMermaidRuntime;
@@ -25,6 +26,70 @@ const mermaidResources = createMermaidDiagramRenderPool({
   initialize: initializeMermaidEditorRuntime,
   render: renderMermaidRuntime
 });
+(window as any).__probePreviewIdleCache = async () => {
+  const runtime = await loadMermaidRuntime(), original = runtime.render;
+  const frame = document.createElement('iframe'); frame.style.height = '400px'; document.body.append(frame);
+  const doc = frame.contentDocument!; doc.documentElement.dataset.meoPreviewResourceBudget = 'bounded';
+  const source = `flowchart LR; A[IdleCache-${Date.now()}]-->B`;
+  doc.body.innerHTML = `<div style="height:2000px"></div><div class="meo-export-mermaid" style="height:120px" data-source-b64="${btoa(source)}"></div>`
+    + `<div class="meo-export-mermaid" style="height:120px" data-source-b64="${btoa(source + '\nB-->C')}"></div>`;
+  let renders = 0, interacting = false;
+  runtime.render = (async (id: string) => { renders++; return { svg: `<svg id="${id}" viewBox="0 0 100 30"><rect width="100" height="30"/></svg>` }; }) as typeof runtime.render;
+  const renderer = createPreviewMermaidRenderer(mermaidResources, (error: unknown) => { throw error; }, () => interacting, {
+    isPointerActive: () => false,
+    readWarmupSources: async () => [{ documentIndex: 0, source }]
+  });
+  let approach: Promise<void> | undefined;
+  try {
+    await renderer.render(doc, 'dark');
+    const idle = { renders, painted: doc.querySelectorAll('.is-rendered svg').length };
+    if (renders !== 1) return { idle };
+    doc.scrollingElement!.scrollTop = 1300;
+    interacting = true;
+    let accepted!: () => void;
+    const firstCommit = new Promise<void>(resolve => { accepted = resolve; });
+    approach = renderer.render(doc, 'dark', undefined, () => true, (mutate: () => void) => { mutate(); accepted(); });
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([firstCommit, new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('A cold neighbour blocked the cached approach')), 1000);
+      })]);
+    } finally { clearTimeout(deadline); }
+    return { idle, approach: { renders, painted: doc.querySelectorAll('.is-rendered svg').length } };
+  } finally {
+    interacting = false; renderer.dispose(); await approach?.catch(() => {});
+    runtime.render = original; frame.remove();
+  }
+};
+(window as any).__probePreviewWindowCache = async () => {
+  const frame = document.createElement('iframe'); frame.style.height = '400px'; document.body.append(frame);
+  const doc = frame.contentDocument!;
+  doc.body.innerHTML = '<main style="font:16px/24px Arial"></main>';
+  const root = doc.querySelector<HTMLElement>('main')!;
+  const source = 'flowchart LR; A[WindowCache]-->B', graphIndex = 45;
+  const blocks = Array.from({ length: 150 }, (_, index) => ({ index, sourceLine: index + 1, sourceEndLine: index + 1,
+    kind: index === graphIndex ? 'fence' : 'paragraph_open', sourceCharacters: 40 }));
+  const requests: number[][] = [];
+  const viewport = createPreviewViewport(root, { id: 'idle-cache-window', anchorLine: 1, blocks, headings: [], chunks: [] }, {
+    async request(_id, operation) {
+      if (operation.kind !== 'blocks') throw new Error('Only bounded block reads are expected');
+      requests.push([...operation.indices]);
+      return { kind: 'blocks', chunks: operation.indices.map(index => ({ index, hasMermaid: index === graphIndex,
+        html: index === graphIndex ? `<div class="meo-export-mermaid" data-source-b64="${btoa(source)}"></div>`
+          : `<p style="height:32px;margin:0">Paragraph ${index}</p>` })) };
+    },
+    mutate: run => run(), changed() {}, error(error) { throw error; }, reveal() {}, async writeClipboard() {}
+  });
+  try {
+    for (let index = 0; index < 8; index++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const before = root.querySelectorAll('[data-meo-preview-block]').length;
+    const chunks = await viewport.prepareReadingCache(() => true);
+    const sources = readPreviewMermaidWarmupSources(doc, chunks);
+    const after = root.querySelectorAll('[data-meo-preview-block]').length;
+    return { before, after, source: sources[0]?.source, identity: sources[0]?.documentIndex,
+      cacheRequests: requests.filter(indices => indices.includes(graphIndex)), graphMounted: !!root.querySelector('.meo-export-mermaid') };
+  } finally { viewport.dispose(); frame.remove(); }
+};
 (window as any).__probePreviewCachedBatch = async () => {
   const runtime = await loadMermaidRuntime(), originalRender = runtime.render, originalInitialize = runtime.initialize;
   const frame = document.createElement('iframe'); frame.style.height = '400px'; document.body.append(frame);

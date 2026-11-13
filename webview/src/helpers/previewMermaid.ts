@@ -3,7 +3,8 @@ import { readingPreparationRange, readingResourceDistance } from '../application
 import type { EditorAppearance } from '../../../src/protocol/editorCommands';
 import { getGithubMermaidConfig } from '../../../src/preview/githubMermaid';
 import { getMermaidColorVariables, getMermaidPalette } from '../../../src/shared/mermaidPalette';
-import { getPreviewMermaidResourceIndex, getPreviewViewportResources, hasBoundedPreviewResources } from './previewViewportResources';
+import { getPreviewMermaidResourceIndex, getPreviewViewportResources, hasBoundedPreviewResources, previewMermaidBlockIndex } from './previewViewportResources';
+import type { PreviewDocumentChunk } from '../../../src/foundation/previewDocument';
 
 type PreviewAppearance = Exclude<EditorAppearance, 'auto'>;
 import {
@@ -36,7 +37,38 @@ type PreviewMermaidContext = {
   palette: PreviewMermaidPalette; themeKey: string;
 };
 type PreparedDiagram = { block: HTMLElement; source: string; svg: string };
-type PreviewMermaidCommit = (mutate: () => void) => void | Promise<void>;
+type PreviewMermaidCommit = (mutate: () => void, elements?: readonly HTMLElement[]) => void | Promise<void>;
+export type PreviewMermaidWarmupSource = { readonly documentIndex: number; readonly source: string };
+type PreviewMermaidReading = {
+  isPointerActive(): boolean;
+  readWarmupSources(document: Document, isCurrent: () => boolean): Promise<readonly PreviewMermaidWarmupSource[]>;
+};
+
+/** Read existing indexed resources and a few unmounted chunks, without adding
+ * their DOM to the reading surface or maintaining another document model. */
+export function readPreviewMermaidWarmupSources(document: Document, chunks: readonly PreviewDocumentChunk[]): readonly PreviewMermaidWarmupSource[] {
+  const height = document.defaultView?.innerHeight ?? 0;
+  const sources = new Map<string, PreviewMermaidWarmupSource>();
+  const add = (element: HTMLElement, documentIndex: number) => {
+    const encoded = element.dataset.sourceB64 ?? '';
+    if (encoded.length > 48_000) return;
+    const source = decodeBase64Utf8(encoded);
+    if (source && source.length <= 32_768) sources.set(`${documentIndex}:${source}`, { documentIndex, source });
+  };
+  const nearby = (getPreviewViewportResources(document, 'mermaid-cache') ?? []).map(element => ({ element,
+    distance: readingResourceDistance(element.getBoundingClientRect(), 0, height) })).sort((a, b) => a.distance - b.distance);
+  for (const { element } of nearby.slice(0, 16)) {
+    const index = getPreviewMermaidResourceIndex(document, element);
+    if (index !== undefined) add(element, index);
+  }
+  for (const chunk of chunks.slice(0, 4)) {
+    if (!chunk.hasMermaid || chunk.html.length > 196_608) continue;
+    const template = document.createElement('template'); template.innerHTML = chunk.html;
+    const blocks = template.content.querySelectorAll<HTMLElement>('.meo-export-mermaid[data-source-b64]');
+    for (let local = 0; local < Math.min(blocks.length, 16); local++) add(blocks[local]!, previewMermaidBlockIndex(chunk.index, local));
+  }
+  return [...sources.values()];
+}
 
 function previewMermaidContext(document: Document, appearance: PreviewAppearance): PreviewMermaidContext {
   const palette = readPreviewMermaidPalette(document, appearance);
@@ -89,7 +121,7 @@ async function commitPreviewMermaidResults(document: Document, context: PreviewM
     }
     for (const block of errors) { block.classList.add('is-error'); delete block.dataset.meoPreviewMermaidPending; }
     syncPreviewRenderedActions(document); onRendered?.();
-  });
+  }, [...ready.map(entry => entry.block), ...errors]);
 }
 
 /** Cached SVGs use no mutable Mermaid engine state. Their existing reading
@@ -99,11 +131,13 @@ async function tryRenderCachedMermaidBlocks(document: Document, appearance: Prev
 ): Promise<boolean> {
   const context = previewMermaidContext(document, appearance);
   const blocks = pendingNearbyMermaidBlocks(document, context), ready: PreparedDiagram[] = [];
+  let allCached = true;
   for (const { block, documentIndex } of blocks) {
     const source = decodeBase64Utf8(block.dataset.sourceB64 ?? '');
     const key = previewMermaidCacheKey(context, documentIndex, source), svg = previewMermaidSvgCache.get(key);
-    // Keep mixed cold/warm work in its original distance order and engine lease.
-    if (!svg) return false;
+    // A cold neighbour must not hold an already prepared SVG behind layout.
+    // Remaining cold work still uses the original visible-first engine path.
+    if (!svg) { allCached = false; continue; }
     cachePreviewMermaidSvg(key, svg); ready.push({ block, source, svg });
   }
   const size = hasBoundedPreviewResources(document) ? PREVIEW_MERMAID_BATCH_SIZE : Math.max(1, ready.length);
@@ -111,14 +145,15 @@ async function tryRenderCachedMermaidBlocks(document: Document, appearance: Prev
     if (!await waitForPreviewGesture(document, isCurrent, isInteracting)) return true;
     await commitPreviewMermaidResults(document, context, ready.slice(index, index + size), [], onRendered, isCurrent, commit);
   }
-  // Every candidate was cached. Cancellation must not fall through to cold work.
-  return true;
+  // Cancellation must not fall through to cold work after an awaited commit.
+  return !isCurrent() || allCached;
 }
 
 export function createPreviewMermaidRenderer(
   resources: MermaidDiagramRenderResources,
   reportError: (error: unknown) => void = () => undefined,
-  isInteracting: () => boolean = () => false
+  isInteracting: () => boolean = () => false,
+  reading?: PreviewMermaidReading
 ) {
   let activeGroup: ReturnType<MermaidDiagramRenderResources['acquireGroup']> | null = null;
   let latestRenderGeneration = 0;
@@ -148,40 +183,59 @@ export function createPreviewMermaidRenderer(
       || (block.dataset.meoPreviewMermaidPresetRevision ?? '') !== revision
       || block.dataset.meoPreviewMermaidTheme !== (themeKey ??= JSON.stringify(readPreviewMermaidPalette(frameDocument, appearance)))
     ));
-    if (!hasPendingBlocks) return Promise.resolve();
+    if (!hasPendingBlocks && !(reading && hasBoundedPreviewResources(frameDocument))) return Promise.resolve();
     const requestIsCurrent = () => renderGeneration === latestRenderGeneration && isCurrent();
     const report = (error: unknown) => { if (!(error instanceof MermaidDiagramResourceUnavailableError)) reportError(error); };
     const scheduled = renderTail.catch(() => undefined).then(async () => {
-      if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
-      if (previewMermaidSvgCache.size && await tryRenderCachedMermaidBlocks(
-        frameDocument, appearance, onDiagramRendered, requestIsCurrent, commit, isInteracting
-      )) return;
+      const cachedBlocked = reading?.isPointerActive ?? isInteracting;
+      if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, cachedBlocked)) return;
+      const cachedOnly = !hasPendingBlocks || previewMermaidSvgCache.size > 0 && await tryRenderCachedMermaidBlocks(
+        frameDocument, appearance, onDiagramRendered, requestIsCurrent, commit, cachedBlocked
+      );
+      if (cachedOnly && (!reading || isInteracting())) return;
       // Recheck the request and gesture before acquiring the cold engine.
       if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
-      const group = resources.acquireGroup();
-      activeGroup = group;
-      try {
-        await group.runExclusive(async () => {
-          if (!requestIsCurrent()) return;
+      const withThemeLease = async (operation: () => Promise<void>, priority: 'high' | 'normal') => {
+        const group = resources.acquireGroup();
+        activeGroup = group;
+        try {
+          await group.runExclusive(async () => {
+            if (!requestIsCurrent()) return;
+            try { await operation(); }
+            finally { await restoreMermaidEditorTheme(); }
+          }, priority);
+        } finally {
+          group.end();
+          if (activeGroup === group) activeGroup = null;
+        }
+      };
+      // Visible demand finishes before speculative chunk reads, and never
+      // holds the shared Mermaid engine while waiting for the data window.
+      if (!cachedOnly) await withThemeLease(() => renderMermaidBlocks(frameDocument, appearance,
+        onDiagramRendered, requestIsCurrent, commit, isInteracting), 'high');
+      if (!reading || !hasBoundedPreviewResources(frameDocument) || !requestIsCurrent() || isInteracting()) return;
+      const context = previewMermaidContext(frameDocument, appearance);
+      const warmup = (await reading.readWarmupSources(frameDocument, () => requestIsCurrent() && !isInteracting()))
+        .filter(({ documentIndex, source }) => source.length <= 32_768
+          && !previewMermaidSvgCache.has(previewMermaidCacheKey(context, documentIndex, source))).slice(0, 2);
+      if (!warmup.length || !requestIsCurrent() || isInteracting()) return;
+      await withThemeLease(async () => {
+        const mermaid = await loadMermaidRuntime();
+        if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
+        initializePreviewMermaid(mermaid, frameDocument, context);
+        for (const { documentIndex, source } of warmup) {
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+          if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
+          const key = previewMermaidCacheKey(context, documentIndex, source);
+          if (previewMermaidSvgCache.has(key)) continue;
           try {
-            await renderMermaidBlocks(
-              frameDocument,
-              appearance,
-              onDiagramRendered,
-              requestIsCurrent,
-              commit,
-              isInteracting
-            );
-          } finally {
-            await restoreMermaidEditorTheme();
-          }
-        }, 'high');
-      } catch (error) {
-        report(error);
-      } finally {
-        group.end();
-        if (activeGroup === group) activeGroup = null;
-      }
+            const svg = await renderMermaidSvgInDocument(mermaid, `meo-preview-warm-${Date.now()}-${documentIndex}`,
+              normalizeMermaidDiagramText(source), frameDocument);
+            if (!requestIsCurrent()) return;
+            if (svg) cachePreviewMermaidSvg(key, svg);
+          } catch { /* Visible demand retains the existing error presentation. */ }
+        }
+      }, 'normal');
     }).catch(report);
     renderTail = scheduled;
     return scheduled;
@@ -221,25 +275,7 @@ async function renderMermaidBlocks(
 
   const mermaid = await loadMermaidRuntime();
   if (!await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) return;
-  const github = frameDocument.documentElement.dataset.meoPreviewRenderer === 'github-readme' || preset === 'github-readme';
-  mermaid.initialize(github ? getGithubMermaidConfig(appearance === 'dark') : {
-    startOnLoad: false,
-    securityLevel: 'strict',
-    theme: 'base',
-    look: 'classic',
-    themeVariables: {
-      ...getMermaidColorVariables(palette),
-      sequenceNumberColor: appearance === 'dark' ? palette.chartTextColor : '#ffffff',
-      ...Object.fromEntries(palette.chartColors.map((color, index) => [`pie${index + 1}`, color])),
-      pieOpacity: 1,
-      darkMode: appearance === 'dark'
-    },
-    htmlLabels: true,
-    markdownAutoWrap: true,
-    flowchart: { htmlLabels: true },
-    legacyMathML: true,
-    forceLegacyMathML: true
-  });
+  initializePreviewMermaid(mermaid, frameDocument, context);
 
   let renderIndex = 0;
   const prepared: PreparedDiagram[] = [];
@@ -287,6 +323,20 @@ async function renderMermaidBlocks(
     }
   }
   if (await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) await commitPrepared();
+}
+
+function initializePreviewMermaid(mermaid: Awaited<ReturnType<typeof loadMermaidRuntime>>, document: Document,
+  { appearance, preset, palette }: PreviewMermaidContext): void {
+  const github = document.documentElement.dataset.meoPreviewRenderer === 'github-readme' || preset === 'github-readme';
+  mermaid.initialize(github ? getGithubMermaidConfig(appearance === 'dark') : {
+    startOnLoad: false, securityLevel: 'strict', theme: 'base', look: 'classic',
+    themeVariables: { ...getMermaidColorVariables(palette),
+      sequenceNumberColor: appearance === 'dark' ? palette.chartTextColor : '#ffffff',
+      ...Object.fromEntries(palette.chartColors.map((color, index) => [`pie${index + 1}`, color])),
+      pieOpacity: 1, darkMode: appearance === 'dark' },
+    htmlLabels: true, markdownAutoWrap: true, flowchart: { htmlLabels: true },
+    legacyMathML: true, forceLegacyMathML: true
+  });
 }
 
 function readPreviewMermaidPalette(

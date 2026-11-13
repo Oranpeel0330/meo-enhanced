@@ -1,8 +1,12 @@
 import { observeReadingViewport } from '../editor/readingViewportObserver';
 
-type ResourceKind = 'code' | 'mermaid' | 'copy';
+type ResourceKind = 'code' | 'mermaid' | 'mermaid-cache' | 'copy';
 type Candidates = Record<ResourceKind, Set<HTMLElement>> & { mermaidOrder: WeakMap<HTMLElement, number> };
 const candidatesByDocument = new WeakMap<Document, Candidates>();
+
+export function previewMermaidBlockIndex(block: number, local: number): number {
+  return (block + local) * (block + local + 1) / 2 + local;
+}
 
 /** The existing structural work budget also covers complex non-windowed DOM. */
 export function hasBoundedPreviewResources(document: Document): boolean {
@@ -24,7 +28,7 @@ export function getPreviewMermaidResourceIndex(document: Document, element: HTML
 export function observePreviewViewportResources(document: Document, changed: () => void) {
   const Observer = (document.defaultView as (Window & typeof globalThis) | null)?.IntersectionObserver;
   if (!hasBoundedPreviewResources(document) || !Observer) return null;
-  const candidates: Candidates = { code: new Set(), mermaid: new Set(), copy: new Set(), mermaidOrder: new WeakMap() };
+  const candidates: Candidates = { code: new Set(), mermaid: new Set(), 'mermaid-cache': new Set(), copy: new Set(), mermaidOrder: new WeakMap() };
   let resources: HTMLElement[] = [];
   const kinds = new Map<HTMLElement, ResourceKind[]>();
   let active = false;
@@ -43,10 +47,21 @@ export function observePreviewViewportResources(document: Document, changed: () 
     }
     if (updated) changed();
   })!;
+  const cacheObserver = observeReadingViewport(document, entries => {
+    if (!active || disposed) return;
+    let updated = false;
+    for (const entry of entries) {
+      const element = entry.target as HTMLElement;
+      if (entry.isIntersecting && element.isConnected) {
+        if (!candidates['mermaid-cache'].has(element)) { candidates['mermaid-cache'].add(element); updated = true; }
+      } else if (candidates['mermaid-cache'].delete(element)) updated = true;
+    }
+    if (updated) changed();
+  }, null, 'idle-cache')!;
   const refresh = () => {
     if (disposed) return;
-    observer.disconnect(); kinds.clear();
-    candidates.code.clear(); candidates.mermaid.clear(); candidates.copy.clear();
+    observer.disconnect(); cacheObserver.disconnect(); kinds.clear();
+    candidates.code.clear(); candidates.mermaid.clear(); candidates['mermaid-cache'].clear(); candidates.copy.clear();
     resources = Array.from(document.querySelectorAll<HTMLElement>(
       'code.hljs,.meo-export-code-block-wrap,.meo-export-mermaid[data-source-b64],.meo-export-math-display'
     ));
@@ -62,8 +77,9 @@ export function observePreviewViewportResources(document: Document, changed: () 
         if (Number.isSafeInteger(block) && block >= 0) {
           const local = blockIndices.get(block) ?? 0;
           blockIndices.set(block, local + 1);
-          candidates.mermaidOrder.set(element, (block + local) * (block + local + 1) / 2 + local);
+          candidates.mermaidOrder.set(element, previewMermaidBlockIndex(block, local));
         } else candidates.mermaidOrder.set(element, mermaidIndex++);
+        if (active) cacheObserver.observe(element);
       }
       if (element.matches('.meo-export-code-block-wrap,.meo-export-mermaid,.meo-export-math-display')) values.push('copy');
       kinds.set(element, values);
@@ -77,14 +93,17 @@ export function observePreviewViewportResources(document: Document, changed: () 
     setActive(next: boolean) {
       if (disposed || active === next) return;
       active = next;
-      observer.disconnect();
-      candidates.code.clear(); candidates.mermaid.clear(); candidates.copy.clear();
-      if (active) for (const resource of resources) if (resource.isConnected) observer.observe(resource);
+      observer.disconnect(); cacheObserver.disconnect();
+      candidates.code.clear(); candidates.mermaid.clear(); candidates['mermaid-cache'].clear(); candidates.copy.clear();
+      if (active) for (const resource of resources) if (resource.isConnected) {
+        observer.observe(resource);
+        if (kinds.get(resource)?.includes('mermaid')) cacheObserver.observe(resource);
+      }
     },
     dispose() {
       disposed = true; active = false;
-      observer.disconnect();
-      candidates.code.clear(); candidates.mermaid.clear(); candidates.copy.clear();
+      observer.disconnect(); cacheObserver.disconnect();
+      candidates.code.clear(); candidates.mermaid.clear(); candidates['mermaid-cache'].clear(); candidates.copy.clear();
       kinds.clear(); resources.length = 0;
       if (candidatesByDocument.get(document) === candidates) candidatesByDocument.delete(document);
     }

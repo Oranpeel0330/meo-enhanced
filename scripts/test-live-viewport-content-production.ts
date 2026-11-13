@@ -137,12 +137,10 @@ try {
         const blankBeforeReady = visible.filter(sample => sample.time < (firstReady ?? Infinity)).length;
         const blankAfterReady = visible.filter(sample => sample.time >= (firstReady ?? Infinity) && !sample.targets.some(target => target.line === line && target.ready)).length;
         const result = { phase, line, frames: visible.length, ready: ready.length, delay, blankBeforeReady, blankAfterReady };
-        // Bounded cold generation yields to native scrolling, then must finish
-        // in the original 800ms stopped window above. Cached diagrams and
-        // synchronous widgets retain every in-gesture frame/blank threshold.
-        const deferredColdDiagram = mermaid && large && phase === 'cold';
-        if (visible.length < 8 || !deferredColdDiagram && ready.length < 8
-          || (!mermaid || phase !== 'cold') && blankBeforeReady > 4 || blankAfterReady > 1) {
+        // The idle approach is inside the bounded cache window: even the first
+        // pass must paint during scrolling. Distant cold jumps retain separate
+        // coverage for yielding generation until the native gesture ends.
+        if (visible.length < 8 || ready.length < 8 || blankBeforeReady > 4 || blankAfterReady > 1) {
           failures.push(`${name}: ${JSON.stringify(result)}`);
         }
         return result;

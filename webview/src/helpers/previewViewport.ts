@@ -2,6 +2,7 @@ import type { PreviewDocumentManifest, PreviewDocumentOperation, PreviewDocument
   PreviewDocumentChunk, PreviewDocumentPosition, PreviewDocumentBlock } from '../../../src/foundation/previewDocument';
 import { previewBlockAtLine } from '../../../src/foundation/previewDocument';
 import { createPreviewBlockLayout } from '../application/previewBlockLayout';
+import { readingPreparationRange } from '../application/readingWindow';
 
 type MountedBlock = { start: Comment; end: Comment };
 type CopyValue = { text: string; html: string };
@@ -487,6 +488,35 @@ export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocume
   refresh();
   return {
     get manifest() { return manifest; },
+    /** Read a bounded cache window without mounting it or displacing foreground
+     * chunk requests. Source/SVG consumers still own their resource budgets. */
+    async prepareReadingCache(isCurrent: () => boolean): Promise<readonly PreviewDocumentChunk[]> {
+      if (disposed || !active || chunkFlight || !isCurrent()) return [];
+      const revision = documentGeneration;
+      const top = Math.max(0, scroll.scrollTop - origin());
+      const band = readingPreparationRange(top, top + window.innerHeight, 'idle-cache');
+      const anchor = layout.at(top), from = layout.at(Math.max(0, band.from)), to = layout.at(band.to);
+      const indices: number[] = [];
+      // A cache task never scans an arbitrarily dense window or giant block.
+      for (let index = Math.max(from, anchor - 32); index <= Math.min(to, anchor + 64); index++) {
+        const block = manifest.blocks[index];
+        if (block && block.sourceCharacters <= 32_768 && /^(fence|blockquote_open|bullet_list_open|ordered_list_open)$/.test(block.kind)) indices.push(index);
+      }
+      indices.sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor));
+      const selected = indices.slice(0, 4), missing = selected.filter(index => !cache.has(index));
+      if (missing.length) {
+        const operation = dependencies.request(manifest.id, { kind: 'blocks', indices: missing }).then(result => {
+          if (disposed || revision !== documentGeneration || !isCurrent()) return;
+          if (result.kind !== 'blocks') throw new Error('Preview returned a different cache window');
+          for (const chunk of result.chunks) remember(chunk);
+          trimCache();
+        }).finally(() => { if (chunkFlight === operation) chunkFlight = null; });
+        chunkFlight = operation;
+        await operation;
+      }
+      return disposed || revision !== documentGeneration || !isCurrent() ? []
+        : selected.flatMap(index => { const chunk = cache.get(index); return chunk?.hasMermaid ? [chunk] : []; });
+    },
     ensure,
     restoreReadingScrollTop(top: number, preserveNativeScroll = false): boolean {
       // Source's position marker can precede the reading flow in split view.

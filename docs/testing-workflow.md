@@ -1737,10 +1737,23 @@ optimized cold/warm cases move the reading band within one retained list root;
 the giant-list and quoted-list cases also bound line reads and iterated rows
 during that movement. The
 contract belongs to the rendered/viewport targeted plans and release browser
-suite. Bounded cold Mermaid generation yields during the gesture and must finish
-within the existing 800ms stopped-gesture observation. Cached diagrams retain all
-in-gesture frame and blank bounds, while offscreen presentation
+suite. Its idle approach lies inside the bounded SVG cache window: the first
+Mermaid pass now retains the same in-gesture content/blank bounds as warm and
+reverse reading. The existing 800ms stopped-gesture observation remains.
+The separate distant cold jump in `test-preview-mermaid-runtime.ts` still requires
+generation to yield until the actual native gesture ends. Offscreen presentation
 continues to use the existing window and resource budgets.
+
+`test-mermaid-diagram-presentation-production.ts` pairs ordinary and optimized
+idle preparation with a trusted first wheel approach, preserving the distant
+negative control and DOM observer retirement checks. The Preview runtime suite
+checks an unmounted diagram's idle SVG preparation, cached approach during wheel
+motion, stable cache identity after chunk mounting, and at most four data reads
+without enlarging the mounted window. Existing held-pointer, theme, source update,
+cancelled/hidden and deferred commit cases remain in that same owning suite.
+`test-preview-reading-work.ts` bounds both presentation and idle-cache ranges.
+These additions retain their current release registrations; native smooth-scroll
+continuity is checked separately by the existing production scroll contracts.
 
 `test-outline-large-startup.ts` protects bounded in-app outline DOM independently
 of the complete heading model. It pairs Live/Source startup, Preview roundtrips,
@@ -1783,13 +1796,20 @@ pause/resume and listener retirement, with an implicit-root negative control.
 viewport during continuous trusted wheels while retaining its held-pointer and
 bounded-batch checks. These additions keep their existing release registrations;
 the production Live-content and native-scroll suites retain their full budgets.
-The native-scroll suite also crosses cold formulas, code colors and images in a
+The native-scroll suite also crosses cold formulas, branched Mermaid flowcharts, code colors and images in a
 resource-rich bounded document with the same distance, reversal, native-motion
 reading-witness and selection bounds as its prose cases. Each resource height
 correction must begin at the fully reached native destination; post-motion
 reflow is accounted separately from motion and may expand between paragraphs.
 The image resource
 pool suite holds decode completion and cancels it through the production loader.
+
+The resource-rich native-scroll fixture establishes ready nearby flowcharts before
+its static fine-motion baseline. Cold-window checks retain all native distance and
+reading-witness bounds, using the actual wheel receipt to distinguish earlier idle
+reflow from writes after input delivery. Mermaid preparation shares reading-work
+admission without an empty anchor transaction; its eventual DOM commit still uses
+the same viewport owner.
 
 The reading-work contract also requires blocked results to retain pending state
 without requesting another frame or entering an empty viewport transaction.

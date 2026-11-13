@@ -1,11 +1,13 @@
 /** Nearby work follows viewport height, with a bounded lead even in very short
  * or tall panes. Keep DOM/resource admission in each existing presentation owner. */
-export function readingPreparationMargin(height: number): number {
-  return Math.ceil(Math.max(800, Math.min(1600, Number.isFinite(height) ? height : 800)));
+export function readingPreparationMargin(height: number, purpose: 'presentation' | 'idle-cache' = 'presentation'): number {
+  return Math.ceil(Math.max(800, Math.min(1600, Number.isFinite(height) ? height : 800))) * (purpose === 'idle-cache' ? 3 : 1);
 }
 
-export function readingPreparationRange(top: number, bottom: number) {
-  const margin = readingPreparationMargin(bottom - top);
+export function readingPreparationRange(top: number, bottom: number, purpose: 'presentation' | 'idle-cache' = 'presentation') {
+  // Expensive resources may warm a small cache farther ahead while idle. This
+  // does not authorize mounting that larger range or work during a gesture.
+  const margin = readingPreparationMargin(bottom - top, purpose);
   return { from: top - margin, to: bottom + margin };
 }
 

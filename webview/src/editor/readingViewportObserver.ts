@@ -5,7 +5,7 @@ export type ReadingViewportObserver = Pick<IntersectionObserver, 'observe' | 'un
 /** One resizable approach band, reusable by resource types without new timers.
  * disconnect releases all listeners; observe can resume a paused owner. */
 export function observeReadingViewport(document: Document, changed: (entries: IntersectionObserverEntry[]) => void,
-  root: HTMLElement | null = null): ReadingViewportObserver | null {
+  root: HTMLElement | null = null, purpose: 'presentation' | 'idle-cache' = 'presentation'): ReadingViewportObserver | null {
   const window = document.defaultView as (Window & typeof globalThis) | null;
   if (!window?.IntersectionObserver) return null;
   const targets = new Set<Element>();
@@ -13,7 +13,7 @@ export function observeReadingViewport(document: Document, changed: (entries: In
   let margin = -1;
   const refresh = () => {
     if (!targets.size) return;
-    const nextMargin = readingPreparationMargin(root ? root.clientHeight : document.documentElement.clientHeight);
+    const nextMargin = readingPreparationMargin(root ? root.clientHeight : document.documentElement.clientHeight, purpose);
     if (observer && margin === nextMargin) return;
     observer?.disconnect();
     margin = nextMargin;

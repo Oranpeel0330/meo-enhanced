@@ -50,7 +50,7 @@ async function main(): Promise<void> {
           try {
             await new Promise((resolve) => setTimeout(
               resolve,
-              source.includes('SLOW_OLD') || source.includes('SLOW_THEME') ? 90 : 10
+              source.includes('SLOW_OLD') || source.includes('SLOW_THEME') || source.includes('OFFSCREEN_NEW') ? 90 : 10
             ));
             if (source.includes('INVALID')) throw new Error('parse error');
             const marker = source.includes('SLOW_OLD')
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
                 : source.includes('RECOVERED')
                   ? 'recovered'
                   : 'shared';
-            return { svg: `<svg data-marker="${marker}" width="160" height="80"></svg>` };
+            return { svg: `<svg data-marker="${marker}" data-source="${encodeURIComponent(source)}" width="160" height="80"></svg>` };
           } finally {
             active -= 1;
           }
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
         if (source.includes('OFFSCREEN')) scope.__visibilityCalls.push(source);
         return render(id, source, ...args);
       };
-      scope.__visibilityText = Array.from({ length: 52 }, (_, index) => `Spacer ${index}.`).join('\n')
+      scope.__visibilityText = Array.from({ length: 180 }, (_, index) => `Spacer ${index}.`).join('\n')
         + '\n\n```mermaid\ngraph TD\nOFFSCREEN_OLD-->B\n```\n\n'
         + 'Tail ordinary paragraph with enough source to use the bounded editor.\n'.repeat(6_000);
       scope.__visibilityEditor = scope.MermaidEditingHarness.createEditor({ parent: document.getElementById('app'),
@@ -282,7 +282,7 @@ async function main(): Promise<void> {
       return { beyond: view.documentTop + block.top - bounds.bottom, height: widget?.getBoundingClientRect().height ?? block.height,
         calls: scope.__visibilityCalls.length };
     });
-    assert.ok(hidden.beyond > 800, 'the cold diagram must lie beyond the 800px preparation band in this short pane');
+    assert.ok(hidden.beyond > 2400, 'the cold diagram must lie beyond the bounded idle-cache band in this short pane');
     assert.ok(hidden.height > 0, 'a gated diagram must reserve its estimated document height');
     assert.equal(hidden.calls, 0, 'a diagram beyond the preparation band must not start Mermaid layout');
     await page.evaluate(() => {
@@ -329,7 +329,8 @@ async function main(): Promise<void> {
       'offscreen source replacement must wait for visibility and retain the newest request');
     await reveal();
     await page.waitForFunction(() => (window as any).__visibilityCalls.some((source: string) => source.includes('OFFSCREEN_NEW')));
-    await page.waitForSelector('.meo-mermaid-svg-wrapper');
+    await page.waitForFunction(() => document.querySelector('.meo-mermaid-svg-wrapper svg')?.getAttribute('data-source')
+      === encodeURIComponent('graph TD\nOFFSCREEN_NEW-->B'));
     const cachedHidden = await page.evaluate(async () => {
       const scope = window as any, editor = scope.__visibilityEditor, before = editor.getText();
       await editor.setMode('source'); editor.view.scrollDOM.scrollTop = 0;
@@ -349,8 +350,9 @@ async function main(): Promise<void> {
       scope.__visibilityEditor.destroy(); scope.MermaidEditingHarness.refreshMermaidTheme();
     });
     await settleVisibility();
-    assert.equal(await page.evaluate(() => (window as any).__visibilityCalls.length), 2,
-      'disposing a visibility-gated diagram must retire its observer and queued presentation');
+    assert.deepEqual(await page.evaluate(() => (window as any).__visibilityCalls), [
+      'graph TD\nOFFSCREEN_OLD-->B', 'graph TD\nOFFSCREEN_NEW-->B'
+    ], 'disposing a visibility-gated diagram must retire its observer and queued presentation');
     assert.equal(await page.evaluate(() => (window as any).__activeDiagramObservers.size), 0,
       'mode changes and disposal must release observers owned by retained diagram DOM');
     for (const large of [false, true]) {
@@ -372,6 +374,48 @@ async function main(): Promise<void> {
     await settleVisibility();
     assert.equal(await page.evaluate(() => (window as any).__activeDiagramObservers.size), 0,
       'each diagram mount must release its own visibility observer');
+    // Idle cache preparation must reach beyond mounted/observed diagram DOM.
+    // Once reading starts, a first approach should consume that SVG without
+    // starting cold layout inside the native gesture.
+    for (const large of [false, true]) {
+      const approach = await page.evaluate(large => {
+        const scope = window as any;
+        const source = `graph TD\nIDLE_APPROACH_${large}-->READY`;
+        const text = Array.from({ length: 78 }, (_, index) => `Approach spacer ${index}.`).join('\n')
+          + `\n\n\`\`\`mermaid\n${source}\n\`\`\`\n\n`
+          + (large ? 'Distant ordinary content.\n'.repeat(6_000) : 'Document end.');
+        const calls: string[] = [], original = scope.mermaid.render;
+        scope.mermaid.render = (...args: any[]) => { calls.push(args[1]); return original.apply(scope.mermaid, args); };
+        const editor = scope.MermaidEditingHarness.createEditor({ parent: document.getElementById('app'),
+          text, initialMode: 'live', onApplyChanges() {} });
+        scope.__idleApproach = { editor, text, calls, source, restore: () => { scope.mermaid.render = original; } };
+        const view = editor.view, rect = view.scrollDOM.getBoundingClientRect();
+        return { x: rect.left + 80, y: rect.top + 60 };
+      }, large);
+      try {
+        await page.waitForFunction(() => {
+          const probe = (window as any).__idleApproach;
+          return probe.calls.includes(probe.source);
+        }, { timeout: 2000 });
+        await settleVisibility();
+        const distance = await page.evaluate(() => {
+          const { editor, text } = (window as any).__idleApproach, view = editor.view;
+          const rect = view.scrollDOM.getBoundingClientRect();
+          const top = view.documentTop + view.lineBlockAt(text.indexOf('```mermaid')).top;
+          return { gap: top - rect.bottom, wheel: top - rect.top - 70 };
+        });
+        assert.ok(distance.gap > 800, 'exercise cache preparation beyond the ordinary DOM approach band');
+        await page.mouse.move(approach.x, approach.y);
+        await page.mouse.wheel({ deltaY: distance.wheel });
+        await page.waitForSelector('.meo-mermaid-svg-wrapper svg', { timeout: 200 });
+        assert.equal(await page.evaluate(() => {
+          const probe = (window as any).__idleApproach;
+          return probe.editor.getText() === probe.text && probe.calls.filter((source: string) => source === probe.source).length === 1;
+        }), true, 'the first native approach must reuse its idle SVG without changing text or repeating layout');
+      } finally {
+        await page.evaluate(() => { const probe = (window as any).__idleApproach; probe.restore(); probe.editor.destroy(); });
+      }
+    }
     console.log('Mermaid diagram presentation production characterization passed');
   } finally {
     await browser.close();

@@ -90,4 +90,17 @@ await preloadMermaidDocumentBatch({
   }
 }, requests.slice(0, 2), () => true, () => {});
 
+// The viewport owns the idle deadline; warm-up must sleep on that notification
+// rather than repeatedly attempting generation while a gesture is active.
+let scrolling = true, resume!: () => void, paused!: () => void, scrollPreloads = 0;
+const waiting = new Promise<void>(resolve => { paused = resolve; });
+const duringScroll = preloadMermaidDocumentBatch({ async preload() { scrollPreloads++; } },
+  requests.slice(0, 1), () => true, () => {}, undefined, () => scrolling,
+  () => new Promise<void>(resolve => { resume = () => { scrolling = false; resolve(); }; paused(); }));
+await waiting;
+assert.equal(scrollPreloads, 0, 'cold warming must not start before the viewport releases scrolling');
+resume();
+await duringScroll;
+assert.equal(scrollPreloads, 1, 'one viewport notification resumes the pending batch');
+
 console.log('Mermaid document preloader batch refresh contract passed');

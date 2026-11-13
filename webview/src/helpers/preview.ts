@@ -12,7 +12,7 @@ import { createElement as createIconElement, TextCursor, BookOpen, FileText, Che
 import previewPresetBrandIcons from './previewPresetBrandIcons.json';
 import { getExportStyleEnvironment } from './export';
 import { documentSurfaceVariables } from '../../../src/shared/documentSurfaceRoles';
-import { createPreviewMermaidRenderer } from './previewMermaid';
+import { createPreviewMermaidRenderer, readPreviewMermaidWarmupSources } from './previewMermaid';
 import { createPreviewReadingWork } from '../application/previewReadingWork';
 import { readingResourceDistance } from '../application/readingWindow';
 import { observeReadingViewport, type ReadingViewportObserver } from '../editor/readingViewportObserver';
@@ -1090,7 +1090,14 @@ export function createPreviewController({
   const previewMermaidRenderer = createPreviewMermaidRenderer(
     mermaidRenderResources,
     (error) => logWebviewRenderError('preview.mermaid', error),
-    isViewportInteracting
+    isViewportInteracting,
+    {
+      isPointerActive: () => activePreviewPointers.size > 0,
+      async readWarmupSources(document, isCurrent) {
+        const chunks = await previewViewport?.prepareReadingCache(isCurrent) ?? [];
+        return isCurrent() ? readPreviewMermaidWarmupSources(document, chunks) : [];
+      }
+    }
   );
   let disposeDeferredImages = () => {};
   let previewImageActions: ReturnType<typeof createPreviewImageActions> | null = null;
@@ -1150,8 +1157,12 @@ export function createPreviewController({
     armViewportHighlight(frameDocument, true);
     return ready;
   };
+  const commitMermaidReading = (frameDocument: Document, mutate: () => void, elements?: readonly HTMLElement[]) =>
+    enqueueReadingCommit(frameDocument, mutate, undefined, () => activePreviewPointers.size === 0
+      && (!isViewportInteracting() || !!elements?.length && elements.every(element => canCommitReadingElement(element))));
   const requestReadingWork = (frameDocument: Document, kind: ReadingKind, ready?: () => boolean) => {
-    readingWork.request(readingKeys[kind], () => {
+    const request = kind === 'mermaid' ? readingWork.prepare : readingWork.request;
+    request(readingKeys[kind], () => {
       if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
       switch (kind) {
         case 'math': return previewMathWork?.run() ?? false;
@@ -1165,11 +1176,12 @@ export function createPreviewController({
           void previewMermaidRenderer.render(frameDocument, appearance,
             () => { sourceMapDirty = true; },
             () => !disposed && !host.hidden && generation === frameGeneration && activeFrameDocument === frameDocument,
-            mutate => enqueueReadingCommit(frameDocument, mutate));
+            (mutate, elements) => commitMermaidReading(frameDocument, mutate, elements));
           break;
         }
       }
-    }, () => ready?.() !== false && (kind === 'math' ? previewMathWork?.ready() !== false : kind === 'code' || !isViewportInteracting()));
+    }, () => ready?.() !== false && (kind === 'math' ? previewMathWork?.ready() !== false
+      : kind === 'code' || kind === 'mermaid' || !isViewportInteracting()));
   };
   const scheduleViewportHighlight = (frameDocument: Document, kind?: ReadingKind, ready?: () => boolean) => {
     if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
@@ -2124,12 +2136,13 @@ export function createPreviewController({
           },
           // Source input may change before the debounced next preview request.
           () => isCurrent() && isCurrentText?.(renderedText) !== false,
-          (mutate) => {
+          (mutate, elements) => {
             const commit = () => {
               mutate();
               sourceMapDirty = true;
             };
             if (host.hidden) commit();
+            else if (hasBoundedPreviewResources(frameDocument)) return commitMermaidReading(frameDocument, commit, elements);
             else withViewportTransaction(() => commit());
           }
         );
@@ -2411,12 +2424,13 @@ export function createPreviewController({
           keepPosition();
         },
         () => isCurrent() && (renderedText === null || isCurrentText?.(renderedText) !== false),
-        (mutate) => {
+        (mutate, elements) => {
           const commit = () => {
             mutate();
             sourceMapDirty = true;
           };
           if (host.hidden) commit();
+          else if (hasBoundedPreviewResources(frameDocument)) return commitMermaidReading(frameDocument, commit, elements);
           else withViewportTransaction(() => commit());
         }
       );
@@ -3582,7 +3596,8 @@ export function createPreviewController({
         for (const block of frameDocument.querySelectorAll<HTMLElement>('.meo-export-mermaid[data-source-b64]')) delete block.dataset.meoPreviewMermaidAppearance;
         void previewMermaidRenderer.render(frameDocument, appearance, () => { sourceMapDirty = true; },
           () => !disposed && getFrameDocument() === frameDocument,
-          mutate => withViewportTransaction(mutate));
+          (mutate, elements) => hasBoundedPreviewResources(frameDocument)
+            ? commitMermaidReading(frameDocument, mutate, elements) : withViewportTransaction(mutate));
       }
     },
     getAppearance: () => appearance,

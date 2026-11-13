@@ -268,6 +268,16 @@ async function assertPreviewRuntime() {
     return firstLoad === secondLoad && first === second && typeof first.render === 'function';
   });
   if (!sharedRuntime || runtimeRequests !== 2) throw new Error('Retry must load one CSP-authorized runtime shared by concurrent callers');
+  assert.deepEqual(await page.evaluate(() => (window as any).__probePreviewIdleCache()), {
+    idle: { renders: 1, painted: 0 }, approach: { renders: 1, painted: 1 }
+  }, 'idle preparation must cache an unmounted/distant source and fill its approach without cold generation during a wheel gesture');
+  const windowCache = await page.evaluate(() => (window as any).__probePreviewWindowCache());
+  assert.equal(windowCache.source, 'flowchart LR; A[WindowCache]-->B');
+  assert.equal(windowCache.identity, 45 * 46 / 2, 'unmounted and mounted diagrams must address the same cache entry');
+  assert.ok(windowCache.before > 0 && windowCache.before === windowCache.after && !windowCache.graphMounted,
+    'idle data preparation must preserve the bounded mounted window');
+  assert.ok(windowCache.cacheRequests.length === 1 && windowCache.cacheRequests[0].length <= 4,
+    'idle data preparation must read a bounded batch through the existing chunk owner');
   const cachedBatch = await page.evaluate(() => (window as any).__probePreviewCachedBatch());
   assert.deepEqual(cachedBatch.held, { waitingCommits: 0, painted: 0, groups: 0 }, 'cached results retain the existing held-gesture protection');
   assert.deepEqual(cachedBatch.prepared, { initializes: 0, renders: 0, groups: 0, waitingCommits: 1, painted: 0, settled: false },

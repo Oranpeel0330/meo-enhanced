@@ -16,6 +16,18 @@ worker source in a loadable module. Layout still runs in a dedicated Blob Worker
 with the existing queue, timeout, cancellation and idle-retirement policy.
 Rendering loads only packaged resources.
 
+Live, full Preview and Source split Preview prepare a bounded SVG cache while
+idle, independently of mounted diagram DOM. The shared cache approach band is
+2400–4800px on either side of the viewport; each pass warms at most two missing
+diagrams, with speculative sources limited to 32K UTF-16 code units. Windowed Preview reads at
+most four nearby chunks through its existing cache without mounting them. Visible
+demand takes precedence over those reads and background layout. Cold generation
+still yields to native gestures; cached Preview results below the screen can
+commit through the existing reading queue during wheel motion. Held pointers,
+visible geometry changes, stale revisions, themes and disposal retain their
+existing admission and cancellation rules. Distant jumps and giant graphs can
+still require a cold render.
+
 Ordinary diagrams use neutral nodes, text and sequence notes; connections use the
 existing blue accent. Pie charts use twelve opaque official Catppuccin Mocha
 accents, starting with blue, with dark percentage labels on both light and dark

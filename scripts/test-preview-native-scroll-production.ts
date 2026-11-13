@@ -14,6 +14,9 @@ const list = Array.from({ length: 6000 }, (_, index) => `${index + 1}. Item ${in
 const nearbyResources = Array.from({ length: 60 }, (_, index) => [
   `## Nearby resources ${index}`, '', prose(4), '',
   '$$', `\\frac{x_{${index}}^2+1}{y}=\\sqrt{z}`, '$$', '',
+  '```mermaid', 'flowchart LR',
+  `A${index}[Start] --> B${index}{Check}`, `B${index} -->|Yes| C${index}[Prepare] --> D${index}[Publish]`,
+  `B${index} -->|No| E${index}[Review] --> F${index}[Revise] --> B${index}`, '```', '',
   '```typescript', `const nearbyResource${index} = ${index};`, '```', '',
   '![Nearby diagram](data:image/svg+xml;base64,'
     + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="120"><rect width="640" height="120" fill="#567"/></svg>').toString('base64') + ')', ''
@@ -136,6 +139,18 @@ try {
           await page.click('.source-preview-scroll-sync-button');
         }
       }
+      if (testCase.name === 'nearby-resources') {
+        // Establish the static baseline used by the fine-motion assertions.
+        // Cold destinations below still retain their native-motion/reflow
+        // checks; a visible diagram arriving here is legitimate late geometry.
+        await page.waitForFunction(() => {
+          const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+          const height = doc.defaultView!.innerHeight, margin = Math.max(800, Math.min(1600, height));
+          const blocks = [...doc.querySelectorAll<HTMLElement>('.meo-export-mermaid')]
+            .filter(block => { const r = block.getBoundingClientRect(); return r.height > 0 && r.bottom >= -margin && r.top <= height + margin; });
+          return blocks.length > 0 && blocks.every(block => block.classList.contains('is-rendered') && block.querySelector('svg'));
+        });
+      }
       await frames(page, 12);
       const selection = await page.evaluate(() => {
         const content = document.querySelector('.editor-host .cm-content') as any;
@@ -236,7 +251,11 @@ try {
         const crossing = await result(page);
         if (testCase.name === 'nearby-resources') {
           // Cold resources can legitimately change height after native motion.
-          accountForSettledResourceGeometry(crossing, crossing.initial + delta);
+          // Like reversal above, use the actual input receipt: idle resource
+          // reflow between record() and wheel delivery is not native motion.
+          const received = crossing.wheels[0]!;
+          accountForSettledResourceGeometry(crossing, received.top + delta, received);
+          crossing.initial = received.top;
         }
         assert.ok(Math.abs(crossing.top - crossing.initial - delta) <= 2,
           `Cold window interrupted native motion: ${JSON.stringify({ initial: crossing.initial, top: crossing.top, writes: crossing.writes })}`);

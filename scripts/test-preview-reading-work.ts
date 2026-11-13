@@ -6,11 +6,26 @@ for (const height of [0, 200, 720, 1000, 4000]) {
   const margin = readingPreparationMargin(height), band = readingPreparationRange(100, 100 + height);
   assert.ok(margin >= 800 && margin <= 1600, 'resource preparation remains bounded across pane sizes');
   assert.deepEqual(band, { from: 100 - margin, to: 100 + height + margin });
+  const cacheMargin = readingPreparationMargin(height, 'idle-cache');
+  assert.ok(cacheMargin >= 2400 && cacheMargin <= 4800, 'idle cache preparation has its own bounded lead without expanding mounted DOM');
+  assert.deepEqual(readingPreparationRange(100, 100 + height, 'idle-cache'),
+    { from: 100 - cacheMargin, to: 100 + height + cacheMargin });
 }
 assert.equal(readingPreparationMargin(1000), 1000, 'tall panes prepare one screen, independently of their width');
 assert.equal(readingResourceDistance({ top: -1000, bottom: 20 }, 0, 720), 0, 'a tall visible resource outranks speculative work');
 assert.equal(readingResourceDistance({ top: 800, bottom: 900 }, 0, 720), 80);
 assert.equal(readingResourceDistance({ top: -200, bottom: -80 }, 0, 720), 80, 'both scroll directions share the approach rule');
+
+let preparationAnchors = 0, prepared = 0, committed = 0;
+const staged = createPreviewReadingWork({ now: () => 0, batch(run) { preparationAnchors++; run(); } });
+staged.prepare({}, () => { prepared++; });
+staged.drain();
+assert.equal(prepared, 1);
+assert.equal(preparationAnchors, 0, 'starting async resources must not enter an empty viewport transaction');
+const acceptedPreparation = staged.commit(() => { committed++; });
+staged.drain(); await acceptedPreparation;
+assert.equal(committed, 1);
+assert.equal(preparationAnchors, 1, 'the eventual DOM result still uses the owning viewport transaction');
 
 let dormantBatches = 0, dormantChecks = 0;
 const dormant = createPreviewReadingWork({ now: () => 0, batch(run) { dormantBatches++; run(); } });
