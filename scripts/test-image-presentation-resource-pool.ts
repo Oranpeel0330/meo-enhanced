@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createImagePresentationResourcePool, loadBrowserImage } from '../webview/src/editor/imagePresentationAdapter';
+import { createCodeMirrorDomImagePresentationAdapter, createImagePresentationResourcePool, loadBrowserImage } from '../webview/src/editor/imagePresentationAdapter';
 
 let now = 1_000;
 let resolveCalls = 0;
@@ -26,7 +26,8 @@ const pool = createImagePresentationResourcePool({
     maxActiveLoads = Math.max(maxActiveLoads, activeLoads);
     await new Promise<void>((resolve) => loadReleases.push(resolve));
     activeLoads -= 1;
-    return failing.has(resolvedSrc) ? null : ({ src: resolvedSrc, cloneNode: () => ({ src: resolvedSrc }) } as never);
+    return failing.has(resolvedSrc) ? null : ({ src: resolvedSrc, attributes: [],
+      cloneNode: () => ({ src: resolvedSrc, attributes: [], setAttribute() {}, removeAttribute() {} }) } as never);
   }
 });
 const releasePool = pool.acquire();
@@ -54,6 +55,12 @@ const [loadedA, loadedAShared, loadedB, loadedC] = await Promise.all([loadA, loa
 assert.ok(loadedA && loadedB && loadedC);
 assert.equal(loadedA, loadedAShared, 'same resource should share one loaded result');
 assert.equal(loadCalls, 3, 'same resource should share one browser load');
+const cancelledProjection = createCodeMirrorDomImagePresentationAdapter({ resources: pool, resourceContextKey: 'document-a',
+  view: { showFallback: () => false, showImage: () => { throw Error('cancelled projection'); }, preserveLayoutChange: () => false } });
+cancelledProjection.execute({ type: 'showImage', presentationId: 1, commandId: 1, resolvedSrc: 'resolved:a' }, { isCurrentProjection: () => true });
+assert.equal(pool.claimLoadedImage('document-a', 'resolved:a'), loadedA, 'first projection retains the decoded resource');
+assert.notEqual(pool.claimLoadedImage('document-a', 'resolved:a'), loadedA, 'another widget must own a separate node');
+assert.equal(pool.getLoaded('document-a', 'resolved:a'), loadedA, 'projection does not erase cached resource facts');
 
 failing.add('resolved:missing');
 const failed = pool.load('document-a', 'resolved:missing');

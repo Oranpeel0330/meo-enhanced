@@ -2453,12 +2453,23 @@ must not shift the work into a later mode transition.
 `scripts/test-live-code-reading-production.ts` belongs to the release browser
 suite and the rendered/viewport targeted plans. It exercises ordinary and bounded
 documents through trusted continuous wheels. A new short block in a warm language
-must prepare and become colored before scrolling stops; cold languages, oversized
-fences and distant content must stay deferred. It retains the document text and
+must prepare and become colored before scrolling stops. The approach begins
+outside the shared cache band, and a nearby cold language can prepare in the
+Worker; oversized fences and content beyond them remain deferred. It retains the document text and
 the reading witness throughout coloring, with timing reported diagnostically.
 The driver acknowledges each trusted wheel receipt and verifies token dispatch
 inside the native gesture window; CDP command completion and idle work alone
 cannot acknowledge the contract.
+
+`scripts/test-live-resource-preparation-production.ts` starts continuous trusted
+wheels without waiting for resources. Ordinary and actually optimized mixed
+documents must show code, decoded images, formulas, tables and HTML while moving,
+with a bounded first-entry delay. Its fresh cold Python language must dispatch
+before entering the screen; distant code is a negative control. Local images
+have a fixed network delay and no HTTP cache, so downloading a resource again
+when cloning for display cannot silently pass. The image layout and resource
+pool contracts separately retain independent simultaneous presentations,
+undecoded-clone geometry, cancellation, external changes and bounded ownership.
 The background-Shiki contract separately checks that worker failure, pending
 grammar loading and disposal cannot report a reusable language; the lifecycle
 contract keeps the main-thread fallback out of scrolling preparation.

@@ -111,30 +111,38 @@ async function main() {
       const source = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="#73c" id="held-clone-fixture"/></svg>');
       harness.setImageSrcResolver(() => source);
       const clone = HTMLImageElement.prototype.cloneNode;
-      (window as any).__restoreImageClone = () => { HTMLImageElement.prototype.cloneNode = clone; };
+      const setAttribute = HTMLImageElement.prototype.setAttribute;
+      const heldClones = new WeakSet<HTMLImageElement>();
+      (window as any).__restoreImageClone = () => { HTMLImageElement.prototype.cloneNode = clone; HTMLImageElement.prototype.setAttribute = setAttribute; };
       HTMLImageElement.prototype.cloneNode = function(deep?: boolean) {
         const result = clone.call(this, deep) as HTMLImageElement;
-        if (this.src.includes('held-clone-fixture')) result.src = url;
+        if (this.src.includes('held-clone-fixture')) { heldClones.add(result); result.src = url; }
         return result;
       };
+      HTMLImageElement.prototype.setAttribute = function(name: string, value: string) {
+        setAttribute.call(this, name, heldClones.has(this) && name === 'src' ? url : value);
+      };
       (window as any).__coldImageEditor = harness.createEditor({ parent: document.getElementById('app'),
-        text: 'Before image\n\n![Held image](held-clone.png)\n\nAfter image target', initialMode: 'live', onApplyChanges() {} });
+        text: 'Before image\n\n![[held-clone.png|120]]\n\n![Held image](held-clone.png)\n\nAfter image target', initialMode: 'live', onApplyChanges() {} });
     }, new URL('/held.svg', imageServer.url).href);
-    await page.waitForSelector('.meo-md-image-img');
+    await page.waitForSelector('.meo-md-image-img[alt="Held image"]');
     const beforeDecode = await page.evaluate(async () => {
       for (let index = 0; index < 4; index++) await new Promise(requestAnimationFrame);
-      const image = document.querySelector<HTMLImageElement>('.meo-md-image-img')!;
+      const image = document.querySelector<HTMLImageElement>('.meo-md-image-img[alt="Held image"]')!;
       const line = [...document.querySelectorAll<HTMLElement>('.cm-line')].find(line => line.textContent === 'After image target')!;
       const bounds = image.getBoundingClientRect();
-      return { width: bounds.width, height: bounds.height, lineTop: line.getBoundingClientRect().top, naturalWidth: image.naturalWidth };
+      return { width: bounds.width, height: bounds.height, lineTop: line.getBoundingClientRect().top, naturalWidth: image.naturalWidth,
+        firstWidth: document.querySelector('.meo-md-image-img')!.getBoundingClientRect().width };
     });
     assert.equal(beforeDecode.naturalWidth, 0, 'the display clone must still be undecoded in this fixture');
+    assert.ok(Math.abs(beforeDecode.firstWidth - 120) <= 1 && beforeDecode.width > 200,
+      'independent presentations must retain their own dimensions and styles');
     assert.ok(beforeDecode.height > 0, 'known resource dimensions must reserve the display clone before its load event');
     releaseImage();
-    await page.waitForFunction(() => (document.querySelector('.meo-md-image-img') as HTMLImageElement)?.naturalWidth > 0);
+    await page.waitForFunction(() => (document.querySelector('.meo-md-image-img[alt="Held image"]') as HTMLImageElement)?.naturalWidth > 0);
     const afterDecode = await page.evaluate(async () => {
       for (let index = 0; index < 4; index++) await new Promise(requestAnimationFrame);
-      const image = document.querySelector<HTMLImageElement>('.meo-md-image-img')!;
+      const image = document.querySelector<HTMLImageElement>('.meo-md-image-img[alt="Held image"]')!;
       const line = [...document.querySelectorAll<HTMLElement>('.cm-line')].find(line => line.textContent === 'After image target')!;
       const bounds = image.getBoundingClientRect();
       const lineTop = line.getBoundingClientRect().top;

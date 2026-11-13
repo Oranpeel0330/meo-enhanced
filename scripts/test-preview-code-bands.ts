@@ -17,6 +17,10 @@ assert.equal(decodePreviewDocumentManifest({ ...manifest, blocks: manifest.block
 const hinted = preparePreviewDocument({ ...options, markdownText: 'Plain paragraph.\n\n![Image](sample.png)\n\n<div>HTML resource</div>\n\n```python\nx = 1\n```' }, true).blocks;
 assert.equal(hinted[0]!.mayHaveResources, undefined, 'plain prose consumes no speculative resource slots');
 assert.ok(hinted.slice(1).every(block => block.mayHaveResources), 'image, HTML and code share discovery metadata');
+const layoutOnly = preparePreviewDocument({ ...options, markdownText: '$$\nx+y=1\n$$\n\n| A | B |\n|---|---|\n| 1 | 2 |' }, true).blocks;
+assert.ok(layoutOnly.every(block => !block.mayHaveResources), 'layout-only formulas and tables do not consume asynchronous resource slots');
+const resourceTable = preparePreviewDocument({ ...options, markdownText: '| Image |\n|---|\n| ![Cell](cell.png) |' }, true).blocks;
+assert.ok(resourceTable.some(block => block.mayHaveResources), 'resources nested in tables still participate in data preparation');
 assert.equal(decodePreviewDocumentManifest({ ...manifest, codeSources: [{ id: 'x', language: 'js', source: 5 }] }), null);
 assert.equal(decodePreviewDocumentManifest({ ...manifest, codeSources: [manifest.codeSources![0], manifest.codeSources![0]] }), null);
 const search = await document.run({ kind: 'search', query: 'row9000', caseSensitive: true, wholeWord: false, selectIndex: 0 });

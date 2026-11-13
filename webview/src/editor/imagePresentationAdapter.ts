@@ -39,6 +39,8 @@ export type ImagePresentationResourcePool = {
   getResolved(contextKey: string, rawSrc: string): string | null;
   load(contextKey: string, resolvedSrc: string): Promise<HTMLImageElement | null>;
   getLoaded(contextKey: string, resolvedSrc: string): HTMLImageElement | null;
+  /** Transfers the decoded node once; later projections get independent nodes. */
+  claimLoadedImage(contextKey: string, resolvedSrc: string): HTMLImageElement | null;
   getIntrinsicSize(contextKey: string, rawSrc: string): { width: number; height: number } | null;
   seedIntrinsicSizes(contextKey: string, entries: readonly ImageIntrinsicSize[]): void;
   dispose(): void;
@@ -123,6 +125,7 @@ export function createImagePresentationResourcePool(
   const warmLoadedCache = new Map<string, HTMLImageElement>();
   const intrinsicSizeCache = new Map<string, { width: number; height: number }>();
   const headerSizeCache = new Map<string, { width: number; height: number }>();
+  const claimedImages = new WeakMap<HTMLImageElement, readonly (readonly [string, string])[]>();
 
   const createGeneration = (
     leases: readonly ImageResourceLease[] = []
@@ -389,6 +392,25 @@ export function createImagePresentationResourcePool(
       if (image) touch(generation.loadedCache, key, image);
       return image;
     },
+    claimLoadedImage(contextKey, resolvedSrc) {
+      const generation = currentGeneration;
+      if (!generation || generation.released) return null;
+      const key = cacheKey(contextKey, resolvedSrc), image = generation.loadedCache.get(key);
+      if (!image) return null;
+      touch(generation.loadedCache, key, image);
+      const attributes = claimedImages.get(image);
+      if (!attributes) {
+        claimedImages.set(image, Array.from(image.attributes, attribute => [attribute.name, attribute.value] as const));
+        return image;
+      }
+      // A styled/connected projection is never moved into another widget.
+      // Restore the resource's original attributes, rather than copying one
+      // presentation's dimensions, alt text and styles into the next.
+      const clone = image.cloneNode(false) as HTMLImageElement;
+      for (const attribute of Array.from(clone.attributes)) clone.removeAttribute(attribute.name);
+      for (const [name, value] of attributes) clone.setAttribute(name, value);
+      return clone;
+    },
     getIntrinsicSize(contextKey, rawSrc) {
       const resolutionKey = cacheKey(contextKey, rawSrc);
       const resolvedSrc = currentGeneration?.resolvedCache.get(resolutionKey)
@@ -469,14 +491,17 @@ export function createCodeMirrorDomImagePresentationAdapter(
     context: ImagePresentationEffectContext
   ): ImagePresentationEffectExecution => {
     const resolvedSrc = effect.resolvedSrc;
-    const loaded = options.resources.getLoaded(options.resourceContextKey, resolvedSrc);
-    if (!loaded) return projectionCompletion(effect, 'projectionFailed');
-    const image = loaded.cloneNode(false) as HTMLImageElement;
-    // Decoded dimensions are not copied by cloneNode. Carry the resource facts
-    // with the projection even if its bounded intrinsic-size cache is evicted.
-    const width = loaded.naturalWidth || loaded.width, height = loaded.naturalHeight || loaded.height;
-    if (width > 0 && height > 0) { image.width = width; image.height = height; }
-    return project(effect, context, () => options.view.showImage(image));
+    return project(effect, context, () => {
+      const loaded = options.resources.getLoaded(options.resourceContextKey, resolvedSrc);
+      if (!loaded) return false;
+      // Claim only after the viewport owner admits this current projection.
+      // Cancelled geometry work must leave the decoded node for the next view.
+      const image = options.resources.claimLoadedImage(options.resourceContextKey, resolvedSrc);
+      if (!image) return false;
+      const width = loaded.naturalWidth || loaded.width, height = loaded.naturalHeight || loaded.height;
+      if (width > 0 && height > 0) { image.width = width; image.height = height; }
+      return options.view.showImage(image);
+    });
   };
 
   return {

@@ -8,17 +8,21 @@ import {
 import type { MermaidDiagramRenderRequest } from '../application/mermaidDiagramRenderResources';
 import type { MermaidDiagramPresentationConsumer } from '../editor/mermaidDiagramPresentation';
 import { markdownStructureAvailable } from '../editor/markdownStructure';
+import { getShikiTokens, requestShikiTokens, resolveShikiLang, subscribeShikiRefresh } from './shikiHighlighter';
+import type { SyntaxNodeRef } from '@lezer/common';
 
-type MermaidPreloadWindow = { readonly from: number; readonly to: number; readonly anchor: number };
-type MermaidPreloadReading = {
+type DocumentReadingWindow = { readonly from: number; readonly to: number; readonly anchor: number };
+type DocumentReadingSurface = {
   isActive(): boolean;
   /** Undefined retains ordinary document warming; null means not ready/visible. */
-  readWindow(): MermaidPreloadWindow | null | undefined;
+  readWindow(): DocumentReadingWindow | null | undefined;
+  readContentWindow(): DocumentReadingWindow | null;
   afterUserScroll(operation: () => void): () => void;
 };
 
-export type MermaidDocumentPreloader = {
+export type DocumentReadingPreparation = {
   schedule(state: EditorState): void;
+  resourceContextChanged(): void;
   dispose(): void;
 };
 
@@ -38,7 +42,7 @@ function codeInfo(state: EditorState, node: any): string | null {
   return null;
 }
 
-export function collectDocumentMermaidSources(state: EditorState, window?: MermaidPreloadWindow): readonly MermaidSource[] {
+export function collectDocumentMermaidSources(state: EditorState, window?: DocumentReadingWindow): readonly MermaidSource[] {
   const sources: MermaidSource[] = [];
   const seen = new Set<string>();
   const tree = resolvedSyntaxTree(state, window ? 0 : 50);
@@ -114,13 +118,18 @@ export async function preloadMermaidDocumentBatch(
   if (completed) onBatchAvailable();
 }
 
-/** Owns bounded, deduplicated Mermaid warming for one Live Editor. */
-export function createMermaidDocumentPreloader(
-  consumer: MermaidDiagramPresentationConsumer,
+/** One document/window lifetime for cheap async resources and idle-only graphs.
+ * The renderers retain their own caches, concurrency and DOM admission. */
+export function createDocumentReadingPreparation(
+  consumer: Pick<MermaidDiagramPresentationConsumer, 'preload' | 'getCached' | 'subscribeThemeRefresh'>,
   onBatchAvailable: () => void,
   isUserScrolling: () => boolean = () => false,
-  reading?: MermaidPreloadReading
-): MermaidDocumentPreloader {
+  reading?: DocumentReadingSurface,
+  images?: {
+    source(state: EditorState, node: SyntaxNodeRef): string;
+    preload(source: string): Promise<void>;
+  }
+): DocumentReadingPreparation {
   let latestState: EditorState | null = null;
   let timer: number | null = null;
   let generation = 0;
@@ -129,20 +138,85 @@ export function createMermaidDocumentPreloader(
   let pendingBatch: AbortController | null = null;
   let cancelScrollWait: (() => void) | null = null;
   let rescheduleAfterBatch = false;
+  const preparedImages = new Set<string>();
+  const pendingImages = new Map<string, Promise<void>>();
+  let ordinaryWarmDocument: EditorState['doc'] | null = null;
+
+  const prepareContent = (state: EditorState, range: DocumentReadingWindow): void => {
+    const tree = resolvedSyntaxTree(state, 0);
+    if (!markdownStructureAvailable(state, tree)) return;
+    const sources: { from: number; to: number; kind: 'code' | 'image'; source: string; language?: string }[] = [];
+    let from = range.from, to = range.to;
+    const constrain = (start: number, end: number) => {
+      // Unmounted oversized fences can have very different wrapped geometry.
+      // Do not spend preparation beyond a block whose cost/height is unknown.
+      if (start >= range.anchor) to = Math.min(to, start);
+      else if (end <= range.anchor) from = Math.max(from, end);
+      else { from = Math.max(from, start); to = Math.min(to, end); }
+    };
+    tree.iterate({ from: range.from, to: range.to, enter(node) {
+      if (node.name === 'FencedCode') {
+        if (node.to - node.from > 8_192) { constrain(node.from, node.to); return false; }
+        const language = resolveShikiLang(codeInfo(state, node));
+        if (language && language !== 'mermaid') {
+          const source = getFencedCodeContent(state, node);
+          if (source.split('\n', 129).length > 128) constrain(node.from, node.to);
+          else sources.push({ kind: 'code', source, language, from: node.from, to: node.to });
+        }
+        return false;
+      }
+      if (node.name === 'Image' && images) {
+        if (node.to - node.from > 32_768) return false;
+        const source = images.source(state, node);
+        if (source) sources.push({ kind: 'image', source, from: node.from, to: node.to });
+        return false;
+      }
+    } });
+    sources.sort((a, b) => Math.max(0, range.anchor - a.to, a.from - range.anchor)
+      - Math.max(0, range.anchor - b.to, b.from - range.anchor));
+    const current = () => !disposed && latestState?.doc === state.doc && (reading?.isActive() ?? true);
+    let codes = 0;
+    for (const item of sources) {
+      if (item.from < from || item.to > to) continue;
+      if (item.kind === 'code') {
+        if (getShikiTokens(item.language!, item.source) || codes >= 2) continue;
+        codes++;
+        // First-use compilation stays in the existing Worker. A missing Worker
+        // keeps the main-thread fallback behind the original gesture boundary.
+        requestShikiTokens(item.language!, item.source, 'editor', current, 'background',
+          () => isUserScrolling() && !(typeof document !== 'undefined' && document.body.dataset.meoShikiWorkerSrc));
+      } else if (images && !preparedImages.has(item.source) && !pendingImages.has(item.source) && pendingImages.size < 2) {
+        const operation = images.preload(item.source).catch(() => undefined).finally(() => {
+          if (pendingImages.get(item.source) !== operation) return;
+          pendingImages.delete(item.source);
+          if (!current()) return;
+          preparedImages.add(item.source);
+          while (preparedImages.size > 32) preparedImages.delete(preparedImages.values().next().value!);
+          schedule(state);
+        });
+        pendingImages.set(item.source, operation);
+      }
+    }
+  };
 
   const run = (): void => {
     timer = null;
-    if (disposed || !latestState) return;
+    if (disposed || !latestState || reading?.isActive() === false) return;
+    const contentWindow = reading?.readContentWindow();
+    if (contentWindow) prepareContent(latestState, contentWindow);
+    if (pendingBatch) return;
     if (reading && isUserScrolling()) {
       cancelScrollWait = reading.afterUserScroll(() => { cancelScrollWait = null; run(); });
       return;
     }
     const window = reading?.readWindow();
     if (window === null) return;
+    if (!window && ordinaryWarmDocument === latestState.doc) return;
     const runGeneration = generation;
     const batch = pendingBatch = new AbortController();
     const identity = getMermaidEditorPresentationIdentity();
     const sources = collectDocumentMermaidSources(latestState, window);
+    const ordinaryDocument = !window && markdownStructureAvailable(latestState) ? latestState.doc : null;
     const ordered = window ? sources.filter(({ source }) => !consumer.getCached({
       rawSource: source, normalizedSource: normalizeMermaidDiagramText(source), ...identity
     })).slice(0, 2) : orderMermaidPreloads(sources);
@@ -168,6 +242,8 @@ export function createMermaidDocumentPreloader(
     ).finally(() => {
       if (pendingBatch !== batch) return;
       pendingBatch = null;
+      if (ordinaryDocument && !rescheduleAfterBatch && !disposed && generation === runGeneration
+        && (reading?.isActive() ?? true)) ordinaryWarmDocument = ordinaryDocument;
       if (rescheduleAfterBatch && !disposed && latestState) {
         rescheduleAfterBatch = false;
         schedule(latestState);
@@ -180,20 +256,26 @@ export function createMermaidDocumentPreloader(
     // Geometry/publication updates do not change this source. Let an admitted
     // render finish into the shared cache, then select the newest window. An
     // abort here can discard its only waiter just before a visible leaf joins.
-    if (!replace && pendingBatch && latestState?.doc === state.doc && reading?.isActive()) {
-      latestState = state;
+    const retained = !replace && pendingBatch && latestState?.doc === state.doc && reading?.isActive();
+    if (retained) {
       rescheduleAfterBatch = true;
-      return;
+    } else {
+      pendingBatch?.abort();
+      pendingBatch = null;
+      rescheduleAfterBatch = false;
+      generation += 1;
     }
     cancelScrollWait?.();
     cancelScrollWait = null;
-    pendingBatch?.abort();
-    pendingBatch = null;
-    rescheduleAfterBatch = false;
     const documentChanged = latestState !== null && latestState.doc !== state.doc;
     if (documentChanged) inputQuietUntil = performance.now() + 200;
+    if (documentChanged || replace || reading?.isActive() === false) {
+      preparedImages.clear();
+      ordinaryWarmDocument = null;
+    }
+    if (documentChanged || replace) pendingImages.clear();
     latestState = state;
-    generation += 1;
+    if (timer !== null && !replace && !documentChanged) return;
     if (timer !== null) window.clearTimeout(timer);
     // Split edits submit visible work after 80ms. Warming an unrelated diagram
     // sooner can monopolize the serial renderer before that request exists.
@@ -204,9 +286,11 @@ export function createMermaidDocumentPreloader(
   const unsubscribeThemeRefresh = consumer.subscribeThemeRefresh(() => {
     if (latestState) schedule(latestState, true);
   });
+  const unsubscribeTokens = subscribeShikiRefresh(() => { if (latestState) schedule(latestState); });
 
   return {
     schedule,
+    resourceContextChanged() { if (latestState) schedule(latestState, true); },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -218,7 +302,9 @@ export function createMermaidDocumentPreloader(
       if (timer !== null) window.clearTimeout(timer);
       timer = null;
       latestState = null;
+      preparedImages.clear(); pendingImages.clear();
       unsubscribeThemeRefresh();
+      unsubscribeTokens();
     }
   };
 }

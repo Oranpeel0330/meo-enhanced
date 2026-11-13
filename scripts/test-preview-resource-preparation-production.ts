@@ -5,11 +5,14 @@ import { browser, server, open } from './input-presentation-test-helpers';
 import { closeTestBrowser } from './browser-test-helpers';
 
 const requests: string[] = [], resolutions: string[] = [];
+const network: { source: string; phase: string; time: number }[] = [];
 let heldImage = Promise.resolve(), releaseHeldImage = () => {};
 const assets = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
   requests.push(new URL(request.url).pathname);
+  network.push({ source: new URL(request.url).pathname, phase: 'request', time: Date.now() });
   if (new URL(request.url).pathname === '/held.svg') await heldImage;
   await new Promise(resolve => setTimeout(resolve, 180));
+  network.push({ source: new URL(request.url).pathname, phase: 'response', time: Date.now() });
   return new Response('<svg xmlns="http://www.w3.org/2000/svg" width="640" height="260"><rect width="640" height="260" fill="#35678a"/><text x="30" y="120" fill="white">Prepared image</text></svg>',
     { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'no-store', 'Timing-Allow-Origin': '*' } });
 } });
@@ -32,7 +35,7 @@ const reports: unknown[] = [];
 let primaryError: unknown;
 try {
   for (const large of [false, true]) {
-    requests.length = resolutions.length = 0;
+    requests.length = resolutions.length = network.length = 0;
     const text = fixture(large);
     assert.equal(assessLargeDocument(text).windowedPreview, large);
     const page = await browser.newPage();
@@ -45,7 +48,7 @@ try {
     try {
       const point = await page.evaluate(() => {
         const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!, doc = frame.contentDocument!;
-        const probe = { active: true, scrolling: true, samples: [] as Sample[], mounted: {} as Record<string, number> };
+        const probe = { active: true, scrolling: true, origin: performance.timeOrigin, samples: [] as Sample[], mounted: {} as Record<string, number> };
         (window as any).__resourcePreparationProbe = probe;
         const sample = () => {
           if (!probe.active) return;
@@ -91,14 +94,19 @@ try {
       await new Promise(resolve => setTimeout(resolve, 700));
       const observation = await page.evaluate(() => {
         const probe = (window as any).__resourcePreparationProbe; probe.active = false; return probe;
-      }) as { samples: Sample[]; mounted: Record<string, number> };
+      }) as { origin: number; samples: Sample[]; mounted: Record<string, number> };
       const moving = observation.samples.filter(sample => sample.scrolling);
       const keys = new Set(moving.flatMap(sample => sample.targets.map(target => `${target.kind}:${target.id}`)));
       const entries = [...keys].map(key => {
         const visible = moving.filter(sample => sample.targets.some(target => `${target.kind}:${target.id}` === key));
         const ready = visible.filter(sample => sample.targets.some(target => `${target.kind}:${target.id}` === key && target.ready));
-        return { key, frames: visible.length, ready: ready.length, initialBlank: ready.length ? visible.indexOf(ready[0]!) : visible.length };
+        const anyReady = observation.samples.find(sample => sample.targets.some(target => `${target.kind}:${target.id}` === key && target.ready));
+        return { key, frames: visible.length, ready: ready.length, initialBlank: ready.length ? visible.indexOf(ready[0]!) : visible.length,
+          firstVisible: visible[0]?.time, lastVisible: visible.at(-1)?.time, firstReady: anyReady?.time };
       }).filter(entry => entry.frames >= 8);
+      reports.push({ large, entries, requests: [...requests], network: network.map(event => ({ ...event, time: event.time - observation.origin })) });
+      fs.mkdirSync('.local/probes', { recursive: true });
+      fs.writeFileSync('.local/probes/preview-resource-preparation-production.json', JSON.stringify(reports, null, 2));
       for (const kind of ['code', 'image', 'math', 'poster']) {
         assert.ok(entries.filter(entry => entry.key.startsWith(kind + ':')).length >= 3, `${large}/${kind}: actual viewport crossings required`);
       }
@@ -114,7 +122,6 @@ try {
       const screenshot = `.local/probes/preview-resource-preparation-${large ? 'windowed' : 'ordinary'}.png`;
       fs.mkdirSync('.local/probes', { recursive: true });
       await page.screenshot({ path: screenshot });
-      reports.push({ large, entries, requests: [...requests], resolutions: resolutions.length, screenshot });
     } finally { host.dispose(); await page.close(); }
   }
   heldImage = new Promise<void>(resolve => { releaseHeldImage = resolve; });

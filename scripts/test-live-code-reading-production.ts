@@ -7,7 +7,9 @@ import { closeTestBrowser } from './browser-test-helpers';
 let primary: unknown;
 try {
   for (const large of [false, true]) {
-    const text = Array.from({ length: large ? 90 : 16 }, (_, block) => [
+    const text = '```typescript\nconst initialWarmLanguage = true;\n```\n\n'
+      + Array.from({ length: 40 }, (_, index) => `Opening paragraph ${index}. ${'Stable prose. '.repeat(8)}\n\n`).join('')
+      + Array.from({ length: large ? 90 : 16 }, (_, block) => [
       `## Reading ${block}`, '',
       ...Array.from({ length: 3 }, (_, row) => `Paragraph ${block}-${row}: ${'Stable reading text. '.repeat(5)}`), '',
       block === 11 ? '```python' : '```typescript',
@@ -34,13 +36,15 @@ try {
     const host = await open(page, text, false, 'live');
     try {
       await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('.editor-host .cm-line')]
-        .some(line => line.textContent?.includes('readingRow0_0') && [...line.querySelectorAll<HTMLElement>('span[style]')]
+        .some(line => line.textContent?.includes('initialWarmLanguage') && [...line.querySelectorAll<HTMLElement>('span[style]')]
           .some(span => !!span.style.color && !span.style.color.includes('var('))));
       const point = await page.evaluate(position => {
         const scope = window as any, probe = scope.__codeReading;
         const view = document.querySelector<any>('.editor-host .cm-content').cmTile.root.view;
         const bounds = view.scrollDOM.getBoundingClientRect();
-        view.scrollDOM.scrollTop = view.lineBlockAt(position).top - bounds.height * 3.5;
+        // Start beyond the shared cache band, so dispatch during motion is
+        // still observed rather than pre-completed by the idle approach.
+        view.scrollDOM.scrollTop = view.lineBlockAt(position).top - bounds.height * 4.5;
         const wheel = (event: WheelEvent) => { probe.wheels.push(event.isTrusted); probe.lastWheel = performance.now(); };
         view.scrollDOM.addEventListener('wheel', wheel, { passive: true });
         probe.stop = () => { probe.active = false; view.scrollDOM.removeEventListener('wheel', wheel); };
@@ -95,7 +99,7 @@ try {
       assert.ok(result.preparedWhileScrolling, 'A short block in a warm language must prepare during scrolling');
       assert.ok(result.colored >= 12, 'Prepared code must become colored while native scrolling continues');
       assert.ok(result.geometryDrift <= 2, 'Coloring must retain the reading witness throughout native motion');
-      assert.ok(!result.requests.some((code: string) => code.includes('readingRow11_0')), 'Cold languages must retain their original scroll admission');
+      assert.ok(result.requests.some((code: string) => code.includes('readingRow11_0')), 'A nearby cold language may prepare in the Worker while its DOM keeps the scrolling admission');
       assert.ok(!result.requests.some((code: string) => code.includes('readingRow12_0')), 'Oversized fences must retain their original scroll admission');
       assert.ok(!result.requests.some((code: string) => code.includes('readingRow15_0')), 'Reading must not prepare distant document content');
       assert.equal(host.readHost(), text);

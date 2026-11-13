@@ -176,7 +176,7 @@ import { setEditorHistoryRunner, type EditorHistoryDirection } from './helpers/h
 import { createEditorHistoryApplication, type EditorHistoryContext, type EditorHistoryViewport } from './application/editorHistory';
 import { createEditorHistoryEffectAdapter, type EditorHistoryRestoreRequest } from './adapters/editorHistoryEffectAdapter';
 import { createEditorHistoryRuntime, type EditorHistoryRuntime } from './adapters/editorHistoryRuntime';
-import { resolveConfiguredImageSrc } from './helpers/images';
+import { resolveConfiguredImageSrc, getImageData } from './helpers/images';
 import {
   createImagePresentationFactory,
   createImagePresentationResourcePool,
@@ -188,9 +188,9 @@ import {
   type MermaidDiagramPresentationFactory
 } from './editor/mermaidDiagramPresentation';
 import {
-  createMermaidDocumentPreloader,
-  type MermaidDocumentPreloader
-} from './helpers/mermaidDocumentPreloader';
+  createDocumentReadingPreparation,
+  type DocumentReadingPreparation
+} from './helpers/documentReadingPreparation';
 import {
   beginLiveInputComposition,
   completeLiveInputComposition,
@@ -387,7 +387,7 @@ export function createEditor({
   let onEditorFocusCapture: ((event: FocusEvent) => void) | null = null;
   let onEditorFocusOut: ((event: FocusEvent) => void) | null = null;
   let onEditorPointerDown: ((event: PointerEvent) => void) | null = null;
-  let mermaidDocumentPreloader: MermaidDocumentPreloader | null = null;
+  let documentReadingPreparation: DocumentReadingPreparation | null = null;
   let currentMode: EditableEditorMode = startMode;
   let lastSearchStateSignature = '';
   let lastGitDiffSummarySignature = '';
@@ -484,7 +484,7 @@ export function createEditor({
           )], annotations: Transaction.addToHistory.of(false) });
           flushEditorLayout(view);
         });
-        mermaidDocumentPreloader?.schedule(view.state);
+        documentReadingPreparation?.schedule(view.state);
       };
       if (typeof requestIdleCallback === 'function') assessmentIdle = requestIdleCallback(assess, { timeout: 500 });
       else assess();
@@ -2692,9 +2692,9 @@ export function createEditor({
           emitSelectionChange();
         }
 
-        if (currentMode === 'live' && boundedEditorWork && !update.docChanged
+        if (currentMode === 'live' && !update.docChanged
           && (update.viewportChanged || update.geometryChanged || liveDerivedRefresh || update.selectionSet)) {
-          mermaidDocumentPreloader?.schedule(update.state);
+          documentReadingPreparation?.schedule(update.state);
         }
 
         if (update.docChanged) {
@@ -2702,7 +2702,7 @@ export function createEditor({
             unassessedCharacters = Math.min(512, unassessedCharacters + to - from + nextTo - nextFrom);
           });
           scheduleLargeDocumentAssessment();
-          if (currentMode === 'live') mermaidDocumentPreloader?.schedule(update.state);
+          if (currentMode === 'live') documentReadingPreparation?.schedule(update.state);
           if (!applyingExternal && !isHistoryReplayUpdate(update)) {
             void editorHistoryRuntime?.dispatch({ type: 'localDocumentEdited' });
           }
@@ -2944,9 +2944,24 @@ export function createEditor({
     getMode: () => currentMode === 'live' ? 'live' : 'source',
     previewSurface: previewViewportSurface
   });
-  // Warm a few nearby SVGs independently of virtual Widget DOM, while keeping
-  // cold generation behind native scrolling and active editing.
-  mermaidDocumentPreloader = createMermaidDocumentPreloader(
+  const isReadingPreparationActive = () => {
+    const host = view.dom.closest<HTMLElement>('.editor-host');
+    return !editorDestroyed && currentMode === 'live' && view.inView && !host?.hidden && !host?.inert
+      && !view.compositionStarted && !viewportController.isScrollbarDragging()
+      && !isLivePointerSelectionActive(view.state) && !isLiveInputDerivedWorkPending(view.state);
+  };
+  const readPreparationWindow = () => {
+    if (!isReadingPreparationActive() || !view.dom.isConnected || !isLiveInputDerivedWorkReady(view.state, view)) return null;
+    const bounds = editorViewportBounds(view);
+    const range = readingPreparationRange(bounds.top - view.documentTop, bounds.bottom - view.documentTop, 'idle-cache');
+    const from = view.lineBlockAtHeight(Math.max(0, range.from)).from;
+    const to = view.lineBlockAtHeight(Math.min(view.contentHeight, range.to)).to;
+    if (to - from > 131_072) return null;
+    return { from, to, anchor: view.lineBlockAtHeight(Math.max(0, bounds.top - view.documentTop)).from };
+  };
+  // Data preparation is independent of virtual Widget DOM. Cold diagram work
+  // retains its gesture boundary; Worker tokens and image loads share the window.
+  documentReadingPreparation = createDocumentReadingPreparation(
     mermaidDiagramPresentationConsumer,
     () => {
       if (!editorDestroyed && currentMode === 'live') {
@@ -2955,24 +2970,21 @@ export function createEditor({
     },
     () => viewportController.isUserScrolling(),
     {
-      isActive: () => !editorDestroyed && currentMode === 'live' && !view.compositionStarted
-        && !isLivePointerSelectionActive(view.state),
+      isActive: isReadingPreparationActive,
       afterUserScroll: operation => viewportController.afterUserScroll(operation),
+      readContentWindow: readPreparationWindow,
       readWindow() {
-        if (currentMode !== 'live' || !view.dom.isConnected || view.compositionStarted
-          || isLivePointerSelectionActive(view.state) || !isLiveInputDerivedWorkReady(view.state, view)) return null;
+        if (!isReadingPreparationActive() || !view.dom.isConnected || !isLiveInputDerivedWorkReady(view.state, view)) return null;
         if (!boundedEditorWork) return undefined;
-        const bounds = editorViewportBounds(view);
-        const range = readingPreparationRange(bounds.top - view.documentTop, bounds.bottom - view.documentTop, 'idle-cache');
-        const from = view.lineBlockAtHeight(Math.max(0, range.from)).from;
-        const to = view.lineBlockAtHeight(Math.min(view.contentHeight, range.to)).to;
-        // Huge source spans/blocks retain visible demand, not speculative work.
-        if (to - from > 131_072) return null;
-        return { from, to, anchor: view.lineBlockAtHeight(Math.max(0, bounds.top - view.documentTop)).from };
+        return readPreparationWindow();
       }
+    },
+    {
+      source: (state, node) => getImageData(state, node).url,
+      preload: source => imagePresentationFactory.preload(source)
     }
   );
-  if (startMode === 'live') mermaidDocumentPreloader?.schedule(view.state);
+  if (startMode === 'live') documentReadingPreparation?.schedule(view.state);
   interactionContinuity = createEditorInteractionContinuity({
     view,
     viewport: {
@@ -4110,8 +4122,8 @@ export function createEditor({
       viewportController.destroy();
       tableTransactionProvenanceAdapter.dispose();
       tableColumnWidthAdapter.adapter.dispose();
-      mermaidDocumentPreloader?.dispose();
-      mermaidDocumentPreloader = null;
+      documentReadingPreparation?.dispose();
+      documentReadingPreparation = null;
       if (assessmentTimer !== null) clearTimeout(assessmentTimer);
       if (assessmentIdle !== null) cancelIdleCallback(assessmentIdle);
       view.destroy();
@@ -4149,6 +4161,7 @@ export function createEditor({
         };
         tableCommandRuntime.externalDocumentPresented();
         imagePresentationFactory.externalDocumentPresented();
+        documentReadingPreparation?.resourceContextChanged();
         void editorHistoryRuntime?.dispatch({ type: 'externalDocumentPresented' });
         mermaidDiagramPresentationConsumer.externalDocumentPresented();
         const currentText = readDocumentTextProjection(view.state.doc);
@@ -4309,7 +4322,7 @@ export function createEditor({
           refreshLiveSyntax(view, boundedEditorWork);
           tableColumnWidthAdapter.adapter.acquire();
         }
-        mermaidDocumentPreloader?.schedule(view.state);
+        documentReadingPreparation?.schedule(view.state);
         syncModeClasses();
         // Reconfiguration invalidates CodeMirror's height map. Finish its queued
         // measurement before the browser can paint the unanchored intermediate frame.

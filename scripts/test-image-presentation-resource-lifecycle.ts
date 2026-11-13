@@ -169,6 +169,7 @@ const factoryPool: ImagePresentationResourcePool = {
   getResolved: () => null,
   load: async () => null,
   getLoaded: () => null,
+  claimLoadedImage: () => null,
   getIntrinsicSize: () => null,
   dispose() { poolDisposeCalls += 1; }
 };

@@ -470,7 +470,9 @@ export class ImageWidget extends WidgetType {
   }
 
   createDisplayImage(cachedImage: HTMLImageElement): HTMLImageElement {
-    const img = cachedImage.cloneNode(false) as HTMLImageElement;
+    // The adapter transfers an owned projection, including the decoded node
+    // for its first display. A new clone would discard that readiness.
+    const img = cachedImage;
     img.className = 'meo-md-image-img';
     img.alt = this.altText;
     img.loading = 'eager';

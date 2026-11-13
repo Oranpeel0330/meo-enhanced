@@ -32,8 +32,8 @@ export function markdownPresentationBlocks(tokens: readonly MarkdownNode[], sour
       sourceCharacters += node.content.length;
       // Inline children remain lazy. This hint may overselect literal markers;
       // only the bounded rendered chunk discovers actual resource requests.
-      mayHaveResources ||= /fence|code_block|html|math|table/.test(node.type)
-        || node.type === 'inline' && /!\[|<|\$/.test(node.content);
+      mayHaveResources ||= /fence|code_block|html/.test(node.type)
+        || node.type === 'inline' && /!\[|</.test(node.content);
       if (node.meta?.meoSourceFootnote) {
         sourceEndLine = Math.max(sourceEndLine, node.meta.meoSourceFootnote.sourceEndLine);
         sourceCharacters += node.meta.meoSourceFootnote.sourceCharacters;

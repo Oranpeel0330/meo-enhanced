@@ -1,5 +1,6 @@
 export type ImagePresentationView = {
   showFallback(sourceKey: string): boolean;
+  /** Receives an owned projection; presentation styling may mutate this node. */
   showImage(image: HTMLImageElement): boolean;
   preserveLayoutChange(apply: () => boolean): boolean | Promise<boolean>;
   isVisible?(): boolean;

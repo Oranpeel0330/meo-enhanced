@@ -1181,17 +1181,21 @@ export function createPreviewController({
       if (!current() || !chunks.length) return;
       let offset = 0;
       // Fetching is async; parsing/probing the returned HTML is synchronous
-      // work and must re-enter the measured queue, one chunk per step.
+      // work and must re-enter the measured queue. Cheap chunks share a turn;
+      // large ones yield before consuming the rest of the reading budget.
       readingWork.prepare(readingContentKey, () => {
         if (!current()) return;
-        const chunk = chunks[offset++]!;
-        if (chunk.html.length <= 196_608) {
-          const template = frameDocument.createElement('template');
-          template.innerHTML = chunk.html;
-          if (isSourceColoringEnabled()) isPreviewCodeHighlightReady(template.content, currentCodeHighlight(frameDocument), frameDocument);
-          if (prepareDeferredResources?.(template.content) === false) return;
-        }
-        preparedReadingChunks.set(chunk, version);
+        const started = performance.now();
+        do {
+          const chunk = chunks[offset++]!;
+          if (chunk.html.length <= 196_608) {
+            const template = frameDocument.createElement('template');
+            template.innerHTML = chunk.html;
+            if (isSourceColoringEnabled()) isPreviewCodeHighlightReady(template.content, currentCodeHighlight(frameDocument), frameDocument);
+            if (prepareDeferredResources?.(template.content) === false) return;
+          }
+          preparedReadingChunks.set(chunk, version);
+        } while (offset < chunks.length && performance.now() - started < 2);
         const more = offset < chunks.length;
         // Capacity wakes from completion, rather than resource polling.
         if (!more && chunks.length === 4) scheduleViewportHighlight(frameDocument, 'resources');

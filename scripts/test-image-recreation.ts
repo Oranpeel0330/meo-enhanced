@@ -15,6 +15,7 @@ class FakeElement {
   isConnected = false;
   naturalWidth = 0;
   tagName: string;
+  attributes: { name: string; value: string }[] = [];
   listeners = new Map<string, Array<() => void>>();
 
   constructor(tagName = 'img') {
@@ -40,6 +41,7 @@ class FakeElement {
     clone.naturalWidth = this.naturalWidth;
     return clone;
   }
+  decode() { return Promise.resolve(); }
 
   addEventListener(type: string, listener: () => void) {
     const listeners = this.listeners.get(type) ?? [];
@@ -66,6 +68,7 @@ class FakeElement {
     this.children = children;
   }
   setAttribute() {}
+  removeAttribute() {}
 }
 
 (globalThis as any).document = {
