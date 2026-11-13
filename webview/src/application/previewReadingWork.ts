@@ -49,13 +49,25 @@ export function createPreviewReadingWork(options: {
         // Do not capture a reading anchor when no result can be admitted.
         const first = nextReady();
         if (!first) return false;
-        if (first[1].preparation) {
-          const [key, work] = first;
+        // Starting cheap async work need not consume a whole display frame.
+        // Keep it outside anchor capture, within the same measured budget.
+        while (epoch === generation && ran < 8) {
+          const next = nextReady(seen);
+          if (!next?.[1].preparation) break;
+          const [key, work] = next;
+          if (ran && options.now() - started + (costs.get(key) ?? 1) >= budget) break;
           pending.delete(key);
+          seen.add(key);
+          const before = options.now();
           const more = work.step();
+          costs.set(key, Math.max(0.25, options.now() - before));
+          ran++;
           if (more && epoch === generation && !pending.has(key)) pending.set(key, work);
-          return !!nextReady();
+          if (options.now() - started >= budget) break;
         }
+        const mutation = nextReady(seen);
+        if (epoch !== generation || ran >= 8 || !mutation || mutation[1].preparation
+          || ran && options.now() - started + (costs.get(mutation[0]) ?? 1) >= budget) return !!nextReady();
         options.batch(() => {
           while (epoch === generation && ran < 8) {
             const next = nextReady(seen);

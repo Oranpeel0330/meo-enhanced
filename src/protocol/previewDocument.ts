@@ -25,6 +25,7 @@ export function decodePreviewDocumentManifest(value: unknown): PreviewDocumentMa
   if (!value.blocks.every((block, index) => record(block) && block.index === index && integer(block.sourceLine)
     && block.sourceLine >= 1 && integer(block.sourceEndLine) && block.sourceEndLine >= block.sourceLine
     && integer(block.sourceCharacters) && typeof block.kind === 'string'
+    && (block.mayHaveResources === undefined || typeof block.mayHaveResources === 'boolean')
     && (block.sourceRanges === undefined || Array.isArray(block.sourceRanges) && block.sourceRanges.every(range =>
       record(range) && integer(range.start) && range.start >= 1 && integer(range.end) && range.end >= range.start)))
     || !value.headings.every(heading => record(heading) && typeof heading.text === 'string' && typeof heading.id === 'string'

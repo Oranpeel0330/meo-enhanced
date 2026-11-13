@@ -4,6 +4,8 @@ export type PreviewDocumentBlock = Readonly<{
   sourceEndLine: number;
   kind: string;
   sourceCharacters: number;
+  /** Conservative parser hint; preparation still checks the rendered chunk. */
+  mayHaveResources?: boolean;
   sourceRanges?: readonly Readonly<{ start: number; end: number }>[];
 }>;
 

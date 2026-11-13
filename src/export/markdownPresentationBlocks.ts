@@ -22,7 +22,7 @@ export function markdownPresentationBlocks(tokens: readonly MarkdownNode[], sour
   });
   const writeHtml = (source: string) => { htmlCharacters += source.length; html.write(source); };
   const add = (to: number) => {
-    let sourceLine = Infinity, sourceEndLine = 0, sourceCharacters = 0;
+    let sourceLine = Infinity, sourceEndLine = 0, sourceCharacters = 0, mayHaveResources = false;
     for (let index = from; index < to; index += 1) {
       const node = tokens[index]!;
       if (node.map) {
@@ -30,6 +30,10 @@ export function markdownPresentationBlocks(tokens: readonly MarkdownNode[], sour
         sourceEndLine = Math.max(sourceEndLine, sourceLines[Math.max(node.map[0], node.map[1] - 1)] ?? node.map[1]);
       }
       sourceCharacters += node.content.length;
+      // Inline children remain lazy. This hint may overselect literal markers;
+      // only the bounded rendered chunk discovers actual resource requests.
+      mayHaveResources ||= /fence|code_block|html|math|table/.test(node.type)
+        || node.type === 'inline' && /!\[|<|\$/.test(node.content);
       if (node.meta?.meoSourceFootnote) {
         sourceEndLine = Math.max(sourceEndLine, node.meta.meoSourceFootnote.sourceEndLine);
         sourceCharacters += node.meta.meoSourceFootnote.sourceCharacters;
@@ -37,7 +41,8 @@ export function markdownPresentationBlocks(tokens: readonly MarkdownNode[], sour
     }
     blocks.push({ index: blocks.length, from, to, kind: tokens[from]?.meta?.meoSourceFootnote ? 'source-footnote' : tokens[from]?.type ?? 'empty',
       sourceLine: Number.isFinite(sourceLine) ? sourceLine : 1,
-      sourceEndLine: Math.max(Number.isFinite(sourceLine) ? sourceLine : 1, sourceEndLine), sourceCharacters });
+      sourceEndLine: Math.max(Number.isFinite(sourceLine) ? sourceLine : 1, sourceEndLine), sourceCharacters,
+      ...(mayHaveResources ? { mayHaveResources: true } : {}) });
     from = to;
   };
   for (let index = 0; index < tokens.length; index += 1) {

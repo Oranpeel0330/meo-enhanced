@@ -146,7 +146,8 @@ async function assertStablePaint(page: Page, clip: PaintClip | readonly PaintCli
 }
 
 async function open(page: Page, text: string, coldPreview = false, initialMode: 'source' | 'live' | 'preview' = 'source',
-  testOptions: { uiLanguage?: 'en' | 'zh-CN'; beforePreviewRender?: () => Promise<void>; outlineVisible?: boolean; latexDelimiters?: boolean } = {}) {
+  testOptions: { uiLanguage?: 'en' | 'zh-CN'; beforePreviewRender?: () => Promise<void>; outlineVisible?: boolean; latexDelimiters?: boolean;
+    resolveImageSrc?: (url: string) => string | Promise<string> } = {}) {
   let hostText = text, version = 1, ready = false, firstRender = false;
   let renderedText = '', renderedDocumentId: string | undefined;
   const documents = new Map<string, ReturnType<typeof createPreviewDocument>>();
@@ -195,6 +196,10 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
       } else value = exportRuntime.renderPreviewDocument(options);
       renderedText = message.text; renderedDocumentId = value.document?.id;
       return { type: 'previewRenderResult', requestId: message.requestId, result: { ok: true, value } };
+    }
+    if (message.type === 'resolveImageSrc' && testOptions.resolveImageSrc) {
+      return { type: 'resolvedImageSrc', requestId: message.requestId,
+        result: { ok: true, value: { resolvedUrl: await testOptions.resolveImageSrc(message.url) } } };
     }
     if (message.type === 'requestPreviewDocument') {
       // Force an observable inter-frame handoff. The old reading DOM must stay

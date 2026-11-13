@@ -538,7 +538,8 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
     kind: 'frontmatter', sourceCharacters: prefix.length }] : [];
   const blocks: MarkdownPresentationBlock[] = [...prefixBlocks, ...tokenBlocks.map(block => ({
     index: block.index + prefixBlocks.length, sourceLine: block.sourceLine, sourceEndLine: block.sourceEndLine,
-    kind: block.kind, sourceCharacters: block.sourceCharacters
+    kind: block.kind, sourceCharacters: block.sourceCharacters,
+    ...(block.mayHaveResources ? { mayHaveResources: true } : {})
   }))];
   const footnotes = options.sourceFootnotes ? [] : preparedMarkdown.footnotes;
   const splitFootnotes = options.windowedPresentation === true && footnotes.length > 1;

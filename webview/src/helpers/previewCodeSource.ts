@@ -3,12 +3,12 @@ import type { PreviewCodeSource } from '../../../src/foundation/previewDocument'
 const documents = new WeakMap<Document, Map<string, PreviewCodeSource>>();
 const retained = new WeakMap<Element, PreviewCodeSource>();
 
-export function previewCodeSource(code: Element): PreviewCodeSource | undefined {
+export function previewCodeSource(code: Element, sourceDocument = code.ownerDocument): PreviewCodeSource | undefined {
   const id = code.closest<HTMLElement>('[data-meo-code-id]')?.dataset.meoCodeId;
   if (!id) return undefined;
   const previous = retained.get(code);
   if (previous?.id === id) return previous;
-  const source = documents.get(code.ownerDocument)?.get(id);
+  const source = documents.get(sourceDocument)?.get(id);
   if (source) retained.set(code, source);
   return source;
 }

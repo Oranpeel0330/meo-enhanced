@@ -704,6 +704,7 @@
       "scripts/test-preview-preset-preferences-browser.ts",
       "scripts/test-preview-presets-browser.ts",
       "scripts/test-preview-reading-surface-production.ts",
+      "scripts/test-preview-resource-preparation-production.ts",
       "scripts/test-preview-context-menu-production.ts",
       "scripts/test-preview-rendered-actions.ts",
       "scripts/test-preview-shortcuts-production.ts",

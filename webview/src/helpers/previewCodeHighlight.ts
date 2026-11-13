@@ -45,7 +45,7 @@ function applyTokenStyle(element: HTMLElement, run: ShikiPresentationRun): void 
   if (fontStyle & FONT_STYLE_UNDERLINE) element.style.textDecoration = 'underline';
 }
 
-function getHighlightRequest(code: HTMLElement): {
+function getHighlightRequest(code: HTMLElement, sourceDocument = code.ownerDocument): {
   readonly language: string;
   readonly source: string;
   readonly sources: readonly HTMLElement[];
@@ -57,7 +57,7 @@ function getHighlightRequest(code: HTMLElement): {
   if (!language) return null;
   const sources = Array.from(code.querySelectorAll<HTMLElement>('.meo-export-code-line-source'));
   if (sources.length === 0) return null;
-  const context = previewCodeSource(code);
+  const context = previewCodeSource(code, sourceDocument);
   return {
     language,
     source: context?.source ?? sources.map((line) => line.textContent ?? '').join('\n'),
@@ -68,10 +68,10 @@ function getHighlightRequest(code: HTMLElement): {
 }
 
 /** Returns false only after scheduling tokens needed for an atomic visible update. */
-export function isPreviewCodeHighlightReady(root: ParentNode, isCurrent: () => boolean = () => true): boolean {
+export function isPreviewCodeHighlightReady(root: ParentNode, isCurrent: () => boolean = () => true, sourceDocument?: Document): boolean {
   let ready = true;
   for (const code of root.querySelectorAll<HTMLElement>('code.hljs')) {
-    const request = getHighlightRequest(code);
+    const request = getHighlightRequest(code, sourceDocument);
     if (!request || getShikiTokens(request.language, request.source, 'preview', request.offset + request.sources.length)) continue;
     requestShikiTokens(request.language, request.source, 'preview', isCurrent);
     ready = false;
@@ -82,7 +82,7 @@ export function isPreviewCodeHighlightReady(root: ParentNode, isCurrent: () => b
 /** Whether a block has themed reading rows to preserve during an atomic update. */
 export function hasAppliedPreviewCodeHighlight(root: ParentNode): boolean {
   const requests = Array.from(root.querySelectorAll<HTMLElement>('code.hljs'))
-    .map(getHighlightRequest)
+    .map(code => getHighlightRequest(code))
     .filter((request): request is NonNullable<ReturnType<typeof getHighlightRequest>> => request !== null);
   if (requests.length === 0) return false;
   return requests.every(request => request.sources.some(source => source.dataset.meoShiki === request.version));

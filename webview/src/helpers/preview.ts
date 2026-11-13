@@ -14,6 +14,8 @@ import { getExportStyleEnvironment } from './export';
 import { documentSurfaceVariables } from '../../../src/shared/documentSurfaceRoles';
 import { createPreviewMermaidRenderer, readPreviewMermaidWarmupSources } from './previewMermaid';
 import { createPreviewReadingWork } from '../application/previewReadingWork';
+import type { PreviewDocumentChunk } from '../../../src/foundation/previewDocument';
+import { createPreviewResourcePreparation, decodePreviewImage } from './previewResourcePreparation';
 import { readingResourceDistance } from '../application/readingWindow';
 import { observeReadingViewport, type ReadingViewportObserver } from '../editor/readingViewportObserver';
 import { addPreviewCodeCopyControls, previewCopyBlockSelector, previewCopyBlockKind, closePreviewBlockFullscreen } from './previewBlockActions';
@@ -49,7 +51,7 @@ import {
   isPreviewCodeHighlightReady,
   previewCodeReadingBand
 } from './previewCodeHighlight';
-import { activateShikiCodeHighlighting, subscribeShikiRefresh, setShikiTheme, type RawVscodeTheme } from './shikiHighlighter';
+import { activateShikiCodeHighlighting, subscribeShikiRefresh, setShikiTheme, getShikiThemeVersion, type RawVscodeTheme } from './shikiHighlighter';
 import { createToolbarDropdown } from './toolbarDropdown';
 import { createPreviewFontPicker } from '../adapters/previewFontPicker';
 import { fallbackPreviewFonts, type PreviewFont } from '../../../src/foundation/previewFonts';
@@ -1099,7 +1101,11 @@ export function createPreviewController({
       }
     }
   );
-  let disposeDeferredImages = () => {};
+  let disposePreviewResources = () => {};
+  let refreshPreviewResources: ((document: Document) => boolean) | null = null;
+  let prepareDeferredResources: ((root: ParentNode) => boolean) | null = null;
+  const preparedReadingChunks = new WeakMap<PreviewDocumentChunk, string>();
+  let preparingReadingDocument: Document | null = null;
   let previewImageActions: ReturnType<typeof createPreviewImageActions> | null = null;
   let refreshPreviewImage: (image: HTMLImageElement) => Promise<void> = async () => {};
   let frameEvents: AbortController | null = null;
@@ -1110,7 +1116,8 @@ export function createPreviewController({
   let highlightFrame: number | null = null;
   let highlightTimer: number | null = null;
   let readingBatch = false;
-  const readingKeys = { math: {}, actions: {}, blocks: {}, code: {}, readable: {}, mermaid: {} };
+  const readingKeys = { math: {}, actions: {}, blocks: {}, code: {}, readable: {}, resources: {}, mermaid: {} };
+  const readingContentKey = {};
   type ReadingKind = keyof typeof readingKeys;
   const readingWork = createPreviewReadingWork({ now: () => performance.now(), batch(run) {
     withViewportTransaction(() => { readingBatch = true; try { run(); } finally { readingBatch = false; } });
@@ -1160,8 +1167,42 @@ export function createPreviewController({
   const commitMermaidReading = (frameDocument: Document, mutate: () => void, elements?: readonly HTMLElement[]) =>
     enqueueReadingCommit(frameDocument, mutate, undefined, () => activePreviewPointers.size === 0
       && (!isViewportInteracting() || !!elements?.length && elements.every(element => canCommitReadingElement(element))));
+  const prepareReadingContent = async (frameDocument: Document) => {
+    if (preparingReadingDocument === frameDocument || !previewViewport) return;
+    preparingReadingDocument = frameDocument;
+    const generation = frameGeneration;
+    const current = () => !disposed && !host.hidden && activePreviewPointers.size === 0
+      && generation === frameGeneration && activeFrameDocument === frameDocument;
+    const version = `${getShikiThemeVersion('preview')}:${isSourceColoringEnabled()}`;
+    try {
+      const chunks = await previewViewport.prepareReadingCache(current, {
+        prepared: chunk => preparedReadingChunks.get(chunk) === version
+      });
+      if (!current() || !chunks.length) return;
+      let offset = 0;
+      // Fetching is async; parsing/probing the returned HTML is synchronous
+      // work and must re-enter the measured queue, one chunk per step.
+      readingWork.prepare(readingContentKey, () => {
+        if (!current()) return;
+        const chunk = chunks[offset++]!;
+        if (chunk.html.length <= 196_608) {
+          const template = frameDocument.createElement('template');
+          template.innerHTML = chunk.html;
+          if (isSourceColoringEnabled()) isPreviewCodeHighlightReady(template.content, currentCodeHighlight(frameDocument), frameDocument);
+          if (prepareDeferredResources?.(template.content) === false) return;
+        }
+        preparedReadingChunks.set(chunk, version);
+        const more = offset < chunks.length;
+        // Capacity wakes from completion, rather than resource polling.
+        if (!more && chunks.length === 4) scheduleViewportHighlight(frameDocument, 'resources');
+        return more;
+      }, current);
+      armViewportHighlight(frameDocument, true);
+    } catch (error) { if (current()) handleWindowError(error); }
+    finally { if (preparingReadingDocument === frameDocument) preparingReadingDocument = null; }
+  };
   const requestReadingWork = (frameDocument: Document, kind: ReadingKind, ready?: () => boolean) => {
-    const request = kind === 'mermaid' ? readingWork.prepare : readingWork.request;
+    const request = kind === 'mermaid' || kind === 'resources' ? readingWork.prepare : readingWork.request;
     request(readingKeys[kind], () => {
       if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
       switch (kind) {
@@ -1170,6 +1211,7 @@ export function createPreviewController({
         case 'blocks': refreshDocumentBlocks?.(frameDocument); break;
         case 'code': if (currentCodeHighlight(frameDocument)()) applyCodeHighlight(frameDocument, true); break;
         case 'readable': ensureReadableCode(frameDocument, false); break;
+        case 'resources': void prepareReadingContent(frameDocument); break;
         case 'mermaid': {
           if (!latestPayload?.hasMermaid) break;
           const generation = frameGeneration;
@@ -1181,7 +1223,7 @@ export function createPreviewController({
         }
       }
     }, () => ready?.() !== false && (kind === 'math' ? previewMathWork?.ready() !== false
-      : kind === 'code' || kind === 'mermaid' || !isViewportInteracting()));
+      : kind === 'code' || kind === 'mermaid' || kind === 'resources' || !isViewportInteracting()));
   };
   const scheduleViewportHighlight = (frameDocument: Document, kind?: ReadingKind, ready?: () => boolean) => {
     if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
@@ -1351,8 +1393,9 @@ export function createPreviewController({
     previewMathViewports.clear();
   };
 
-  const attachDeferredImages = (frameDocument: Document) => {
-    disposeDeferredImages();
+  const attachPreviewResources = (frameDocument: Document) => {
+    if (refreshPreviewResources?.(frameDocument)) return;
+    disposePreviewResources();
     const abortController = new AbortController();
     const pendingCommits: Array<() => void> = [];
     const pendingImages = new Map<HTMLElement, { attribute: string; source: string }>();
@@ -1387,64 +1430,110 @@ export function createPreviewController({
       commitFrame = frameDocument.defaultView?.requestAnimationFrame(flushCommits) ?? null;
       if (commitFrame === null) flushCommits();
     };
-    resolveHtmlResources(frameDocument, { signal: abortController.signal, resolve: resolveConfiguredImageSrc, commit: enqueueCommit });
-    const authorStyle = frameDocument.querySelector<HTMLStyleElement>('style[data-meo-preview-styles]');
-    if (authorStyle) resolveHtmlStylesElement(authorStyle, {signal:frameEvents?.signal ?? abortController.signal,commit:apply => {
-      const publish = () => {
-        if (disposed || activeFrameDocument !== frameDocument) return;
-        apply(); sourceMapDirty = true;
-      };
-      if (hasBoundedPreviewResources(frameDocument) && !host.hidden) {
-        void enqueueReadingCommit(frameDocument,publish,reason => {
-          if (host.hidden) publish();
-          else if (reason === 'failed') withViewportTransaction(publish);
-        },() => canCommitReadingElement()).catch(handleWindowError);
-      } else if (host.hidden) publish();
-      else withViewportTransaction(publish);
-    }});
-    for (const source of frameDocument.querySelectorAll<HTMLSourceElement>('picture source[data-meo-deferred-image-srcset]')) {
-      const rawSrc = source.getAttribute('data-meo-deferred-image-srcset') ?? '';
-      source.removeAttribute('data-meo-deferred-image-srcset');
-      source.dataset.meoPreviewImageSource = rawSrc;
-      pendingImages.set(source, { attribute: 'data-meo-deferred-image-srcset', source: rawSrc });
-      void resolveEmbeddedImageSrc(rawSrc, abortController.signal).then(resolved => {
-        if (abortController.signal.aborted || disposed || activeFrameDocument !== frameDocument) return;
-        enqueueCommit(() => {
-          if (resolved) source.srcset = resolved;
-          else source.removeAttribute('srcset');
-          pendingImages.delete(source);
-        });
-      });
-    }
-    const images = Array.from(frameDocument.querySelectorAll<HTMLImageElement>(
-      'img[data-meo-deferred-image-src]'
-    ));
     const headerGeometry = new WeakMap<HTMLImageElement, { width: number; height: number; aspectRatio: string; seededDimensions: boolean }>();
-    for (const image of images) {
-      // Keep authored HTML/Wiki dimensions and styles. A known natural ratio
-      // can also stabilize HTML's width/height under the preview's height:auto.
-      if (image.hasAttribute('style')) continue;
-      const size = getImageIntrinsicSize?.(image.getAttribute('data-meo-deferred-image-src') ?? '');
-      if (size) {
-        const seededDimensions = !image.hasAttribute('width') && !image.hasAttribute('height');
-        if (seededDimensions) { image.width = size.width; image.height = size.height; }
-        // Preview initially uses a transparent 1px source, whose intrinsic
-        // ratio would otherwise override width/height's automatic ratio.
-        image.style.aspectRatio = `${size.width} / ${size.height}`;
-        headerGeometry.set(image, { width: image.width, height: image.height, aspectRatio: image.style.aspectRatio, seededDimensions });
+    const imageControllers = new Map<HTMLImageElement, AbortController>();
+    const observedImages = new Set<HTMLImageElement>();
+    const resourcePreparation = createPreviewResourcePreparation(frameDocument, {
+      signal: abortController.signal, resolveImage: resolveEmbeddedImageSrc, resolveHtml: resolveConfiguredImageSrc,
+      changed: () => scheduleViewportHighlight(frameDocument, 'resources')
+    });
+    prepareDeferredResources = root => {
+      let admitted = true;
+      for (const image of root.querySelectorAll<HTMLImageElement>('img[data-meo-deferred-image-src]')) {
+        // Picture/srcset selection depends on the mounted layout and media.
+        if (image.closest('picture') || image.hasAttribute('srcset')) continue;
+        const source = image.getAttribute('data-meo-deferred-image-src')!;
+        if ([...frameDocument.images].some(mounted => mounted.dataset.meoPreviewImageSource === source)) continue;
+        if (!resourcePreparation.prepareImage(source)) admitted = false;
       }
-    }
+      for (const element of root.querySelectorAll<HTMLElement>('[data-meo-html-src],[data-meo-html-poster]')) {
+        for (const attribute of ['data-meo-html-src', 'data-meo-html-poster']) {
+          const source = element.getAttribute(attribute);
+          if (!source || [...frameDocument.querySelectorAll(`[${attribute}]`)].some(mounted => mounted.getAttribute(attribute) === source)) continue;
+          if (!resourcePreparation.prepareHtml(source)) admitted = false;
+        }
+      }
+      return admitted;
+    };
+    const refreshResources = () => {
+      // A window reconciliation retains most reading elements. Their pending
+      // preparation belongs to the frame/element, not to that reconciliation.
+      for (const [element] of pendingImages) if (!element.isConnected) {
+        imageControllers.get(element as HTMLImageElement)?.abort();
+        imageControllers.delete(element as HTMLImageElement);
+        pendingImages.delete(element);
+      }
+      for (const image of observedImages) if (!image.isConnected) {
+        observer?.unobserve(image);
+        observedImages.delete(image);
+      }
+      resolveHtmlResources(frameDocument, { signal: abortController.signal, resolve: resourcePreparation.resolveHtml, commit: enqueueCommit });
+      const authorStyle = frameDocument.querySelector<HTMLStyleElement>('style[data-meo-preview-styles]');
+      if (authorStyle) resolveHtmlStylesElement(authorStyle, {signal:frameEvents?.signal ?? abortController.signal,commit:apply => {
+        const publish = () => {
+          if (disposed || activeFrameDocument !== frameDocument) return;
+          apply(); sourceMapDirty = true;
+        };
+        if (hasBoundedPreviewResources(frameDocument) && !host.hidden) {
+          void enqueueReadingCommit(frameDocument,publish,reason => {
+            if (host.hidden) publish();
+            else if (reason === 'failed') withViewportTransaction(publish);
+          },() => canCommitReadingElement()).catch(handleWindowError);
+        } else if (host.hidden) publish();
+        else withViewportTransaction(publish);
+      }});
+      for (const source of frameDocument.querySelectorAll<HTMLSourceElement>('picture source[data-meo-deferred-image-srcset]')) {
+        const rawSrc = source.getAttribute('data-meo-deferred-image-srcset') ?? '';
+        source.removeAttribute('data-meo-deferred-image-srcset');
+        source.dataset.meoPreviewImageSource = rawSrc;
+        pendingImages.set(source, { attribute: 'data-meo-deferred-image-srcset', source: rawSrc });
+        void resolveEmbeddedImageSrc(rawSrc, abortController.signal).then(resolved => {
+          if (abortController.signal.aborted || disposed || activeFrameDocument !== frameDocument) return;
+          enqueueCommit(() => {
+            if (resolved) source.srcset = resolved;
+            else source.removeAttribute('srcset');
+            pendingImages.delete(source);
+          });
+        });
+      }
+      const images = Array.from(frameDocument.querySelectorAll<HTMLImageElement>(
+        'img[data-meo-deferred-image-src]'
+      ));
+      for (const image of images) {
+        // Keep authored HTML/Wiki dimensions and styles. A known natural ratio
+        // can also stabilize HTML's width/height under the preview's height:auto.
+        if (image.hasAttribute('style')) continue;
+        const size = getImageIntrinsicSize?.(image.getAttribute('data-meo-deferred-image-src') ?? '');
+        if (size) {
+          const seededDimensions = !image.hasAttribute('width') && !image.hasAttribute('height');
+          if (seededDimensions) { image.width = size.width; image.height = size.height; }
+          // Preview initially uses a transparent 1px source, whose intrinsic
+          // ratio would otherwise override width/height's automatic ratio.
+          image.style.aspectRatio = `${size.width} / ${size.height}`;
+          headerGeometry.set(image, { width: image.width, height: image.height, aspectRatio: image.style.aspectRatio, seededDimensions });
+        }
+      }
+      for (const image of images) {
+        if (observer) { observedImages.add(image); observer.observe(image); }
+        else void loadImage(image);
+      }
+      previewImageActions?.sync();
+    };
     const imageLoads = new WeakMap<HTMLImageElement, number>();
     const loadImage = async (image: HTMLImageElement, forceReload = false) => {
       if (!forceReload && image.dataset.meoPreviewImageRefreshing === 'true') return;
-      const loadSignal = forceReload ? frameEvents?.signal ?? abortController.signal : abortController.signal;
+      const controller = forceReload ? null : new AbortController();
+      if (controller) imageControllers.set(image, controller);
+      const loadSignal = forceReload ? frameEvents?.signal ?? abortController.signal : controller!.signal;
       const ticket = (imageLoads.get(image) ?? 0) + 1;
       imageLoads.set(image, ticket);
       const rawSrc = image.getAttribute('data-meo-deferred-image-src') ?? image.dataset.meoPreviewImageSource ?? '';
       if (!forceReload) image.removeAttribute('data-meo-deferred-image-src');
       image.dataset.meoPreviewImageSource = rawSrc;
       if (!forceReload) pendingImages.set(image, { attribute: 'data-meo-deferred-image-src', source: rawSrc });
-      const resolvedSrc = await resolveEmbeddedImageSrc(rawSrc, loadSignal);
+      const warmed = !forceReload && !image.closest('picture') && !image.hasAttribute('srcset')
+        ? await resourcePreparation.takeImage(rawSrc) : null;
+      const resolvedSrc = warmed?.src ?? await resolveEmbeddedImageSrc(rawSrc, loadSignal);
       if (
         loadSignal.aborted ||
         disposed ||
@@ -1452,14 +1541,15 @@ export function createPreviewController({
       ) return;
       if (!resolvedSrc) {
         pendingImages.delete(image);
+        imageControllers.delete(image);
         if (forceReload) throw new Error('Image resolution failed');
         enqueueCommit(() => { image.removeAttribute('src'); });
         return;
       }
       // Load outside the reading layout so intrinsic dimensions do not change
       // before the shared viewport owner can capture the current reading anchor.
-      const prepared = image.cloneNode(false) as HTMLImageElement;
-      prepared.removeAttribute('src');
+      const prepared = warmed ?? image.cloneNode(false) as HTMLImageElement;
+      if (!warmed) prepared.removeAttribute('src');
       prepared.loading = 'eager';
       const refreshedSrcset = forceReload && image.hasAttribute('srcset')
         ? mapHtmlSrcset(image.getAttribute('srcset')!, cacheBustedImageSource) : null;
@@ -1480,25 +1570,8 @@ export function createPreviewController({
         preparedPicture.append(prepared);
         frameDocument.body.append(preparedPicture);
       }
-      await new Promise<void>((resolve) => {
-        let finished = false;
-        const finish = () => {
-          if (finished) return;
-          finished = true;
-          prepared.onload = null;
-          prepared.onerror = null;
-          loadSignal.removeEventListener('abort', abort);
-          resolve();
-        };
-        const abort = () => {
-          finish();
-          prepared.removeAttribute('src');
-        };
-        prepared.onload = () => { void prepared.decode().catch(() => undefined).then(finish); };
-        prepared.onerror = finish;
-        loadSignal.addEventListener('abort', abort, { once: true });
-        prepared.src = forceReload ? cacheBustedImageSource(resolvedSrc) : resolvedSrc;
-      }).finally(() => preparedPicture?.remove());
+      if (!warmed) await decodePreviewImage(prepared,
+        forceReload ? cacheBustedImageSource(resolvedSrc) : resolvedSrc, loadSignal).finally(() => preparedPicture?.remove());
       if (loadSignal.aborted || disposed || activeFrameDocument !== frameDocument
         || !image.isConnected || imageLoads.get(image) !== ticket) return;
       if (forceReload && prepared.naturalWidth === 0) {
@@ -1532,6 +1605,7 @@ export function createPreviewController({
         image.replaceWith(prepared);
         previewImageActions?.replace(image, prepared);
         pendingImages.delete(image);
+        imageControllers.delete(image);
       };
       if (forceReload) withViewportTransaction(() => { commitImage(); sourceMapDirty = true; });
       else enqueueCommit(commitImage, image);
@@ -1556,23 +1630,30 @@ export function createPreviewController({
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         observer?.unobserve(entry.target);
+        observedImages.delete(entry.target as HTMLImageElement);
         void loadImage(entry.target as HTMLImageElement);
       }
-    });
-    if (observer) {
-      for (const image of images) observer.observe(image);
-    } else {
-      for (const image of images) void loadImage(image);
-    }
-    disposeDeferredImages = () => {
+    }, null, 'idle-cache');
+    refreshResources();
+    refreshPreviewResources = document => {
+      if (document !== frameDocument) return false;
+      refreshResources();
+      return true;
+    };
+    disposePreviewResources = () => {
+      refreshPreviewResources = null;
+      prepareDeferredResources = null;
       observer?.disconnect();
+      observedImages.clear();
       abortController.abort();
+      for (const controller of imageControllers.values()) controller.abort();
+      imageControllers.clear();
       for (const [element, pending] of pendingImages) if (element.isConnected) element.setAttribute(pending.attribute, pending.source);
       pendingImages.clear();
       pendingCommits.length = 0;
       if (commitFrame !== null) frameDocument.defaultView?.cancelAnimationFrame(commitFrame);
       commitFrame = null;
-      disposeDeferredImages = () => {};
+      disposePreviewResources = () => {};
     };
   };
 
@@ -1884,7 +1965,7 @@ export function createPreviewController({
     if (!reusableDocument || previousRenderedText !== renderedText) presentationReadingPosition = null;
     frameRenderedText = null;
     updateViewportAlignment();
-    disposeDeferredImages();
+    disposePreviewResources();
     previewImageActions?.dispose(); previewImageActions = null;
     const katexHref = document.body.dataset.meoKatexSrc ?? '';
     const katexInlineStyles = collectPreviewKatexStyles(katexHref).replace(/<\/style/gi, '<\\/style');
@@ -1957,7 +2038,7 @@ export function createPreviewController({
             localSourceGeometry = createPreviewSourceGeometry(frameDocument);
             previewViewportResources?.refresh();
             syncGithubPictures(frameDocument, appearance); preparePreviewLinks(frameDocument);
-            attachDeferredImages(frameDocument); attachPreviewMathViewports(frameDocument);
+            attachPreviewResources(frameDocument); attachPreviewMathViewports(frameDocument);
             previewDocumentSearch?.windowChanged();
             scheduleViewportHighlight(frameDocument);
             refreshSourcePositionMarker(); onGeometryChanged?.();
@@ -2124,7 +2205,7 @@ export function createPreviewController({
       };
       // A morph resets deferred image attributes. Restore known dimensions
       // before accepting source geometry, even while the bitmap is offscreen.
-      attachDeferredImages(frameDocument);
+      attachPreviewResources(frameDocument);
       finishRender();
       if (payload.hasMermaid) {
         void previewMermaidRenderer.render(
@@ -3827,7 +3908,7 @@ export function createPreviewController({
       previewTableLayout = null;
       frameEvents?.abort();
       frameEvents = null;
-      disposeDeferredImages();
+      disposePreviewResources();
       scrollToTopController.setScrollElement(null);
       search.dispose();
     }

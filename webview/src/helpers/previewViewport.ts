@@ -490,7 +490,7 @@ export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocume
     get manifest() { return manifest; },
     /** Read a bounded cache window without mounting it or displacing foreground
      * chunk requests. Source/SVG consumers still own their resource budgets. */
-    async prepareReadingCache(isCurrent: () => boolean): Promise<readonly PreviewDocumentChunk[]> {
+    async prepareReadingCache(isCurrent: () => boolean, content?: { prepared(chunk: PreviewDocumentChunk): boolean }): Promise<readonly PreviewDocumentChunk[]> {
       if (disposed || !active || chunkFlight || !isCurrent()) return [];
       const revision = documentGeneration;
       const top = Math.max(0, scroll.scrollTop - origin());
@@ -500,7 +500,9 @@ export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocume
       // A cache task never scans an arbitrarily dense window or giant block.
       for (let index = Math.max(from, anchor - 32); index <= Math.min(to, anchor + 64); index++) {
         const block = manifest.blocks[index];
-        if (block && block.sourceCharacters <= 32_768 && /^(fence|blockquote_open|bullet_list_open|ordered_list_open)$/.test(block.kind)) indices.push(index);
+        if (block && block.sourceCharacters <= 32_768
+          && (content ? block.mayHaveResources : /^(fence|blockquote_open|bullet_list_open|ordered_list_open)$/.test(block.kind))
+          && !(cache.has(index) && content?.prepared(cache.get(index)!))) indices.push(index);
       }
       indices.sort((a, b) => Math.abs(a - anchor) - Math.abs(b - anchor));
       const selected = indices.slice(0, 4), missing = selected.filter(index => !cache.has(index));
@@ -515,7 +517,7 @@ export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocume
         await operation;
       }
       return disposed || revision !== documentGeneration || !isCurrent() ? []
-        : selected.flatMap(index => { const chunk = cache.get(index); return chunk?.hasMermaid ? [chunk] : []; });
+        : selected.flatMap(index => { const chunk = cache.get(index); return chunk && (content || chunk.hasMermaid) ? [chunk] : []; });
     },
     ensure,
     restoreReadingScrollTop(top: number, preserveNativeScroll = false): boolean {

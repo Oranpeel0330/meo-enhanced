@@ -26,6 +26,12 @@ const acceptedPreparation = staged.commit(() => { committed++; });
 staged.drain(); await acceptedPreparation;
 assert.equal(committed, 1);
 assert.equal(preparationAnchors, 1, 'the eventual DOM result still uses the owning viewport transaction');
+staged.prepare({}, () => { prepared++; });
+const alreadyReady = staged.commit(() => { committed++; });
+assert.equal(staged.drain(), false);
+await alreadyReady;
+assert.equal(committed, 2, 'cheap preparation must not impose another frame before an already ready result');
+assert.equal(preparationAnchors, 2, 'preparation stays outside the one mutation transaction');
 
 let dormantBatches = 0, dormantChecks = 0;
 const dormant = createPreviewReadingWork({ now: () => 0, batch(run) { dormantBatches++; run(); } });

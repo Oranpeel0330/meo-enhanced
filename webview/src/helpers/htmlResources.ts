@@ -39,7 +39,7 @@ export function resolveHtmlStylesElement(element: HTMLStyleElement, options: { s
 export function resolveHtmlResources(root: ParentNode, options: {
   resolve(source: string, signal: AbortSignal): Promise<string | null>;
   signal: AbortSignal;
-  commit(apply: () => void): void;
+  commit(apply: () => void, element?: Element): void;
 }): void {
   for (const element of root.querySelectorAll<HTMLElement>('[data-meo-html-src],[data-meo-html-poster],[data-meo-html-srcset],[data-meo-html-href],[style]')) {
     for (const name of ['src', 'poster', 'srcset', 'href', 'style']) {
@@ -80,7 +80,7 @@ export function resolveHtmlResources(root: ParentNode, options: {
           element.removeAttribute(key);
           const media = element.closest<HTMLMediaElement>('audio,video');
           if (media && name === 'src') media.load();
-        });
+        }, name === 'src' || name === 'poster' || name === 'srcset' ? element : undefined);
       }).catch(() => {
         // A failed/cancelled resolution leaves the source marker available to retry.
         if (pending.get(name) === request) pending.delete(name);
