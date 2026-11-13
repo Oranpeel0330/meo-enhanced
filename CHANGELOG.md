@@ -3,8 +3,15 @@
 This changelog retains the release history of the original Markdown Editor
 Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
-## 0.4.0
+## 0.4.1
 - Added an adjustable 400–2400px maximum content width for Live and Source, with typed values and 100px steps in the dependent settings controls; Preview keeps its own layout.
+- Prepared nearby Live code colors and Preview resources before viewport entry, retaining bounded work and reading-position protection.
+- Reused cached Preview diagrams without starting the Mermaid engine, and suspended fully blocked Preview work until its existing owner can resume it.
+- Kept uncached Live diagrams from starting expensive layout during continuing native scrolling and momentum, while cached diagrams remain available during reading.
+- Added static HTML stylesheet links, CSS imports, background images and webfonts through shared resource resolution, with document styles and font names isolated from the editor.
+- Restored Preview context menus and native clipboard shortcut hints, with Cut and Paste disabled for read-only content.
+
+## 0.4.0
 - Kept Live Mermaid, HTML and formula editing previews current while background parsing catches up, preserving intermediate results during continuous input and the latest valid formula during incomplete input.
 - Unified ordered, unordered and task-list prefixes and commands, including ordered-task toggles, stable dragging from list-marker gaps, immediate continuation markers and complete empty-item deletion.
 - Protected literal HTML, code and formula source from list deletion while document parsing is pending, without adding document scans or a second editing state.
