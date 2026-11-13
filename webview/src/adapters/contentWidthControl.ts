@@ -3,6 +3,7 @@ import { DEFAULT_EDITOR_CONTENT_WIDTH, EDITOR_CONTENT_WIDTH_MIN, EDITOR_CONTENT_
   EDITOR_CONTENT_WIDTH_STEP, isEditorContentWidth } from '../../../src/foundation/editorContentWidth';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
 import { getUiStrings } from '../application/uiLanguage';
+import { createTooltip } from './tooltip';
 
 /** The same draft/commit interaction is used by both settings surfaces. */
 export function createContentWidthControl(options: {
@@ -16,6 +17,7 @@ export function createContentWidthControl(options: {
   let language = options.language;
   let dirty = false;
   let composing = false;
+  let errorTooltip: ReturnType<typeof createTooltip> | undefined;
   const element = document.createElement('div'); element.className = 'content-width-field';
   const group = document.createElement('div'); group.className = 'content-width-control';
   const stepper = document.createElement('div'); stepper.className = 'content-width-stepper';
@@ -40,7 +42,18 @@ export function createContentWidthControl(options: {
   element.append(group, error);
   const unregister = options.registerInput?.(input);
   const readDraft = () => /^\d+$/.test(input.value.trim()) ? Number(input.value.trim()) : NaN;
-  function clearError() { input.removeAttribute('aria-invalid'); input.removeAttribute('aria-description'); error.hidden = true; }
+  function clearError() {
+    input.removeAttribute('aria-invalid'); input.removeAttribute('aria-description'); error.hidden = true;
+    errorTooltip?.dispose(); errorTooltip = undefined;
+  }
+  function showError() {
+    if (error.hidden || !options.enabled()) return;
+    errorTooltip ??= createTooltip(stepper, {
+      focusTarget: input, content: { text: getUiStrings(language).contentMaxWidthRange, kind: 'description' },
+      placement: 'top', manual: true, immediate: true
+    });
+    errorTooltip.show();
+  }
   function present(nextLanguage = language) {
     language = nextLanguage;
     const strings = getUiStrings(language), enabled = options.enabled(), value = options.get();
@@ -49,6 +62,8 @@ export function createContentWidthControl(options: {
     increase.setAttribute('aria-label', language === 'zh-CN' ? '宽度增加100像素' : 'Increase width by 100 pixels');
     reset?.setAttribute('aria-label', language === 'zh-CN' ? '恢复默认宽度800像素' : 'Reset width to 800 pixels');
     error.textContent = strings.contentMaxWidthRange;
+    errorTooltip?.setContent({ text: strings.contentMaxWidthRange, kind: 'description' });
+    if (!error.hidden) input.setAttribute('aria-description', strings.contentMaxWidthRange);
     if (!dirty || !enabled) { input.value = String(value); dirty = false; clearError(); }
     input.disabled = !enabled;
     input.setAttribute('aria-valuenow', String(value));
@@ -63,7 +78,9 @@ export function createContentWidthControl(options: {
     if (!isEditorContentWidth(value)) {
       input.setAttribute('aria-invalid', 'true');
       input.setAttribute('aria-description', getUiStrings(language).contentMaxWidthRange);
-      error.hidden = false; return false;
+      error.hidden = false;
+      if (document.activeElement === input || stepper.matches(':hover')) showError();
+      return false;
     }
     const next = Math.max(EDITOR_CONTENT_WIDTH_MIN, Math.min(EDITOR_CONTENT_WIDTH_MAX, value + delta));
     dirty = false; clearError();
@@ -73,7 +90,10 @@ export function createContentWidthControl(options: {
   input.addEventListener('input', () => { dirty = true; clearError(); present(); });
   input.addEventListener('compositionstart', () => { composing = true; });
   input.addEventListener('compositionend', () => { composing = false; });
-  input.addEventListener('blur', () => { commit(); });
+  input.addEventListener('blur', () => { commit(); errorTooltip?.hide(); });
+  input.addEventListener('focus', showError);
+  stepper.addEventListener('mouseenter', showError);
+  stepper.addEventListener('mouseleave', () => { if (document.activeElement !== input) errorTooltip?.hide(); });
   input.addEventListener('keydown', event => {
     if (event.isComposing || composing) return;
     if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); commit(); }
@@ -89,5 +109,5 @@ export function createContentWidthControl(options: {
   increase.addEventListener('click', () => { commit(EDITOR_CONTENT_WIDTH_STEP); });
   reset?.addEventListener('click', () => { dirty = false; clearError(); options.set(DEFAULT_EDITOR_CONTENT_WIDTH); present(); });
   present();
-  return { element, input, present, dispose() { unregister?.(); } };
+  return { element, input, present, dispose() { clearError(); unregister?.(); } };
 }

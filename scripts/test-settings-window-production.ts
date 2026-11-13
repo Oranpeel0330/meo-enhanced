@@ -175,6 +175,22 @@ try {
       if (text) await page.type(selector, text);
     };
     const messageCount = () => page.evaluate(() => (window as any).__messages.filter((m: any) => m.type === 'setContentMaxWidth').length);
+    const layout = (selector: string) => page.$eval(selector, input => {
+      const row = input.closest<HTMLElement>('[data-content-width-row], .settings-item')!;
+      const menu = input.closest<HTMLElement>('.more-tools-panel, .settings-window')!;
+      return { rowHeight: row.getBoundingClientRect().height, menuHeight: menu.getBoundingClientRect().height,
+        nextTop: row.nextElementSibling?.getBoundingClientRect().top ?? null };
+    });
+    const hint = (selector: string) => page.$eval(selector, input => {
+      const id = input.getAttribute('aria-describedby')?.split(/\s+/).find(id => document.getElementById(id)?.matches('.meo-tooltip'));
+      const tooltip = id ? document.getElementById(id) : null;
+      const rect = tooltip?.getBoundingClientRect();
+      return { visible: !!tooltip && getComputedStyle(tooltip).visibility === 'visible' && getComputedStyle(tooltip).opacity === '1',
+        text: tooltip?.querySelector('.meo-tooltip-text')?.textContent ?? '',
+        contained: !!rect && rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+        unclipped: !!tooltip && tooltip.scrollWidth <= tooltip.clientWidth && tooltip.scrollHeight <= tooltip.clientHeight,
+        modalOwner: !!tooltip && tooltip.closest('dialog') === input.closest('dialog') };
+    });
     for (const mode of ['source', 'live'] as const) for (const large of [false, true]) {
       const sample = '# Width\n\n| A | B |\n| --- | --- |\n| One | Two |\n\n$$x+y$$\n\n'
         + 'Paragraph with enough words to wrap when the reading area changes.\n\n'.repeat(large ? 4500 : 35);
@@ -216,10 +232,13 @@ try {
       assert.equal(await messageCount(), count + 1, 'draft plus pointer step saves only the final width');
       await fill(field, '1200'); await page.keyboard.press('Enter');
       assert.equal(await width(), '1200px');
+      const validLayout = await layout(field);
       for (const invalid of ['', '399', '2401', '800.5', 'abc']) {
         await fill(field, invalid); await page.keyboard.press('Enter');
         assert.equal(await page.$eval(field, e => e.getAttribute('aria-invalid')), 'true');
         assert.equal(await width(), '1200px', 'invalid drafts retain the accepted width');
+        assert.deepEqual(await layout(field), validLayout, 'validation does not move settings rows or resize the menu');
+        assert.deepEqual(await hint(field), { visible: true, text: '请输入400～2400之间的整数。', contained: true, unclipped: true, modalOwner: true });
       }
       await fill(field, '400'); await page.keyboard.press('Enter');
       assert.equal(await page.$eval(`${quick} [data-width-action="decrease"]`, e => (e as HTMLButtonElement).disabled), true);
@@ -227,17 +246,23 @@ try {
       await page.click(`${quick} [data-width-action="increase"]`);
       assert.equal(await width(), '2400px');
       assert.equal(await page.$eval(`${quick} [data-width-action="increase"]`, e => (e as HTMLButtonElement).disabled), true);
+      await fill(field, '7000'); await page.keyboard.press('Enter');
+      const disabledHint = await page.$eval(field, e => e.getAttribute('aria-describedby'));
       await page.click('[data-action="contentMaxWidth"]');
       assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), true);
       assert.equal(await page.$eval(field, e => (e as HTMLInputElement).disabled), true);
+      assert.equal(await page.$eval(field, e => e.hasAttribute('aria-invalid') || e.hasAttribute('aria-describedby')), false);
+      assert.equal(await page.$(`#${disabledHint}`), null, 'disabling width removes the owned validation surface');
       assert.equal(await width(), '');
       await page.click('[data-action="contentMaxWidth"]');
       assert.equal(await width(), '2400px', 're-enabling restores the last pixel width');
       await page.click('.more-tools-settings-button');
       assert.equal(await page.$eval(full, e => (e as HTMLElement).dataset.parentSetting), 'width');
       assert.equal(await page.$eval(`${full} .content-width-input`, e => (e as HTMLInputElement).value), '2400');
+      await fill(`${full} .content-width-input`, '7000'); await page.keyboard.press('Enter');
       await page.click('[data-setting="width"] [role="switch"]');
       assert.equal(await page.$eval(`${full} .content-width-input`, e => (e as HTMLInputElement).disabled), true);
+      assert.equal(await page.$eval(`${full} .content-width-input`, e => e.hasAttribute('aria-invalid') || e.hasAttribute('aria-describedby')), false);
       assert.equal(await page.$eval(full, e => e.getBoundingClientRect().height > 0), true, 'the dependent setting remains discoverable while disabled');
       await page.click('[data-setting="width"] [role="switch"]');
       await fill(`${full} .content-width-input`, '1100');
@@ -245,6 +270,13 @@ try {
       assert.equal(await width(), '1100px', 'valid blur commits the input');
       await page.click(`${full} [data-width-action="reset"]`);
       assert.equal(await width(), '800px');
+      const fullLayout = await layout(`${full} .content-width-input`);
+      await fill(`${full} .content-width-input`, '7000'); await page.keyboard.press('Enter');
+      assert.deepEqual(await layout(`${full} .content-width-input`), fullLayout, 'validation does not shift the full settings window');
+      assert.deepEqual(await hint(`${full} .content-width-input`), { visible: true, text: '请输入400～2400之间的整数。', contained: true, unclipped: true, modalOwner: true });
+      await page.screenshot({ path: path.join(folder, `full-error-${mode}-${large ? 'large' : 'ordinary'}-zh.png`) });
+      await page.click(`${full} [data-width-action="reset"]`);
+      assert.equal(await page.$eval(`${full} .content-width-input`, e => e.hasAttribute('aria-describedby')), false, 'reset retires the owned validation tooltip');
       await page.screenshot({ path: path.join(folder, `${mode}-${large ? 'large' : 'ordinary'}-zh.png`) });
       await page.click('.settings-close');
       await page.evaluate(async () => { for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame); });
@@ -282,6 +314,26 @@ try {
       assert.equal(await page.$eval(`${quick} .more-tools-control-label`, e => e.textContent), language === 'en' ? 'Maximum width' : '最大文档宽度');
       assert.ok(await page.$eval(`${quick} .more-tools-control-label`, e => e.scrollWidth <= e.clientWidth), 'the complete maximum-width label fits beside its controls');
       await page.screenshot({ path: path.join(folder, `quick-${language}-${appearance}.png`) });
+      const beforeError = await layout(field);
+      await fill(field, '7000'); await page.keyboard.press('Enter');
+      assert.deepEqual(await layout(field), beforeError);
+      const errorText = language === 'en' ? 'Enter a whole number from 400 to 2400.' : '请输入400～2400之间的整数。';
+      assert.deepEqual(await hint(field), { visible: true, text: errorText, contained: true, unclipped: true, modalOwner: true });
+      await page.screenshot({ path: path.join(folder, `quick-error-${language}-${appearance}.png`) });
+      await page.keyboard.press('Tab');
+      assert.equal((await hint(field)).visible, false, 'leaving the input dismisses the validation hint');
+      await page.setViewport({ width: 360, height: 780 });
+      // Refocus after the responsive toolbar has repositioned its menu.
+      await page.locator(field).click();
+      assert.deepEqual(await hint(field), { visible: true, text: errorText, contained: true, unclipped: true, modalOwner: true });
+      await page.screenshot({ path: path.join(folder, `quick-error-${language}-${appearance}-narrow.png`) });
+      await page.keyboard.press('Tab');
+      assert.equal((await hint(field)).visible, false, 'leaving the input dismisses the validation hint');
+      await page.click(field);
+      assert.equal((await hint(field)).visible, true, 'returning to an invalid input reveals its explanation');
+      await fill(field, '800'); await page.keyboard.press('Enter');
+      assert.equal(await page.$eval(field, e => e.hasAttribute('aria-invalid') || e.hasAttribute('aria-describedby')), false, 'correcting the value removes stale validation feedback');
+      await page.setViewport({ width: 1100, height: 780 });
       await page.click('.more-tools-settings-button');
       for (const query of language === 'en' ? ['limit document width', 'maximum width', 'pixels'] : ['限制文档宽度', '最大文档宽度', '像素']) {
         await fill('.settings-search', query);

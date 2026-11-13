@@ -8331,9 +8331,8 @@ html[data-meo-ui-contrast='high'] .content-width-stepper:not(:focus-within):not(
 .content-width-input:disabled, .content-width-stepper:has(.content-width-input:disabled) .content-width-unit { color: var(--meo-ui-text-disabled); }
 .content-width-unit { display: inline-flex; align-items: center; justify-content: center; color: var(--meo-ui-text-muted); font-size: 11px; }
 .settings-item .content-width-stepper { height: 30px; grid-template-columns: 24px 34px 18px 24px; }
-.content-width-error { max-width: 220px; color: var(--meo-ui-danger); font-size: 11px; line-height: 1.4; }
+.content-width-error { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .content-width-error[hidden] { display: none; }
-.more-tools-width-row .content-width-error { max-width: 84px; }
 .settings-item-text { flex: 1 1 180px; min-width: 0; }
 .settings-item-title { font-size: 13px; font-weight: 400; line-height: 1.5; }
 .settings-item-title-with-badge { display: flex; align-items: center; gap: 6px; }

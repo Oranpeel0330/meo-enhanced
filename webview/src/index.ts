@@ -4360,6 +4360,7 @@ const terminateWebviewSession = () => {
   previewFontsTransport.dispose();
   editorFontWheel.dispose();
   settingsWindow?.dispose();
+  contentMaxWidthControl.dispose();
   feedbackVersionPopover?.dispose();
   largeDocumentTooltip?.dispose();
   tooltipBinding.dispose();
