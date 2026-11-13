@@ -8313,9 +8313,11 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 .settings-item-dependent { padding-left: 24px; }
 .settings-item-dependent.is-disabled .settings-item-text { color: var(--meo-ui-text-disabled); }
 .settings-item-dependent.is-disabled .settings-description { color: var(--meo-ui-text-disabled); }
-.more-tools-width-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px 32px; }
-.more-tools-width-row[hidden] { display: none; }
-.more-tools-width-row > .more-tools-control-label { min-width: 0; font-size: 12px; }
+.more-tools-width-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; gap: 6px; box-sizing: border-box; min-height: 26px; padding: 0 8px; }
+.more-tools-width-main { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.more-tools-width-main > .more-tools-control-heading { gap: 8px; cursor: pointer; }
+.more-tools-width-toggle { grid-template-columns: 28px; width: 28px; padding: 0; }
+.more-tools-width-row .content-width-stepper { height: 24px; grid-template-columns: 16px 34px 14px 16px; }
 .content-width-field { display: flex; flex-direction: column; align-items: flex-end; flex: 0 0 auto; gap: 4px; }
 .content-width-control { display: flex; align-items: center; gap: 6px; }
 .content-width-stepper { display: inline-grid; grid-template-columns: 18px 34px 18px 18px; align-items: stretch; box-sizing: border-box; height: 26px; padding: 2px; border: 0; border-radius: 8px; background: var(--meo-ui-segmented-track); overflow: hidden; }
@@ -8333,7 +8335,7 @@ html[data-meo-ui-contrast='high'] .content-width-stepper:not(:focus-within):not(
 .settings-item .content-width-stepper { height: 30px; grid-template-columns: 24px 34px 18px 24px; }
 .content-width-error { max-width: 220px; color: var(--meo-ui-danger); font-size: 11px; line-height: 1.4; }
 .content-width-error[hidden] { display: none; }
-.more-tools-width-row .content-width-error { max-width: 116px; }
+.more-tools-width-row .content-width-error { max-width: 84px; }
 .settings-item-text { flex: 1 1 180px; min-width: 0; }
 .settings-item-title { font-size: 13px; font-weight: 400; line-height: 1.5; }
 .settings-item-title-with-badge { display: flex; align-items: center; gap: 6px; }

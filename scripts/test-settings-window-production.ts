@@ -193,16 +193,26 @@ try {
           readingLine: view.state.doc.lineAt(from).number };
       });
       await page.click('.more-tools-wrapper > .format-button');
-      assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), true);
-      await page.click('[data-action="contentMaxWidth"]');
-      assert.equal(await page.$eval('.more-tools-panel', e => (e as HTMLElement).hidden), false, 'toggle keeps the menu open');
       assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), false);
+      assert.equal(await page.$eval(field, e => (e as HTMLInputElement).disabled), true, 'the inline width stays visible but disabled while limiting is off');
+      await page.click(`${quick} .more-tools-control-label`);
+      assert.equal(await page.$eval('.more-tools-panel', e => (e as HTMLElement).hidden), false, 'toggle keeps the menu open');
+      assert.ok(await page.$eval(quick, row => {
+        const main = row.querySelector('.more-tools-width-main')!;
+        const label = main.querySelector('.more-tools-control-label')!.getBoundingClientRect();
+        const stepper = main.querySelector('.content-width-stepper')!.getBoundingClientRect();
+        const toggle = row.querySelector('[data-action="contentMaxWidth"]')!;
+        const switchBox = toggle.getBoundingClientRect();
+        return !main.contains(toggle) && label.right <= stepper.left && stepper.right < switchBox.left
+          && Math.abs((label.top + label.bottom - stepper.top - stepper.bottom) / 2) < 2;
+      }), 'the label and width control form the left group, with a separate switch on the right');
       assert.equal(await width(), '800px');
       await fill(field, '850');
       assert.equal(await width(), '800px', 'typing a draft does not reflow the document');
       const count = await messageCount();
       await page.click(`${quick} [data-width-action="increase"]`);
       assert.equal(await width(), '950px');
+      assert.equal(await page.$eval('[data-action="contentMaxWidth"]', e => e.getAttribute('aria-checked')), 'true', 'stepping the width must not toggle its parent setting');
       assert.equal(await messageCount(), count + 1, 'draft plus pointer step saves only the final width');
       await fill(field, '1200'); await page.keyboard.press('Enter');
       assert.equal(await width(), '1200px');
@@ -218,7 +228,8 @@ try {
       assert.equal(await width(), '2400px');
       assert.equal(await page.$eval(`${quick} [data-width-action="increase"]`, e => (e as HTMLButtonElement).disabled), true);
       await page.click('[data-action="contentMaxWidth"]');
-      assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), true);
+      assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), false);
+      assert.equal(await page.$eval(field, e => (e as HTMLInputElement).disabled), true);
       assert.equal(await width(), '');
       await page.click('[data-action="contentMaxWidth"]');
       assert.equal(await width(), '2400px', 're-enabling restores the last pixel width');
@@ -267,10 +278,14 @@ try {
       await page.locator(`button.editor-appearance-button[data-editor-appearance="${appearance}"]`).click();
       widthSurfaceColors.add(await page.$eval('.more-tools-panel', e => getComputedStyle(e).backgroundColor));
       await page.click('[data-action="contentMaxWidth"]');
+      assert.equal(await page.$eval(`${quick} .more-tools-control-label`, e => e.textContent), language === 'en' ? 'Limit content width' : '限制文档宽度');
+      assert.ok(await page.$eval(`${quick} .more-tools-control-label`, e => e.scrollWidth <= e.clientWidth), 'the complete width label fits beside its controls');
       await page.screenshot({ path: path.join(folder, `quick-${language}-${appearance}.png`) });
       await page.click('.more-tools-settings-button');
-      await fill('.settings-search', language === 'en' ? 'pixels' : '像素');
-      assert.deepEqual(await page.$$eval('.settings-item', nodes => nodes.map(node => (node as HTMLElement).dataset.setting)), ['width', 'widthValue'], 'search retains the parent switch for the dependent numeric setting');
+      for (const query of language === 'en' ? ['limit document width', 'pixels'] : ['限制文档宽度', '像素']) {
+        await fill('.settings-search', query);
+        assert.deepEqual(await page.$$eval('.settings-item', nodes => nodes.map(node => (node as HTMLElement).dataset.setting)), ['width', 'widthValue'], 'both the menu label and numeric aliases retain the parent switch in settings search');
+      }
       await page.setViewport({ width: 500, height: 780 });
       await page.screenshot({ path: path.join(folder, `full-${language}-${appearance}-narrow.png`) });
       assert.equal(await page.$eval('.settings-window', e => e.scrollWidth <= e.clientWidth), true);

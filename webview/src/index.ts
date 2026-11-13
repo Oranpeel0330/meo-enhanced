@@ -28,7 +28,7 @@ import { createEditingPreferencesTransport } from './adapters/editingPreferences
 import { createPreviewFontsTransport } from './adapters/previewFontsTransport';
 import { createEditorServicesTransport } from './adapters/editorServicesTransport';
 import { defaultInputAssistance, isEditorCommandId, type EditingPreferences } from '../../src/foundation/editingPreferences';
-import { createElement, Heading, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, List, ListOrdered, SquareCheck, ListTree, Hash, Code, SquareCode, Terminal, Quote, Minus, Plus, Table2, Link, Unlink, Brackets, Sigma, Image, Bold, Italic, Strikethrough, Search, FileCode2, Undo2, Redo2, RotateCcw, PanelLeftRightDashed, Settings, Settings2, Check, ChevronRight, ArrowRight, Ellipsis, Sun, Moon, SunMoon, Languages, Type, SlidersHorizontal, CircleQuestionMark, ExternalLink, Heart, History, Info } from 'lucide';
+import { createElement, Heading, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, List, ListOrdered, SquareCheck, ListTree, Hash, Code, SquareCode, Terminal, Quote, Minus, Plus, Table2, Link, Unlink, Brackets, Sigma, Image, Bold, Italic, Strikethrough, Search, FileCode2, Undo2, Redo2, RotateCcw, MoveHorizontal, Settings, Settings2, Check, ChevronRight, ArrowRight, Ellipsis, Sun, Moon, SunMoon, Languages, Type, SlidersHorizontal, CircleQuestionMark, ExternalLink, Heart, History, Info } from 'lucide';
 import { createCodicon } from './helpers/codicons';
 import { createContentWidthControl } from './adapters/contentWidthControl';
 import { DEFAULT_EDITOR_CONTENT_WIDTH, isEditorContentWidth } from '../../src/foundation/editorContentWidth';
@@ -362,10 +362,11 @@ const createMoreToolsControlHeading = (icon: Parameters<typeof createElement>[0]
 
 const contentMaxWidthBtn = document.createElement('button');
 contentMaxWidthBtn.type = 'button';
-contentMaxWidthBtn.className = 'more-tools-option more-tools-toggle-option';
+contentMaxWidthBtn.className = 'more-tools-option more-tools-width-toggle';
 contentMaxWidthBtn.dataset.action = 'contentMaxWidth';
 contentMaxWidthBtn.setAttribute('role', 'menuitemcheckbox');
-appendMoreToolsOptionContent(contentMaxWidthBtn, PanelLeftRightDashed, activeUiStrings.constrainWidth);
+contentMaxWidthBtn.setAttribute('aria-label', activeUiStrings.contentMaxWidthShortLabel);
+contentMaxWidthBtn.append(createMenuSwitch());
 const contentMaxWidthControl = createContentWidthControl({
   get: () => contentMaxWidth, set: value => setContentMaxWidthValue(value),
   enabled: () => contentMaxWidthEnabled, language: activeUiLanguage
@@ -375,9 +376,17 @@ contentMaxWidthRow.className = 'more-tools-width-row';
 contentMaxWidthRow.dataset.contentWidthRow = '';
 const contentMaxWidthLabel = document.createElement('span');
 contentMaxWidthLabel.className = 'more-tools-control-label';
+contentMaxWidthLabel.id = 'meo-content-width-label';
 contentMaxWidthLabel.textContent = activeUiStrings.contentMaxWidthShortLabel;
-contentMaxWidthRow.append(contentMaxWidthLabel, contentMaxWidthControl.element);
-contentMaxWidthRow.hidden = true;
+const contentMaxWidthMain = document.createElement('div');
+contentMaxWidthMain.className = 'more-tools-width-main';
+contentMaxWidthMain.append(createMoreToolsControlHeading(MoveHorizontal, contentMaxWidthLabel), contentMaxWidthControl.element);
+contentMaxWidthRow.setAttribute('role', 'group');
+contentMaxWidthRow.setAttribute('aria-labelledby', contentMaxWidthLabel.id);
+contentMaxWidthRow.append(contentMaxWidthMain, contentMaxWidthBtn);
+contentMaxWidthRow.addEventListener('click', event => {
+  if (event.target instanceof Element && !event.target.closest('.content-width-field, button')) contentMaxWidthBtn.click();
+});
 
 const liveStrongColoringBtn = document.createElement('button');
 liveStrongColoringBtn.type = 'button';
@@ -503,7 +512,6 @@ const setFixedBaselineState = (pinned: boolean, active: boolean, updatedAt?: num
 const updateContentMaxWidthUI = () => {
   contentMaxWidthBtn.classList.toggle('is-active', contentMaxWidthEnabled);
   contentMaxWidthBtn.setAttribute('aria-checked', contentMaxWidthEnabled ? 'true' : 'false');
-  contentMaxWidthRow.hidden = !contentMaxWidthEnabled;
   contentMaxWidthControl.present(activeUiLanguage);
   settingsWindow?.present();
 };
@@ -1321,7 +1329,7 @@ const applyUiLanguage = (language: UiLanguage): void => {
     ? strings.reloadDiskVersionDoubleClick
     : strings.reloadDiskVersion;
   discardBtn.setAttribute('aria-label', strings.reloadDiskVersion);
-  contentMaxWidthBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.constrainWidth;
+  contentMaxWidthBtn.setAttribute('aria-label', strings.contentMaxWidthShortLabel);
   contentMaxWidthLabel.textContent = strings.contentMaxWidthShortLabel;
   contentMaxWidthControl.present(language);
   sourceLineNumbersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.showLineNumbers;
@@ -1457,7 +1465,6 @@ moreToolsPanel.append(
   displaySettingsHeading,
   sourceLineNumbersBtn,
   longCodeBlockFoldingBtn,
-  contentMaxWidthBtn,
   contentMaxWidthRow,
   liveStrongColoringBtn,
   latexDelimitersBtn,
