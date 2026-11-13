@@ -37,6 +37,8 @@ import {
   GIT_DIFF_DETAILS_VISIBLE_SETTING_KEY,
   DIFF_BASELINE_MODE_SETTING_KEY,
   CONTENT_MAX_WIDTH_SETTING_KEY,
+  CONTENT_MAX_WIDTH_VALUE_SETTING_KEY,
+  getContentMaxWidth,
   LARGE_DOCUMENT_OPTIMIZATION_SETTING_KEY,
   TABLE_STICKY_HEADER_SETTING_KEY,
   LATEX_DELIMITERS_SETTING_KEY,
@@ -317,6 +319,8 @@ export function createPanelSessionController(params: PanelSessionControllerParam
     applyQueue = applyQueue.then(task, task);
     return applyQueue;
   };
+  let contentWidthSaveQueue = Promise.resolve();
+  let contentWidthSaveGeneration = 0;
 
   const reportBackgroundError = (contextLabel: string, error: unknown): void => {
     if (disposed) {
@@ -589,6 +593,7 @@ export function createPanelSessionController(params: PanelSessionControllerParam
       fixedBaselineActive: diffBaselineState.fixedActive,
       fixedBaselineUpdatedAt: diffBaselineState.fixedUpdatedAt,
       contentMaxWidthEnabled: getContentMaxWidthEnabled(context),
+      contentMaxWidth: getContentMaxWidth(),
       largeDocumentOptimizationEnabled: getLargeDocumentOptimizationEnabled(),
       tableStickyHeaderEnabled: getTableStickyHeaderEnabled(),
       latexDelimiters: getLatexDelimitersEnabled(documentUri),
@@ -941,11 +946,23 @@ export function createPanelSessionController(params: PanelSessionControllerParam
           await context.globalState.update(OUTLINE_WIDTH_KEY, normalizeOutlineWidth(raw.width));
         }
         return;
-      case 'setContentMaxWidth':
-        await vscode.workspace
-          .getConfiguration(EXTENSION_CONFIG_SECTION)
-          .update(CONTENT_MAX_WIDTH_SETTING_KEY, raw.enabled === true, vscode.ConfigurationTarget.Global);
+      case 'setContentMaxWidth': {
+        const generation = ++contentWidthSaveGeneration;
+        const save = async () => {
+          try {
+            const configuration = vscode.workspace.getConfiguration(EXTENSION_CONFIG_SECTION);
+            if (raw.width !== undefined) await configuration.update(CONTENT_MAX_WIDTH_VALUE_SETTING_KEY, raw.width, vscode.ConfigurationTarget.Global);
+            await configuration.update(CONTENT_MAX_WIDTH_SETTING_KEY, raw.enabled, vscode.ConfigurationTarget.Global);
+          } catch (error) {
+            if (generation !== contentWidthSaveGeneration || disposed) return;
+            await postToWebview({ type: 'contentMaxWidthChanged', enabled: getContentMaxWidthEnabled(context), width: getContentMaxWidth() });
+            void vscode.window.showErrorMessage((getUiLanguage() === 'zh-CN' ? '内容宽度保存失败：' : 'Unable to save content width: ') + (error instanceof Error ? error.message : String(error)));
+          }
+        };
+        contentWidthSaveQueue = contentWidthSaveQueue.then(save, save);
+        await contentWidthSaveQueue;
         return;
+      }
       case 'setLargeDocumentOptimization':
         await vscode.workspace
           .getConfiguration(EXTENSION_CONFIG_SECTION)

@@ -83,6 +83,7 @@
 | `meoEnhanced.appearance.mouseWheelZoom` | 默认开启，独立于 VS Code 原生开关；Ctrl/Cmd + 滚轮调整并保存字号，自动模式从当前显示值转为自定义；覆盖 Live、Source、Preview、重新打开、字号边界、连续滚动与中英文深浅色设置；[滚轮字号](../scripts/test-editor-font-wheel.ts) |
 | `meoEnhanced.appearance.lineHeight` | 外观页文档排版直接调节字号倍数，默认 1.5、步进 0.1、范围 1.0–2.5，可恢复默认；菜单不增加行间距入口；Live、Source 和默认 Preview 生效，独立预设保留自身排版；配置持久化、重载和严格 Protocol 校验；[配置与协议](../scripts/test-appearance-settings.ts)、[Host 初始配置](../scripts/test-panel-session-ready-init.ts)、[设置控件与 Source 行高](../scripts/test-settings-window-production.ts)、[实际预览排版](../scripts/test-preview-presets-browser.ts) |
 | `meoEnhanced.outline.position`、`meoEnhanced.contentMaxWidth.visible` | 目录位置与宽度约束改变实际布局，[菜单布局](../scripts/test-toolbar-menus-browser.ts)、[Webview 视口](../scripts/test-webview-viewport.ts) |
+| `meoEnhanced.contentMaxWidth.value` | 从属宽度控件的手输、步进、边界和普通／大文档布局，[生产设置](../scripts/test-settings-window-production.ts)；协议校验与旧默认值，[初始化协议](../scripts/test-protocol-ready-init.ts)；持久化与会话隔离，[会话设置](../scripts/test-session-setting-isolation.ts) |
 | `meoEnhanced.table.stickyHeader` | 开关改变浮动表头行为，[表头生产交互](../scripts/test-table-body-interaction-sticky-production.ts) |
 | `meoEnhanced.readingPosition.restoreOnOpen` | 开启恢复保存位置，关闭从头打开，[阅读位置启动](../scripts/test-reading-position-preview-startup.ts)；原生跨进程另验 |
 | `meoEnhanced.performance.largeDocumentOptimization` | “大文档打开方式：优先源码”默认关闭并沿用上次模式，显式开启时执行大小/结构打开保护；与自动渲染预算独立，[大文档策略](../scripts/test-large-document-policy.ts)、[启动选项](../scripts/test-basic-capability-production-matrix.ts)、[对照证据](large-document-policy-evidence.md) |

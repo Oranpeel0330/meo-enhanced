@@ -1,4 +1,5 @@
 import { decodeDiagnosticsChangedEvent, type SerializedDiagnostic } from './diagnostics';
+import { DEFAULT_EDITOR_CONTENT_WIDTH, isEditorContentWidth } from '../foundation/editorContentWidth';
 import { decodeImageIntrinsicSizes } from './imageDimensions';
 import type { ImageIntrinsicSize } from '../foundation/imageDimensions';
 import {
@@ -84,6 +85,7 @@ export type InitMessage = {
   readonly fixedBaselineActive: boolean;
   readonly fixedBaselineUpdatedAt?: number | null;
   readonly contentMaxWidthEnabled: boolean;
+  readonly contentMaxWidth: number;
   readonly largeDocumentOptimizationEnabled: boolean;
   readonly tableStickyHeaderEnabled: boolean;
   readonly latexDelimiters?: boolean;
@@ -223,6 +225,7 @@ export function decodeInitMessage(value: unknown): InitMessage | null {
       && value.fixedBaselineUpdatedAt !== null
       && (typeof value.fixedBaselineUpdatedAt !== 'number' || !Number.isFinite(value.fixedBaselineUpdatedAt)))
     || typeof value.contentMaxWidthEnabled !== 'boolean'
+    || (value.contentMaxWidth !== undefined && !isEditorContentWidth(value.contentMaxWidth))
     || (value.editingPreferencesRevision !== undefined && (!Number.isSafeInteger(value.editingPreferencesRevision) || Number(value.editingPreferencesRevision) < 0))
     || (value.editingPreferences !== undefined && !isEditingPreferences(value.editingPreferences))
     || largeDocumentOptimizationEnabled === null
@@ -246,6 +249,7 @@ export function decodeInitMessage(value: unknown): InitMessage | null {
   }
   return {
     ...value,
+    contentMaxWidth: value.contentMaxWidth ?? DEFAULT_EDITOR_CONTENT_WIDTH,
     ...(value.previewPresetPreferences === undefined ? {} : { previewPresetPreferences: decodePreviewPresetPreferences(value.previewPresetPreferences)! }),
     uiColors: decodeUiColors(value.uiColors) ?? { light: {}, dark: {} },
     ...(value.customPreviewPresets === undefined ? {} : { customPreviewPresets: decodeCustomPreviewPresets(value.customPreviewPresets) ?? [] }),

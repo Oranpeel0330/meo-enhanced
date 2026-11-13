@@ -50,9 +50,13 @@ const document = createPanelSessionTestDocument(
   '# Settings isolation'
 );
 const persistedConfiguration = new Map<string, unknown>();
+let beforeConfigurationWrite: (key: string, value: unknown) => Promise<void> = async () => {};
+const saveErrors: string[] = [];
 const vscodeMock = createPanelSessionVscodeMock(document) as {
   workspace: { getConfiguration(): unknown };
+  window: { showErrorMessage(message: string): Promise<void> };
 };
+vscodeMock.window.showErrorMessage = async message => { saveErrors.push(message); };
 vscodeMock.workspace.getConfiguration = () => ({
   get: <T>(key: string, fallback?: T): T | undefined => (
     persistedConfiguration.has(key) ? persistedConfiguration.get(key) as T : fallback
@@ -61,6 +65,7 @@ vscodeMock.workspace.getConfiguration = () => ({
     ? { globalValue: persistedConfiguration.get(key) }
     : undefined,
   update: async (key: string, value: unknown) => {
+    await beforeConfigurationWrite(key, value);
     if (value === undefined) persistedConfiguration.delete(key);
     else persistedConfiguration.set(key, value);
   }
@@ -128,6 +133,16 @@ await firstPanel.controller.handleMessage({ type: 'ready', pageId: 'settings-iso
 const firstInit = firstPanel.messages.find((message) => message.type === 'init');
 assert.ok(firstInit, 'the first panel must receive its frozen Init settings');
 const firstMessageCount = firstPanel.messages.length;
+assert.equal(firstInit.contentMaxWidth, 800, 'existing sessions default to 800px');
+await Promise.all([
+  firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: true, width: 950 }),
+  firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: false, width: 1250 })
+]);
+assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1250);
+assert.equal(persistedConfiguration.get('contentMaxWidth.visible'), false);
+assert.equal(firstInit.contentMaxWidth, 800, 'saving a default must not change the open session snapshot');
+await firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: true });
+assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1250, 'toggling retains the custom width');
 
 await firstPanel.controller.handleMessage({ type: 'setPreviewAppearance', appearance: 'dark' });
 await firstPanel.controller.handleMessage({ type: 'setPreviewFontFamily', fontFamily: 'Inter' });
@@ -161,6 +176,8 @@ const secondPanel = createPanel();
 await secondPanel.controller.handleMessage({ type: 'ready', pageId: 'settings-isolation-page-2' });
 const secondInit = secondPanel.messages.find((message) => message.type === 'init');
 assert.ok(secondInit, 'a later panel must receive an Init snapshot');
+assert.equal(secondInit.contentMaxWidth, 1250, 'later sessions inherit the saved pixel width');
+assert.equal(secondInit.contentMaxWidthEnabled, true);
 assert.deepEqual(
   {
     previewAppearance: secondInit.previewAppearance,
@@ -178,6 +195,31 @@ assert.deepEqual(
   },
   'persisted appearance changes must become defaults only for later panels'
 );
+// A delayed failed write must finish before the next save and must not roll
+// back a newer projection. A failure of the latest write reports saved values.
+let releaseWrite!: () => void;
+let enteredWrite!: () => void;
+const entered = new Promise<void>(resolve => { enteredWrite = resolve; });
+const held = new Promise<void>(resolve => { releaseWrite = resolve; });
+beforeConfigurationWrite = async (key, value) => {
+  if (key === 'contentMaxWidth.value' && value === 1400) { enteredWrite(); await held; throw new Error('held width failure'); }
+};
+const delayed = firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: true, width: 1400 });
+await entered;
+const newer = firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: true, width: 1600 });
+assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1250, 'new saves wait for the pending write');
+releaseWrite(); await Promise.all([delayed, newer]);
+assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1600);
+assert.equal(firstPanel.messages.length, firstMessageCount, 'an obsolete failure cannot replace the newer projection');
+assert.equal(saveErrors.length, 0);
+beforeConfigurationWrite = async key => { if (key === 'contentMaxWidth.value') throw new Error('latest width failure'); };
+await firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: false, width: 1900 });
+assert.deepEqual(firstPanel.messages.at(-1), { type: 'contentMaxWidthChanged', enabled: true, width: 1600 });
+assert.equal(saveErrors.length, 1, 'the latest save failure is visible and can be retried');
+beforeConfigurationWrite = async () => {};
+await firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: false, width: 1900 });
+assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1900);
+assert.equal(persistedConfiguration.get('contentMaxWidth.visible'), false);
 firstPanel.controller.dispose();
 secondPanel.controller.dispose();
 

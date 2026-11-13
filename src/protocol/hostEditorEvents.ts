@@ -1,4 +1,5 @@
 import type { DiffBaselineMode, OutlinePosition } from './editorCommands';
+import { isEditorContentWidth } from '../foundation/editorContentWidth';
 
 export type HostEditorEvent =
   | { readonly type: 'wikiResourcesChanged' }
@@ -20,7 +21,7 @@ export type HostEditorEvent =
   | { readonly type: 'gitDiffLineHighlightsChanged'; readonly enabled: boolean }
   | { readonly type: 'diffBaselineModeChanged'; readonly mode: DiffBaselineMode }
   | { readonly type: 'fixedBaselineChanged'; readonly pinned: boolean; readonly active: boolean; readonly updatedAt?: number | null }
-  | { readonly type: 'contentMaxWidthChanged'; readonly enabled: boolean }
+  | { readonly type: 'contentMaxWidthChanged'; readonly enabled: boolean; readonly width?: number }
   | { readonly type: 'findOptionsChanged'; readonly findOptions: { readonly wholeWord: boolean; readonly caseSensitive: boolean } };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -66,8 +67,9 @@ export function decodeHostEditorEvent(value: unknown): HostEditorEvent | null {
       return typeof value.visible === 'boolean' ? value as HostEditorEvent : null;
     case 'gitChangesGutterChanged':
     case 'gitDiffLineHighlightsChanged':
-    case 'contentMaxWidthChanged':
       return typeof value.enabled === 'boolean' ? value as HostEditorEvent : null;
+    case 'contentMaxWidthChanged':
+      return typeof value.enabled === 'boolean' && (value.width === undefined || isEditorContentWidth(value.width)) ? value as HostEditorEvent : null;
     case 'diffBaselineModeChanged':
       return value.mode === 'current-edit' || value.mode === 'recent-save' || value.mode === 'git-head'
         ? value as HostEditorEvent : null;

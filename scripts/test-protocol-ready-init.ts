@@ -60,6 +60,7 @@ const completeInit = {
   fixedBaselineActive: false,
   fixedBaselineUpdatedAt: null,
   contentMaxWidthEnabled: true,
+  contentMaxWidth: 800,
   largeDocumentOptimizationEnabled: true,
   tableStickyHeaderEnabled: true,
   latexDelimiters: false,
@@ -83,6 +84,17 @@ assert.equal(decodeReadyMessage(null), null);
 assert.deepEqual(decodeReadyMessage({ type: 'ready', pageId, version: 1 }), { type: 'ready', pageId });
 assert.equal(decodeReadyMessage({ type: 'ready' }), null);
 assert.equal(decodeInitMessage({ ...completeInit, pageId: undefined }), null);
+assert.equal(decodeInitMessage({ ...completeInit, contentMaxWidth: undefined })?.contentMaxWidth, 800);
+for (const width of [400, 850, 2400]) {
+  assert.equal(decodeInitMessage({ ...completeInit, contentMaxWidth: width })?.contentMaxWidth, width);
+  assert.deepEqual(decodeEditorCommand({ type: 'setContentMaxWidth', enabled: true, width }), { type: 'setContentMaxWidth', enabled: true, width });
+  assert.deepEqual(decodeHostEditorEvent({ type: 'contentMaxWidthChanged', enabled: false, width }), { type: 'contentMaxWidthChanged', enabled: false, width });
+}
+for (const width of [null, '800', NaN, Infinity, 399, 2401, 800.5]) {
+  assert.equal(decodeInitMessage({ ...completeInit, contentMaxWidth: width }), null);
+  assert.equal(decodeEditorCommand({ type: 'setContentMaxWidth', enabled: true, width }), null);
+  assert.equal(decodeHostEditorEvent({ type: 'contentMaxWidthChanged', enabled: true, width }), null);
+}
 assert.equal(decodeInitMessage({ ...completeInit, latexDelimiters: undefined })?.latexDelimiters, false);
 assert.equal(decodeInitMessage({ ...completeInit, latexDelimiters: true })?.latexDelimiters, true);
 assert.equal(decodeInitMessage({ ...completeInit, latexDelimiters: 'true' }), null);

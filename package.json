@@ -598,6 +598,14 @@
           "order": 3,
           "description": "%config.contentMaxWidth%"
         },
+        "meoEnhanced.contentMaxWidth.value": {
+          "type": "integer",
+          "default": 800,
+          "minimum": 400,
+          "maximum": 2400,
+          "order": 3.1,
+          "description": "%config.contentMaxWidth.value%"
+        },
         "meoEnhanced.table.stickyHeader": {
           "type": "boolean",
           "default": true,

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { normalizeEditorContentWidth } from '../foundation/editorContentWidth';
 import { getActiveVscodeRawTheme, type RawVscodeTheme } from './vscodeTheme';
 import { DEFAULT_OUTLINE_WIDTH, normalizeOutlineWidth } from './outlineWidth';
 import { markdownFileExtensions } from '../foundation/markdownFileExtensions';
@@ -12,6 +13,7 @@ export const GIT_DIFF_LINE_HIGHLIGHTS_SETTING_KEY = 'gitChanges.lineHighlights';
 export const DIFF_BASELINE_MODE_SETTING_KEY = 'changes.baseline';
 export const GIT_DIFF_DETAILS_VISIBLE_SETTING_KEY = 'changes.showBeforeContent';
 export const CONTENT_MAX_WIDTH_SETTING_KEY = 'contentMaxWidth.visible';
+export const CONTENT_MAX_WIDTH_VALUE_SETTING_KEY = 'contentMaxWidth.value';
 export const TABLE_STICKY_HEADER_SETTING_KEY = 'table.stickyHeader';
 export const LATEX_DELIMITERS_SETTING_KEY = 'math.latexDelimiters';
 export const BOLD_HEADINGS_SETTING_KEY = 'appearance.boldHeadings';
@@ -77,6 +79,10 @@ export function getOutlineWidth(context: vscode.ExtensionContext): number {
 
 export function getContentMaxWidthEnabled(context: vscode.ExtensionContext): boolean {
   return getToggleSettingValue(context, CONTENT_MAX_WIDTH_SETTING_KEY, CONTENT_MAX_WIDTH_ENABLED_KEY, [], false);
+}
+
+export function getContentMaxWidth(): number {
+  return normalizeEditorContentWidth(vscode.workspace.getConfiguration(EXTENSION_CONFIG_SECTION).get(CONTENT_MAX_WIDTH_VALUE_SETTING_KEY));
 }
 
 export function getTableStickyHeaderEnabled(): boolean {

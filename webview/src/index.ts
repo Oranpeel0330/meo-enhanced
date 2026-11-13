@@ -30,6 +30,8 @@ import { createEditorServicesTransport } from './adapters/editorServicesTranspor
 import { defaultInputAssistance, isEditorCommandId, type EditingPreferences } from '../../src/foundation/editingPreferences';
 import { createElement, Heading, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, List, ListOrdered, SquareCheck, ListTree, Hash, Code, SquareCode, Terminal, Quote, Minus, Plus, Table2, Link, Unlink, Brackets, Sigma, Image, Bold, Italic, Strikethrough, Search, FileCode2, Undo2, Redo2, RotateCcw, PanelLeftRightDashed, Settings, Settings2, Check, ChevronRight, ArrowRight, Ellipsis, Sun, Moon, SunMoon, Languages, Type, SlidersHorizontal, CircleQuestionMark, ExternalLink, Heart, History, Info } from 'lucide';
 import { createCodicon } from './helpers/codicons';
+import { createContentWidthControl } from './adapters/contentWidthControl';
+import { DEFAULT_EDITOR_CONTENT_WIDTH, isEditorContentWidth } from '../../src/foundation/editorContentWidth';
 import { setImageSrcResolver, initializeImageHandling, resolveImageSrc, settleImageSrcRequest, handleSavedImagePath, handleImagePaste, refreshWikiImagePresentations } from './helpers/images';
 import { initializeHtmlStyles, acceptHtmlStyles } from './adapters/htmlStylesTransport';
 import { createGitClient } from './helpers/gitClient';
@@ -291,6 +293,7 @@ let gitDiffComparison: ChangesReviewComparison = { baseline: 'current-edit', gen
 let gitBaselineState: GitBaselinePayload | null = null;
 let changesReviewMode: 'live' | 'source' | 'preview' = 'live';
 let contentMaxWidthEnabled = false;
+let contentMaxWidth = DEFAULT_EDITOR_CONTENT_WIDTH;
 let liveStrongColoring = false;
 let boldHeadingsEnabled = true;
 let largeDocumentOptimizationEnabled = false;
@@ -299,7 +302,6 @@ let latexDelimiters = false;
 let restoreReadingPositionOnOpen = true;
 let outlineUiState: { mode: 'floating' | 'fixed'; width: number } = { mode: 'fixed', width: 260 };
 
-const CONTENT_MAX_WIDTH_ENABLED_VALUE = '800px';
 
 const createOutlineButton = (position: 'left' | 'right') => {
   const button = document.createElement('button');
@@ -364,6 +366,18 @@ contentMaxWidthBtn.className = 'more-tools-option more-tools-toggle-option';
 contentMaxWidthBtn.dataset.action = 'contentMaxWidth';
 contentMaxWidthBtn.setAttribute('role', 'menuitemcheckbox');
 appendMoreToolsOptionContent(contentMaxWidthBtn, PanelLeftRightDashed, activeUiStrings.constrainWidth);
+const contentMaxWidthControl = createContentWidthControl({
+  get: () => contentMaxWidth, set: value => setContentMaxWidthValue(value),
+  enabled: () => contentMaxWidthEnabled, language: activeUiLanguage
+});
+const contentMaxWidthRow = document.createElement('div');
+contentMaxWidthRow.className = 'more-tools-width-row';
+contentMaxWidthRow.dataset.contentWidthRow = '';
+const contentMaxWidthLabel = document.createElement('span');
+contentMaxWidthLabel.className = 'more-tools-control-label';
+contentMaxWidthLabel.textContent = activeUiStrings.contentMaxWidthShortLabel;
+contentMaxWidthRow.append(contentMaxWidthLabel, contentMaxWidthControl.element);
+contentMaxWidthRow.hidden = true;
 
 const liveStrongColoringBtn = document.createElement('button');
 liveStrongColoringBtn.type = 'button';
@@ -489,6 +503,9 @@ const setFixedBaselineState = (pinned: boolean, active: boolean, updatedAt?: num
 const updateContentMaxWidthUI = () => {
   contentMaxWidthBtn.classList.toggle('is-active', contentMaxWidthEnabled);
   contentMaxWidthBtn.setAttribute('aria-checked', contentMaxWidthEnabled ? 'true' : 'false');
+  contentMaxWidthRow.hidden = !contentMaxWidthEnabled;
+  contentMaxWidthControl.present(activeUiLanguage);
+  settingsWindow?.present();
 };
 
 const syncGitDiffLineHighlights = () => {
@@ -585,29 +602,37 @@ const setGitChangesGutterVisible = (visible: boolean, { post = true }: PostUpdat
 
 const setContentMaxWidthEnabled = (
   enabled: boolean,
-  { post = true, persist = true }: PersistedPostUpdateOptions = {}
+  { post = true, persist = true, width = contentMaxWidth }: PersistedPostUpdateOptions & { width?: number } = {}
 ) => {
   const nextEnabled = enabled === true;
-  const changed = nextEnabled !== contentMaxWidthEnabled;
+  const changed = nextEnabled !== contentMaxWidthEnabled || width !== contentMaxWidth;
+  const anchor = changed && editor && getActiveEditorMode() !== 'preview'
+    ? editor.captureViewportAnchorToken?.('editor') : null;
+  contentMaxWidth = isEditorContentWidth(width) ? width : contentMaxWidth;
   if (changed) {
     contentMaxWidthEnabled = nextEnabled;
   }
   document.documentElement.classList.toggle('meo-content-max-width-enabled', contentMaxWidthEnabled);
   if (contentMaxWidthEnabled) {
-    document.documentElement.style.setProperty('--meo-content-max-width', CONTENT_MAX_WIDTH_ENABLED_VALUE);
+    document.documentElement.style.setProperty('--meo-content-max-width', `${contentMaxWidth}px`);
   } else {
     document.documentElement.style.removeProperty('--meo-content-max-width');
   }
   // Reading-area padding can rewrap lines/widgets without resizing the outer
   // scroller. Refresh their height map together before gutter paint.
   if (changed) refreshEditorSurface();
+  if (anchor) editor?.restoreViewportAnchorToken?.(anchor, 'editor');
   updateContentMaxWidthUI();
   if (persist) {
     persistUiState();
   }
   if (post && changed) {
-    vscode.postMessage({ type: 'setContentMaxWidth', enabled: contentMaxWidthEnabled });
+    vscode.postMessage({ type: 'setContentMaxWidth', enabled: contentMaxWidthEnabled, width: contentMaxWidth });
   }
+};
+
+const setContentMaxWidthValue = (width: number) => {
+  if (isEditorContentWidth(width)) setContentMaxWidthEnabled(contentMaxWidthEnabled, { width });
 };
 
 const setLatexDelimiters = (enabled: boolean, { post = true }: { post?: boolean } = {}) => {
@@ -1297,6 +1322,8 @@ const applyUiLanguage = (language: UiLanguage): void => {
     : strings.reloadDiskVersion;
   discardBtn.setAttribute('aria-label', strings.reloadDiskVersion);
   contentMaxWidthBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.constrainWidth;
+  contentMaxWidthLabel.textContent = strings.contentMaxWidthShortLabel;
+  contentMaxWidthControl.present(language);
   sourceLineNumbersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.showLineNumbers;
   liveStrongColoringBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.strongColoring;
   latexDelimitersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.latexMathDelimitersShort;
@@ -1431,6 +1458,7 @@ moreToolsPanel.append(
   sourceLineNumbersBtn,
   longCodeBlockFoldingBtn,
   contentMaxWidthBtn,
+  contentMaxWidthRow,
   liveStrongColoringBtn,
   latexDelimitersBtn,
   interfaceSettingsHeading,
@@ -2124,6 +2152,7 @@ const editorFocusController = createEditorFocusController({
 });
 // These inputs share the Webview lifetime; disposal clears their registrations.
 editorFocusController.registerInput(lineJumpInput);
+editorFocusController.registerInput(contentMaxWidthControl.input);
 editorFocusController.registerInput(findPanelElements.findInput);
 editorFocusController.registerInput(findPanelElements.replaceInput);
 for (const input of previewController.fontSearchInputs) editorFocusController.registerInput(input);
@@ -2559,6 +2588,7 @@ type WebviewUiState = {
   mode?: 'live' | 'source' | 'preview';
   lastEditableMode?: 'live' | 'source';
   contentMaxWidthEnabled?: boolean;
+  contentMaxWidth?: number;
   outlineMode?: 'floating' | 'fixed';
   outlineWidth?: number;
 };
@@ -2576,6 +2606,7 @@ const persistUiState = (
     mode,
     lastEditableMode,
     contentMaxWidthEnabled,
+    contentMaxWidth,
     outlineMode: outlineUiState.mode,
     outlineWidth: outlineUiState.width
   };
@@ -3638,7 +3669,7 @@ const handleInit = (message: InitMessage) => {
     transientRestore: message.saveAsViewState?.position
   });
   if (typeof message.contentMaxWidthEnabled === 'boolean') {
-    setContentMaxWidthEnabled(message.contentMaxWidthEnabled, { post: false });
+    setContentMaxWidthEnabled(message.contentMaxWidthEnabled, { post: false, width: message.contentMaxWidth });
   }
   if (!editor) {
     pendingInitialText = message.text;
@@ -3833,6 +3864,8 @@ function getSettingsWindow(): ReturnType<typeof createSettingsWindow> {
         switchItem('lineNumbers', 'display', strings.showLineNumbers, () => pendingSourceLineNumbers !== 'off', () => sourceLineNumbersBtn.click()),
         switchItem('foldCode', 'display', strings.foldLongCodeBlocks, () => longCodeBlockFoldingEnabled, () => longCodeBlockFoldingBtn.click()),
         switchItem('width', 'display', strings.constrainWidth, () => contentMaxWidthEnabled, setContentMaxWidthEnabled),
+        { id: 'widthValue', parent: 'width', section: 'display', title: strings.contentMaxWidthLabel, description: strings.contentMaxWidthDescription,
+          control: { kind: 'contentWidth', get: () => contentMaxWidth, set: setContentMaxWidthValue, enabled: () => contentMaxWidthEnabled } },
         switchItem('strongColor', 'display', strings.strongColoring, () => liveStrongColoring, setLiveStrongColoring),
         switchItem('boldHeadings', 'display', strings.boldHeadings, () => boldHeadingsEnabled, setBoldHeadingsEnabled),
         switchItem('stickyHeader', 'display', strings.stickyTableHeader, () => tableStickyHeaderEnabled, setTableStickyHeaderEnabled),
@@ -4115,7 +4148,7 @@ window.addEventListener('message', (event) => {
   }
 
   if (message.type === 'contentMaxWidthChanged') {
-    setContentMaxWidthEnabled(message.enabled, { post: false });
+    setContentMaxWidthEnabled(message.enabled, { post: false, width: message.width });
     return;
   }
 
@@ -4386,7 +4419,8 @@ if (state && (state.mode === 'live' || state.mode === 'source' || state.mode ===
   });
 }
 if (typeof state?.contentMaxWidthEnabled === 'boolean') {
-  setContentMaxWidthEnabled(state.contentMaxWidthEnabled, { post: false, persist: false });
+  setContentMaxWidthEnabled(state.contentMaxWidthEnabled, { post: false, persist: false,
+    width: isEditorContentWidth(state.contentMaxWidth) ? state.contentMaxWidth : DEFAULT_EDITOR_CONTENT_WIDTH });
 }
 if (state?.outlineMode === 'floating' || state?.outlineMode === 'fixed') {
   outlineUiState.mode = state.outlineMode;

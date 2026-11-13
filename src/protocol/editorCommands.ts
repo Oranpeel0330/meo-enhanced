@@ -1,4 +1,5 @@
 import { normalizePreviewFontFamily } from './editorStyleEnvironment';
+import { isEditorContentWidth } from '../foundation/editorContentWidth';
 import { normalizeEditorLineHeight } from '../foundation/editorLineHeight';
 import { decodePreviewPresetPreference, decodePreviewPresetPreferencePatch, isPreviewPresetId, type PreviewPresetId, type PreviewPresetPreference, type PreviewPresetPreferencePatch } from '../foundation/previewPresets';
 import { isUiLanguagePreference, type UiLanguagePreference } from '../foundation/uiLanguage';
@@ -25,7 +26,7 @@ export type EditorCommand =
   | { readonly type: 'setOutlineVisible'; readonly visible: boolean }
   | { readonly type: 'setOutlinePosition'; readonly position: OutlinePosition }
   | { readonly type: 'setOutlineWidth'; readonly width: number }
-  | { readonly type: 'setContentMaxWidth'; readonly enabled: boolean }
+  | { readonly type: 'setContentMaxWidth'; readonly enabled: boolean; readonly width?: number }
   | { readonly type: 'setLargeDocumentOptimization'; readonly enabled: boolean }
   | { readonly type: 'setTableStickyHeader'; readonly enabled: boolean }
   | { readonly type: 'setLatexDelimiters'; readonly enabled: boolean }
@@ -89,7 +90,6 @@ export function decodeEditorCommand(value: unknown): EditorCommand | null {
     case 'setGitDiffDetailsVisible':
       return isBoolean(value.visible) ? value as EditorCommand : null;
     case 'setFixedBaseline':
-    case 'setContentMaxWidth':
     case 'setLargeDocumentOptimization':
     case 'setTableStickyHeader':
     case 'setLatexDelimiters':
@@ -99,6 +99,8 @@ export function decodeEditorCommand(value: unknown): EditorCommand | null {
     case 'setDiffBaselineMode':
       return value.mode === 'current-edit' || value.mode === 'recent-save' || value.mode === 'git-head'
         ? value as EditorCommand : null;
+    case 'setContentMaxWidth':
+      return isBoolean(value.enabled) && (value.width === undefined || isEditorContentWidth(value.width)) ? value as EditorCommand : null;
     case 'updateFixedBaseline':
     case 'releaseFixedBaseline':
       return { type: value.type } as EditorCommand;

@@ -3,6 +3,7 @@ import { createElement, X } from 'lucide';
 import { createAboutSettings } from './aboutSettings';
 import type { EditorEnvironment } from '../../../src/protocol/editorServices';
 import { createMenuSwitch } from './menuSwitch';
+import { createContentWidthControl } from './contentWidthControl';
 import { createSegmentedControl } from './segmentedControl';
 import { createAppearanceSettings, type AppearanceSettingsOptions } from './appearanceSettings';
 import type { createPreviewPresetSettings } from './previewPresetSettings';
@@ -13,9 +14,11 @@ import { aboutCatalog, commandTitle, commandTitles, generalSearchKeywords, image
 
 type Section = keyof typeof sectionTitles;
 export type GeneralSetting = {
+  readonly parent?: keyof typeof generalSearchKeywords;
   readonly id: keyof typeof generalSearchKeywords; readonly section: 'display' | 'math' | 'opening' | 'interface'; readonly title: string; readonly description?: string;
   readonly control: { kind: 'switch'; get: () => boolean; set: (value: boolean) => void }
-    | { kind: 'choice'; get: () => string; set: (value: string) => void; options: readonly { value: string; label: string }[] };
+    | { kind: 'choice'; get: () => string; set: (value: string) => void; options: readonly { value: string; label: string }[] }
+    | { kind: 'contentWidth'; get: () => number; set: (value: number) => void; enabled: () => boolean };
 };
 const element = <K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) => {
   const node = document.createElement(tag); node.className = className; if (text !== undefined) node.textContent = text; return node;
@@ -54,6 +57,7 @@ export function createSettingsWindow(options: {
   let disposed = false;
   let renderedSignature = '';
   let valuePresenters: (() => void)[] = [];
+  let controlDisposers: (() => void)[] = [];
   const pending = new Set<string>();
   const scrollPositions: Record<SettingsTab, number> = { general: 0, appearance: 0, typing: 0, presets: 0, shortcuts: 0, extensions: 0, about: 0 };
   const appearance = createAppearanceSettings({ ...options.appearance, registerInput: options.registerInput });
@@ -128,9 +132,14 @@ export function createSettingsWindow(options: {
   }
   function renderGeneral(item: GeneralSetting) {
     const row = settingRow(item.title, item.description); row.dataset.setting = item.id;
+    if (item.parent) { row.classList.add('settings-item-dependent'); row.dataset.parentSetting = item.parent; }
     const control = item.control;
     if (control.kind === 'switch') row.append(makeSwitch(control.get, item.title, value => { control.set(value); renderContent(); }));
-    else {
+    else if (control.kind === 'contentWidth') {
+      const width = createContentWidthControl({ ...control, language, reset: true, registerInput: options.registerInput });
+      const presentWidth = () => { width.present(language); row.classList.toggle('is-disabled', !control.enabled()); };
+      controlDisposers.push(width.dispose); valuePresenters.push(presentWidth); presentWidth(); row.append(width.element);
+    } else {
       const slot = element('div', 'settings-choice');
       const choices = control.options;
       const segmented = createSegmentedControl({ ariaLabel: item.title, className: 'settings-segmented', buttonClassName: 'settings-choice-button', datasetKey: 'value', role: 'group', options: choices, buttonTitles: false });
@@ -217,7 +226,9 @@ export function createSettingsWindow(options: {
   function filtered() {
     const otherGeneral = options.getGeneral(language === 'zh-CN' ? 'en' : 'zh-CN');
     const generalText = (item?: GeneralSetting) => item ? [item.title, item.description, ...(item.control.kind === 'choice' ? item.control.options.flatMap(choice => [choice.value, choice.label]) : [])] : [];
-    const general = options.getGeneral(language).filter(item => matches(item.id, '常规 General', ...generalText(item), ...generalText(otherGeneral.find(other => other.id === item.id)), ...sectionTitles[item.section], ...generalSearchKeywords[item.id]));
+    const allGeneral = options.getGeneral(language);
+    const matchingGeneral = allGeneral.filter(item => matches(item.id, '常规 General', ...generalText(item), ...generalText(otherGeneral.find(other => other.id === item.id)), ...sectionTitles[item.section], ...generalSearchKeywords[item.id]));
+    const general = allGeneral.filter(item => matchingGeneral.includes(item) || matchingGeneral.some(child => child.parent === item.id));
     const typing = typingCatalog.filter(item => matches(item.key, '输入 Input', ...item.title, ...item.description, ...sectionTitles[item.section], ...typingSearchKeywords[item.key],
       ...(['pairMode', 'skipMode', 'deleteMode'].includes(item.key) ? (['zh-CN', 'en'] as const).flatMap(locale => modeOptions(item.key as 'pairMode' | 'skipMode' | 'deleteMode', locale).flatMap(option => [option.value, option.label])) : []),
       ...(item.key === 'convertTables' ? tablePasteContexts.flatMap(context => [...context.title, ...context.description]) : [])));
@@ -258,6 +269,7 @@ export function createSettingsWindow(options: {
     const oldScroll = content.scrollTop;
     const activeRecorder = document.activeElement?.classList.contains('settings-recorder');
     options.previewPresets?.clear();
+    for (const dispose of controlDisposers) dispose(); controlDisposers = [];
     valuePresenters = []; content.replaceChildren(); navigation.replaceChildren();
     if (tab === 'extensions' && options.extensionFeatures?.count(query())) content.append(options.extensionFeatures.render(language, query()));
     if (tab === 'appearance') content.append(appearance.render(language, query()));
@@ -335,5 +347,5 @@ export function createSettingsWindow(options: {
   present();
   return { open(next?: SettingsTab) { if (disposed) return; if (next) { search.value = ''; selectTab(next); } if (dialog.open) return; appearance.open(); present(); void options.imageLocation?.refresh(); options.extensionFeatures?.refresh(); dialog.showModal(); if (tab === 'about') about.open(); updateNavigation(); search.focus(); }, close: closeWindow,
     isOpen: () => dialog.open, present, setLanguage(next: UiLanguage) { language = next; present(); },
-    dispose() { disposed = true; appearance.dispose(); about.dispose(); abort.abort(); disposeSearchFocus?.(); options.previewPresets?.clear(); if (dialog.open) dialog.close(); dialog.remove(); } };
+    dispose() { disposed = true; for (const dispose of controlDisposers) dispose(); appearance.dispose(); about.dispose(); abort.abort(); disposeSearchFocus?.(); options.previewPresets?.clear(); if (dialog.open) dialog.close(); dialog.remove(); } };
 }

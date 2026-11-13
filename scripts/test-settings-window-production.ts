@@ -163,6 +163,155 @@ try {
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
     }, { text, mode, outline });
   };
+  if (process.argv.includes('--content-width-only') || process.argv.length === 2) {
+    const folder = path.join('.local', 'test-runs', 'content-width');
+    await fs.mkdir(folder, { recursive: true });
+    const quick = '.more-tools-panel [data-content-width-row]';
+    const field = `${quick} .content-width-input`;
+    const full = '[data-setting="widthValue"]';
+    const width = () => page.evaluate(() => document.documentElement.style.getPropertyValue('--meo-content-max-width'));
+    const fill = async (selector: string, text: string) => {
+      await page.click(selector); await chord('a'); await page.keyboard.press('Backspace');
+      if (text) await page.type(selector, text);
+    };
+    const messageCount = () => page.evaluate(() => (window as any).__messages.filter((m: any) => m.type === 'setContentMaxWidth').length);
+    for (const mode of ['source', 'live'] as const) for (const large of [false, true]) {
+      const sample = '# Width\n\n| A | B |\n| --- | --- |\n| One | Two |\n\n$$x+y$$\n\n'
+        + 'Paragraph with enough words to wrap when the reading area changes.\n\n'.repeat(large ? 4500 : 35);
+      await openFixture(sample, mode);
+      await page.setViewport({ width: 1400, height: 900 });
+      await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden') && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+      assert.equal(assessLargeDocument(sample).boundedEditorWork, large, 'paired document sizes exercise the production policy');
+      await page.mouse.move(650, 600); await page.mouse.wheel({ deltaY: large ? 1800 : 300 });
+      await page.waitForFunction(() => (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.cm-editor')).scrollDOM.scrollTop > 100);
+      await page.evaluate(async () => { for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame); });
+      const before = await page.evaluate(() => {
+        const h = (window as any).EditingSettingsHarness, view = h.EditorView.findFromDOM(document.querySelector('.cm-editor'));
+        const from = view.lineBlockAtHeight(view.scrollDOM.scrollTop).from;
+        view.dispatch({ selection: { anchor: from + 1, head: from + 5 } });
+        return { selection: view.state.selection.toJSON(), text: view.state.doc.toString(),
+          readingLine: view.state.doc.lineAt(from).number };
+      });
+      await page.click('.more-tools-wrapper > .format-button');
+      assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), true);
+      await page.click('[data-action="contentMaxWidth"]');
+      assert.equal(await page.$eval('.more-tools-panel', e => (e as HTMLElement).hidden), false, 'toggle keeps the menu open');
+      assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), false);
+      assert.equal(await width(), '800px');
+      await fill(field, '850');
+      assert.equal(await width(), '800px', 'typing a draft does not reflow the document');
+      const count = await messageCount();
+      await page.click(`${quick} [data-width-action="increase"]`);
+      assert.equal(await width(), '950px');
+      assert.equal(await messageCount(), count + 1, 'draft plus pointer step saves only the final width');
+      await fill(field, '1200'); await page.keyboard.press('Enter');
+      assert.equal(await width(), '1200px');
+      for (const invalid of ['', '399', '2401', '800.5', 'abc']) {
+        await fill(field, invalid); await page.keyboard.press('Enter');
+        assert.equal(await page.$eval(field, e => e.getAttribute('aria-invalid')), 'true');
+        assert.equal(await width(), '1200px', 'invalid drafts retain the accepted width');
+      }
+      await fill(field, '400'); await page.keyboard.press('Enter');
+      assert.equal(await page.$eval(`${quick} [data-width-action="decrease"]`, e => (e as HTMLButtonElement).disabled), true);
+      await fill(field, '2390'); await page.keyboard.press('Enter');
+      await page.click(`${quick} [data-width-action="increase"]`);
+      assert.equal(await width(), '2400px');
+      assert.equal(await page.$eval(`${quick} [data-width-action="increase"]`, e => (e as HTMLButtonElement).disabled), true);
+      await page.click('[data-action="contentMaxWidth"]');
+      assert.equal(await page.$eval(quick, e => (e as HTMLElement).hidden), true);
+      assert.equal(await width(), '');
+      await page.click('[data-action="contentMaxWidth"]');
+      assert.equal(await width(), '2400px', 're-enabling restores the last pixel width');
+      await page.click('.more-tools-settings-button');
+      assert.equal(await page.$eval(full, e => (e as HTMLElement).dataset.parentSetting), 'width');
+      assert.equal(await page.$eval(`${full} .content-width-input`, e => (e as HTMLInputElement).value), '2400');
+      await page.click('[data-setting="width"] [role="switch"]');
+      assert.equal(await page.$eval(`${full} .content-width-input`, e => (e as HTMLInputElement).disabled), true);
+      assert.equal(await page.$eval(full, e => e.getBoundingClientRect().height > 0), true, 'the dependent setting remains discoverable while disabled');
+      await page.click('[data-setting="width"] [role="switch"]');
+      await fill(`${full} .content-width-input`, '1100');
+      await page.click('.settings-title');
+      assert.equal(await width(), '1100px', 'valid blur commits the input');
+      await page.click(`${full} [data-width-action="reset"]`);
+      assert.equal(await width(), '800px');
+      await page.screenshot({ path: path.join(folder, `${mode}-${large ? 'large' : 'ordinary'}-zh.png`) });
+      await page.click('.settings-close');
+      await page.evaluate(async () => { for (let i = 0; i < 8; i++) await new Promise(requestAnimationFrame); });
+      const after = await page.evaluate(() => {
+        const h = (window as any).EditingSettingsHarness, view = h.EditorView.findFromDOM(document.querySelector('.cm-editor'));
+        return { selection: view.state.selection.toJSON(), text: view.state.doc.toString(), focus: view.hasFocus,
+          optimized: h.usesLargeDocumentDerivedWorkBudget(view.state),
+          readingLine: view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number };
+      });
+      assert.deepEqual(after.selection, before.selection); assert.equal(after.text, before.text);
+      assert.equal(after.focus, true); assert.equal(after.optimized, large);
+      assert.ok(Math.abs(after.readingLine - before.readingLine) <= 1, `${mode}/${large}: width changes retain the reading line (${before.readingLine} -> ${after.readingLine})`);
+      await page.setViewport({ width: 360, height: 780 });
+      await page.click('.more-tools-wrapper > .format-button');
+      await fill(field, '2400'); await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'a large configured maximum does not widen a narrow pane');
+      await page.screenshot({ path: path.join(folder, `${mode}-${large ? 'large' : 'ordinary'}-narrow.png`) });
+      console.log(`Content width ${mode}/${large ? 'optimized' : 'ordinary'}: input, pointer step, bounds, hierarchy, focus and narrow layout passed`);
+    }
+    const widthSurfaceColors = new Set<string>();
+    for (const language of ['en', 'zh-CN'] as const) for (const appearance of ['light', 'dark'] as const) {
+      // Use a fresh Webview for each independent palette/language case.
+      await page.close(); page = await browser.newPage();
+      page.on('pageerror', error => errors.push(String(error)));
+      await openFixture();
+      await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden'));
+      await page.evaluate(language => {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiLanguageChanged', uiLanguagePreference: language, uiLanguage: language, automaticUiLanguage: language } }));
+      }, language);
+      await page.locator('.more-tools-wrapper > .format-button').click();
+      await page.locator(`button.editor-appearance-button[data-editor-appearance="${appearance}"]`).click();
+      widthSurfaceColors.add(await page.$eval('.more-tools-panel', e => getComputedStyle(e).backgroundColor));
+      await page.click('[data-action="contentMaxWidth"]');
+      await page.screenshot({ path: path.join(folder, `quick-${language}-${appearance}.png`) });
+      await page.click('.more-tools-settings-button');
+      await fill('.settings-search', language === 'en' ? 'pixels' : '像素');
+      assert.deepEqual(await page.$$eval('.settings-item', nodes => nodes.map(node => (node as HTMLElement).dataset.setting)), ['width', 'widthValue'], 'search retains the parent switch for the dependent numeric setting');
+      await page.setViewport({ width: 500, height: 780 });
+      await page.screenshot({ path: path.join(folder, `full-${language}-${appearance}-narrow.png`) });
+      assert.equal(await page.$eval('.settings-window', e => e.scrollWidth <= e.clientWidth), true);
+      await page.click('.settings-close');
+      console.log(`Content width ${language}/${appearance}: actual palette, dependent search and narrow settings passed`);
+    }
+    assert.equal(widthSurfaceColors.size, 2, 'width controls are inspected under both actual UI palettes');
+    await page.exposeFunction('__renderWidthPreview', (request: { text: string; uiLanguage: 'en' | 'zh-CN'; preset?: PreviewPresetId }) =>
+      renderPreviewDocument({ markdownText: request.text, uiLanguage: request.uiLanguage, preset: request.preset, sourceDocumentPath: '' }));
+    await openFixture('# Preview width\n\nPreview retains its own reading layout.');
+    await page.evaluate(() => {
+      const scope = window as any; scope.__renderLatexPreview = scope.__renderWidthPreview;
+      const request = scope.__messages.findLast((m: any) => m.type === 'requestPreviewRender');
+      if (request) scope.__renderWidthPreview(request).then((value: unknown) => window.dispatchEvent(new MessageEvent('message', {
+        data: { type: 'previewRenderResult', requestId: request.requestId, result: { ok: true, value } }
+      })));
+    });
+    await page.click('[data-mode="preview"]');
+    await page.waitForFunction(() => document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.querySelector('.meo-export-doc')
+      && document.querySelector<HTMLElement>('.preview-status')?.hidden && !document.querySelector('.editor-host')?.hasAttribute('data-preview-cover'));
+    const previewBefore = await page.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!;
+      const doc = frame.contentDocument!.querySelector<HTMLElement>('.meo-export-doc')!;
+      (window as any).__widthPreviewDocument = doc;
+      return { width: doc.getBoundingClientRect().width, html: doc.innerHTML,
+        requests: (window as any).__messages.filter((m: any) => m.type === 'requestPreviewRender').length };
+    });
+    await page.click('.more-tools-wrapper > .format-button'); await page.click('[data-action="contentMaxWidth"]');
+    await fill(field, '400'); await page.keyboard.press('Enter');
+    await fill(field, '2400'); await page.keyboard.press('Enter');
+    const previewAfter = await page.evaluate(() => {
+      const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.querySelector<HTMLElement>('.meo-export-doc')!;
+      return { width: doc.getBoundingClientRect().width, html: doc.innerHTML,
+        requests: (window as any).__messages.filter((m: any) => m.type === 'requestPreviewRender').length,
+        same: doc === (window as any).__widthPreviewDocument };
+    });
+    assert.deepEqual(previewAfter, { ...previewBefore, same: true }, 'editor width changes retain the exact Preview document, width and render request count');
+    await page.evaluate(() => { delete (window as any).__renderLatexPreview; });
+    assert.deepEqual(errors, []);
+    if (process.argv.includes('--content-width-only')) { await closeTestBrowser(browser); process.exit(0); }
+  }
   if (process.argv.includes('--host-language-only') || process.argv.length === 2) {
     for (const text of ['# Language\n\nSelected prose\n', '# Language\n\n' + 'Large document language setting body.\n\n'.repeat(18000)]) {
       await openFixture(text);
@@ -561,7 +710,7 @@ try {
   assert.equal(await page.$eval('.settings-about-copy', element => element.getAttribute('aria-label')), '复制版本信息', 'Reopening retires prior clipboard feedback');
   await page.click('.settings-tab[data-tab="general"]');
   assert.equal(await page.$eval('.settings-window', element => (element as HTMLDialogElement).open), true);
-  assert.equal(await page.$$eval('.settings-item', elements => elements.length), 10);
+  assert.equal(await page.$$eval('.settings-item', elements => elements.length), 11);
   for (const [setting, type] of [['boldHeadings', 'setBoldHeadings'], ['stickyHeader', 'setTableStickyHeader']]) {
     const toggle = `[data-setting="${setting}"] .settings-switch`;
     assert.equal(await page.$eval(toggle, element => element.getAttribute('aria-checked')), 'true');
@@ -1187,14 +1336,14 @@ try {
         query: element.querySelector('.settings-item-title')!.textContent!,
         values: [...element.querySelectorAll('.settings-key, .image-location-mode-title, .image-naming-title, .image-location-field-label, .image-location-picker, .image-location-token')].map(control => control.getAttribute('aria-label') ?? control.textContent!)
       })));
-      assert.equal(items.length, tab === 'general' ? 10 : tab === 'appearance' ? 13 : tab === 'typing' ? 16 : editorCommandIds.length, 'search inventory includes every setting and command');
+      assert.equal(items.length, tab === 'general' ? 11 : tab === 'appearance' ? 13 : tab === 'typing' ? 16 : editorCommandIds.length, 'search inventory includes every setting and command');
       searchCases.push(...items.flatMap(item => [item.query, ...item.values].map(query => ({tab, id: item.id, query}))));
     }
     await page.click('.settings-close');
   }
   const synonymCases: readonly [SearchTab, string, string, string][] = [
     ['general', 'lineNumbers', '边栏', 'gutter'], ['general', 'foldCode', '收起代码', 'collapse'],
-    ['general', 'width', '版心', 'reading width'], ['general', 'strongColor', '加粗颜色', 'bold color'],
+    ['general', 'width', '版心', 'reading width'], ['general', 'widthValue', '像素', 'pixels'], ['general', 'strongColor', '加粗颜色', 'bold color'],
     ['general', 'boldHeadings', '标题字重', 'heading weight'], ['general', 'stickyHeader', '冻结表头', 'freeze header'],
     ['general', 'restorePosition', '上次位置', 'remember position'], ['general', 'largeDocument', '启动速度', 'large file'],
     ['appearance', 'mode', '夜间', 'night'], ['appearance', 'surface', '底色', 'surface'], ['appearance', 'documentBackground', '画布', 'canvas'], ['appearance', 'textEmphasis', '圆点', 'bullet'], ['appearance', 'link', '脚注', 'footnote'], ['general', 'language', '本地化', 'locale'], ['appearance', 'fontSize', '文字大小', 'zoom'], ['appearance', 'lineHeight', '行高', 'leading'], ['appearance', 'lineHeight', '未完善', 'Beta'], ['appearance', 'mouseWheelZoom', '鼠标 滚轮', 'mouse wheel'],
