@@ -363,11 +363,11 @@ const createMoreToolsControlHeading = (icon: Parameters<typeof createElement>[0]
 
 const contentMaxWidthBtn = document.createElement('button');
 contentMaxWidthBtn.type = 'button';
-contentMaxWidthBtn.className = 'more-tools-option more-tools-width-toggle';
+contentMaxWidthBtn.className = 'more-tools-option more-tools-toggle-option';
 contentMaxWidthBtn.dataset.action = 'contentMaxWidth';
 contentMaxWidthBtn.setAttribute('role', 'menuitemcheckbox');
-contentMaxWidthBtn.setAttribute('aria-label', activeUiStrings.contentMaxWidthShortLabel);
-contentMaxWidthBtn.append(createMenuSwitch());
+contentMaxWidthBtn.setAttribute('aria-label', activeUiStrings.constrainWidth);
+appendMoreToolsOptionContent(contentMaxWidthBtn, DocumentWidth, activeUiStrings.constrainWidth);
 const contentMaxWidthControl = createContentWidthControl({
   get: () => contentMaxWidth, set: value => setContentMaxWidthValue(value),
   enabled: () => contentMaxWidthEnabled, language: activeUiLanguage
@@ -378,16 +378,11 @@ contentMaxWidthRow.dataset.contentWidthRow = '';
 const contentMaxWidthLabel = document.createElement('span');
 contentMaxWidthLabel.className = 'more-tools-control-label';
 contentMaxWidthLabel.id = 'meo-content-width-label';
-contentMaxWidthLabel.textContent = activeUiStrings.contentMaxWidthShortLabel;
-const contentMaxWidthMain = document.createElement('div');
-contentMaxWidthMain.className = 'more-tools-width-main';
-contentMaxWidthMain.append(createMoreToolsControlHeading(DocumentWidth, contentMaxWidthLabel), contentMaxWidthControl.element);
+contentMaxWidthLabel.textContent = activeUiStrings.contentMaxWidthLabel;
 contentMaxWidthRow.setAttribute('role', 'group');
 contentMaxWidthRow.setAttribute('aria-labelledby', contentMaxWidthLabel.id);
-contentMaxWidthRow.append(contentMaxWidthMain, contentMaxWidthBtn);
-contentMaxWidthRow.addEventListener('click', event => {
-  if (event.target instanceof Element && !event.target.closest('.content-width-field, button')) contentMaxWidthBtn.click();
-});
+contentMaxWidthRow.append(contentMaxWidthLabel, contentMaxWidthControl.element);
+contentMaxWidthRow.hidden = true;
 
 const liveStrongColoringBtn = document.createElement('button');
 liveStrongColoringBtn.type = 'button';
@@ -513,6 +508,7 @@ const setFixedBaselineState = (pinned: boolean, active: boolean, updatedAt?: num
 const updateContentMaxWidthUI = () => {
   contentMaxWidthBtn.classList.toggle('is-active', contentMaxWidthEnabled);
   contentMaxWidthBtn.setAttribute('aria-checked', contentMaxWidthEnabled ? 'true' : 'false');
+  contentMaxWidthRow.hidden = !contentMaxWidthEnabled;
   contentMaxWidthControl.present(activeUiLanguage);
   settingsWindow?.present();
 };
@@ -1330,8 +1326,9 @@ const applyUiLanguage = (language: UiLanguage): void => {
     ? strings.reloadDiskVersionDoubleClick
     : strings.reloadDiskVersion;
   discardBtn.setAttribute('aria-label', strings.reloadDiskVersion);
-  contentMaxWidthBtn.setAttribute('aria-label', strings.contentMaxWidthShortLabel);
-  contentMaxWidthLabel.textContent = strings.contentMaxWidthShortLabel;
+  contentMaxWidthBtn.setAttribute('aria-label', strings.constrainWidth);
+  contentMaxWidthBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.constrainWidth;
+  contentMaxWidthLabel.textContent = strings.contentMaxWidthLabel;
   contentMaxWidthControl.present(language);
   sourceLineNumbersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.showLineNumbers;
   liveStrongColoringBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.strongColoring;
@@ -1466,6 +1463,7 @@ moreToolsPanel.append(
   displaySettingsHeading,
   sourceLineNumbersBtn,
   longCodeBlockFoldingBtn,
+  contentMaxWidthBtn,
   contentMaxWidthRow,
   liveStrongColoringBtn,
   latexDelimitersBtn,

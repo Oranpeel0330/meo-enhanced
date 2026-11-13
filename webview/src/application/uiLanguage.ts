@@ -344,7 +344,6 @@ export type UiStrings = Readonly<{
   constrainContentWidth: string;
   constrainWidth: string;
   contentMaxWidthLabel: string;
-  contentMaxWidthShortLabel: string;
   contentMaxWidthDescription: string;
   contentMaxWidthRange: string;
   disableConstrainedWidth: string;
@@ -589,9 +588,8 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     historyFailed: 'Undo/Redo could not finish',
     historyFailedMessage: 'Check the current document before continuing. You can save a copy to keep its current contents.',
     reloadDiskVersion: 'Reload (discard unsaved changes)', reloadDiskVersionDoubleClick: 'Confirm reload (discard unsaved changes)',
-    constrainContentWidth: 'Constrain Content Width', constrainWidth: 'Limit content width',
-    contentMaxWidthLabel: 'Maximum content width',
-    contentMaxWidthShortLabel: 'Limit content width',
+    constrainContentWidth: 'Constrain Content Width', constrainWidth: 'Limit document width',
+    contentMaxWidthLabel: 'Maximum width',
     contentMaxWidthDescription: '400–2400px. Applies to Live and Source; fits narrower panes.',
     contentMaxWidthRange: 'Enter a whole number from 400 to 2400.',
     disableConstrainedWidth: 'Disable Constrained Width',
@@ -858,9 +856,8 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     historyFailed: '撤销或重做未能完成',
     historyFailedMessage: '请先检查当前文档内容，再继续编辑。你可以另存副本保留当前内容。',
     reloadDiskVersion: '重新加载（放弃未保存内容）', reloadDiskVersionDoubleClick: '确认重新加载（放弃未保存内容）',
-    constrainContentWidth: '限制内容宽度', constrainWidth: '限制宽度',
-    contentMaxWidthLabel: '最大内容宽度',
-    contentMaxWidthShortLabel: '限制文档宽度',
+    constrainContentWidth: '限制内容宽度', constrainWidth: '限制文档宽度',
+    contentMaxWidthLabel: '最大文档宽度',
     contentMaxWidthDescription: '400～2400px。用于实时与源码模式，窄窗口自动适配。',
     contentMaxWidthRange: '请输入400～2400之间的整数。',
     disableConstrainedWidth: '取消内容宽度限制',
