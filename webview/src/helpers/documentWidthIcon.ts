@@ -1,11 +1,9 @@
 import type { IconNode } from 'lucide';
 
-// Fluent Arrow Autofit Width 24 Regular; see THIRD_PARTY_NOTICES.md.
-// Preserve the supplied fill geometry without inheriting Lucide's stroke.
+// Fluent Arrow Autofit Width adapted for 16px menus; see THIRD_PARTY_NOTICES.md.
+// Fill more of the icon box and use the neighboring icons' rounded stroke weight.
 export const DocumentWidth: IconNode = [
-  ['path', {
-    fill: 'currentColor',
-    stroke: 'none',
-    d: 'M5.72 13.72a.75.75 0 0 1 1.06 1.06L5.56 16h3.69a.75.75 0 0 1 0 1.5H5.56l1.22 1.22a.75.75 0 0 1-1.06 1.06l-2.5-2.5a.75.75 0 0 1 0-1.06zm11.5 0a.75.75 0 0 1 1.06 0l2.5 2.5l.052.056a.75.75 0 0 1-.052 1.004l-2.5 2.5a.75.75 0 0 1-1.06-1.06l1.22-1.22h-3.69a.75.75 0 0 1 0-1.5h3.69l-1.22-1.22a.75.75 0 0 1 0-1.06M17.75 4A2.25 2.25 0 0 1 20 6.25v5a.75.75 0 0 1-1.5 0v-5a.75.75 0 0 0-.75-.75H6.25a.75.75 0 0 0-.75.75v5a.75.75 0 0 1-1.5 0v-5A2.25 2.25 0 0 1 6.25 4z'
-  }]
+  ['path', { d: 'M4 10.5V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v5.5' }],
+  ['path', { d: 'M9.5 18H2m4-4-4 4 4 4' }],
+  ['path', { d: 'M14.5 18H22m-4-4 4 4-4 4' }]
 ];

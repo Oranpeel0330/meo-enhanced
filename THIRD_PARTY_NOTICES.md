@@ -25,7 +25,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 - Source: https://github.com/microsoft/fluentui-system-icons
 - Icon: `assets/Arrow Autofit Width/SVG/ic_fluent_arrow_autofit_width_24_regular.svg`.
 - License: MIT.
-- Usage: the document-width setting uses the supplied optimized 24px Regular path, scaled to the menu's 16px icon size with inherited text color and no added stroke.
+- Usage: the document-width setting adapts the Regular icon for 16px menus, enlarging its frame and outward arrows and using the surrounding icons' rounded stroke weight and inherited text color.
 
 MIT License
 
