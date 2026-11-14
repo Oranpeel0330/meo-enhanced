@@ -60,7 +60,9 @@ async function assertLiteralSourceEnter(page: Page): Promise<void> {
     { before: '```mermaid\nflowchart TD\n    A --> B|\n```', insert: '\n    ' },
     { before: '$$\n  x + y|\n$$', insert: '\n  ' },
     { before: '> ```ts\n>   const value = 1;|\n> ```', insert: '\n>   ' },
-    { before: '> $$\n>   x + y|\n> $$', insert: '\n>   ' }
+    { before: '> $$\n>   x + y|\n> $$', insert: '\n>   ' },
+    { before: 'Before the formula.\n\n> $$\n>   x + y|\n> $$', insert: '\n>   ' },
+    { before: '> ```text\n> $$\n>   x + y|\n> $$\n> ```', insert: '\n>   ' }
   ];
   for (const mode of ['source', 'live']) for (const large of [false, true]) for (const fixture of fixtures) {
     const at = fixture.before.indexOf('|');

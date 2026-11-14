@@ -33,7 +33,7 @@ import { sourceHighlightStyle } from './theme';
 import { viewportSyntaxHighlighting } from './editor/viewportSyntaxHighlighting';
 import { listHistoryFocus, readListHistoryFocus } from './adapters/codeMirrorListHistoryFocus';
 import { backgroundMarkdownStructureExtensions } from './editor/backgroundMarkdownStructure';
-import { isCompleteMarkdownStructure, markdownStructureIdentity } from './editor/markdownStructure';
+import { isCompleteMarkdownStructure, markdownStructureAvailable, markdownStructureIdentity } from './editor/markdownStructure';
 import { adoptMarkdownDocumentContext } from './markdownDocumentContext';
 import type { MarkdownParser } from '@lezer/markdown';
 import { prepareSourceSyntax, sourceSyntax, sourceSyntaxPreparation } from './helpers/sourceSyntax';
@@ -2362,7 +2362,7 @@ export function createEditor({
         {
           key: 'Enter',
           run: (view) =>
-            continueLiteralSourceNewline(view) || insertMermaidNewline(view) || insertDisplayMathNewline(view) ||
+            continueLiteralSourceNewline(view) || insertMermaidNewline(view) || insertDisplayMathInputNewline(view) ||
             insertIndentedCodeNewline(view, resolvedSyntaxTreeAt(view.state, view.state.selection.main.to)) ||
             handleEnterContinueContainedCodeBlock(view) ||
             (view.state.facet(inputAssistanceFacet).lists && handleEnterInList(view))
@@ -4797,6 +4797,23 @@ function handleEnterContinueContainedCodeBlock(view: EditorView): boolean {
   }
 
   return insertLiteralSourceNewline(view, continuation.prefix, continuation.literal);
+}
+
+function insertDisplayMathInputNewline(view: EditorView): boolean {
+  if (insertDisplayMathNewline(view)) return true;
+  const state = view.state, selection = state.selection.main;
+  if (state.readOnly || state.selection.ranges.length !== 1 || markdownStructureAvailable(state)) return false;
+  const end = state.doc.lineAt(selection.to).to;
+  const tree = boundedMarkdownInputPrefix(state, end);
+  if (!tree) return false;
+  // Cold Source has no Live presentation range. Reuse the bounded input owner
+  // and math completion's literal/container rules without scanning the document
+  // or publishing this command-local prefix as complete Markdown structure.
+  const local = EditorState.create({ doc: state.doc.slice(0, end), extensions: [
+    EditorState.tabSize.of(state.tabSize), latexDelimitersFacet.of(state.facet(latexDelimitersFacet))
+  ] });
+  const body = getMathCompletionBody(local, selection.from, tree);
+  return !!body?.display && selection.to <= body.to && insertLiteralSourceNewline(view, body.prefix);
 }
 
 function getContainedCodeBlockLineContinuation(state: EditorState, position: number): { prefix: string; literal: boolean } | null {

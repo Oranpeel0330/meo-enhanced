@@ -138,8 +138,8 @@ export function getDisplayMathCopySource(state: EditorState, range: DocumentMath
 
 /** Editable source bounds may include unfinished math. They are input context,
  * never a replacement for complete ranges used by rendering or export. */
-export function getMathCompletionBody(state: EditorState, position: number): MathCompletionBody | null {
-  const tree = ensureSyntaxTree(state, position, 10) ?? syntaxTree(state);
+export function getMathCompletionBody(state: EditorState, position: number,
+  tree: Tree = ensureSyntaxTree(state, position, 10) ?? syntaxTree(state)): MathCompletionBody | null {
   const frontmatter = parseFrontmatterCandidate(state);
   if (frontmatter && position >= frontmatter.from && position <= frontmatter.to) return null;
   let node = tree.resolveInner(position, -1);
