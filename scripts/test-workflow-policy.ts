@@ -136,6 +136,7 @@ function targetedCommands(
       return [
         packageScript('test:rendered-source'),
         script('scripts/test-live-viewport-content-production.ts'),
+        script('scripts/test-live-reading-paint-production.ts'),
         script('scripts/test-live-code-reading-production.ts'),
         script('scripts/test-live-editing-preview-production.ts'),
         script('scripts/test-math-tag-layout.ts'),
@@ -223,6 +224,7 @@ function targetedCommands(
         script('scripts/test-native-scroll-progress-production.ts'),
         script('scripts/test-rendered-block-scroll-layout.ts'),
         script('scripts/test-live-viewport-content-production.ts'),
+        script('scripts/test-live-reading-paint-production.ts'),
         script('scripts/test-live-code-reading-production.ts'),
         script('scripts/test-long-document-scroll.ts'),
         packageScript('test:reading-position'),

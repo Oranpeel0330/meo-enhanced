@@ -4,6 +4,7 @@ import { mapLiveWidgetPositions, liveWidgetPositionsIndependent } from '../edito
 import { renderedBlockPreviewHeight, renderedBlockPreview } from './renderedBlockPreview';
 import { isLiveInputDerivedWorkPending, requestLiveInputDerivedWorkOnFrame, usesLargeDocumentDerivedWorkBudget } from '../editor/liveInputDerivedWork';
 import { getViewportController } from './viewportController';
+import { commitObservedEditorSize } from '../editor/layoutMeasurement';
 
 type Band = { from: number; to: number };
 const overscanLines = 80;
@@ -99,6 +100,10 @@ export function liveViewportPresentationExtensions() {
         from: view.state.doc.line(Math.max(1, first - overscanLines)).from,
         to: view.state.doc.line(Math.min(view.state.doc.lines, last + overscanLines)).to
       }) });
+      // Prepared offscreen geometry can change the leading virtual gap without
+      // mounting a block/ResizeObserver. Finish CodeMirror's anchoring in this
+      // paint, rather than showing the new gap before its next-frame correction.
+      commitObservedEditorSize(view);
     };
     const schedule = () => {
       if (queued || disposed) return;

@@ -1729,6 +1729,18 @@ browser-protocol key synthesis does not establish this OS boundary.
 
 ## Document-scale coverage
 
+`scripts/test-live-reading-paint-production.ts` jumps to the document end and
+reads upward with trusted wheels in ordinary and actually optimized editors.
+A controlled prepared resource refines its offscreen height from 300px to 120px
+through the production reading-window owner. Compositor JPEG frames are matched
+using stable body ink, with explicit confidence and minimum observation checks;
+reverse painted jumps must be absent, source text stays unchanged, and the large
+case must actually hydrate the prepared resource. Failure-adjacent images and
+motion evidence are saved under `.local/test-artifacts/live-reading-paint/`.
+This checks painted continuity independently of DOM measurements sampled before
+CodeMirror's write phase. It belongs to the rendered/viewport targeted plans and
+the release browser suite.
+
 `scripts/test-live-viewport-content-production.ts` samples actual table cells,
 formula HTML, Mermaid SVG, HTML bodies, code actions and task checkboxes during
 continuous trusted wheel input, rather than
