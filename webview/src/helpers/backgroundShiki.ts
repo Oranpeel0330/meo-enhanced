@@ -28,6 +28,14 @@ async function loadSource(uri: string): Promise<string> {
   return source.promise;
 }
 
+/** Fetch-only preparation shares the request owner's existing retryable caches.
+ * It creates no worker or grammar and performs no tokenization on the UI thread. */
+export function prepareBackgroundShiki(uri: string): Promise<[string, ArrayBuffer]> {
+  const wasmUri = document.body.dataset.meoShikiWasmSrc
+    ?? new URL('onig.wasm', new URL(uri, document.baseURI)).href;
+  return Promise.all([loadSource(uri), loadWasm(wasmUri)]);
+}
+
 type Job = {
   readonly id: number;
   readonly lang: string;
@@ -75,9 +83,7 @@ export function createBackgroundShiki(uri: string, theme: RawVscodeTheme,
     armTimeout();
     try {
       if (!worker) {
-        const wasmUri = document.body.dataset.meoShikiWasmSrc
-          ?? new URL('onig.wasm', new URL(uri, document.baseURI)).href;
-        const [text, bytes] = await Promise.all([loadSource(uri), loadWasm(wasmUri)]);
+        const [text, bytes] = await prepareBackgroundShiki(uri);
         if (disposed || running !== job) return;
         // Keep the shared cache attached. Each worker receives its own bounded
         // transferable copy, retained until its first real request is sent.

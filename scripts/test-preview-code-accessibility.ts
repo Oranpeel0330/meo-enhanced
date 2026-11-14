@@ -25,6 +25,7 @@ try {
     observer.observe(document, { childList: true, subtree: true });
   });
   const host = await open(page, '# Accessible code\n\n```javascript\n' + source + '\n```\n\nAfter the code.');
+  let checkpoint = 'cold switch';
   const ready = () => page.waitForFunction(() => {
     const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
     return document.querySelector<HTMLElement>('#app')?.dataset.mode === 'preview'
@@ -36,6 +37,7 @@ try {
   }, { timeout: 10_000 });
   try {
     for (const stage of ['cold', 'warm']) {
+      checkpoint = stage + ' switch';
       const started = performance.now();
       await page.click('.mode-group [data-mode="preview"]');
       await ready(); await frames(page);
@@ -54,12 +56,15 @@ try {
       assert.ok(ms < (stage === 'cold' ? 5000 : 3000), `${stage} accessible Preview exceeded its switch budget (${ms}ms)`);
       if (stage === 'cold') {
         // A warm switch starts after the first visible syntax band has settled.
+        checkpoint = 'cold syntax band';
         await page.waitForFunction(() => document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!
           .querySelector<HTMLElement>('.meo-export-code-line-source')?.dataset.meoShiki);
+        checkpoint = 'Source return';
         await page.click('.mode-group [data-mode="source"]');
         await page.waitForFunction(() => document.querySelector('.meo-mode-source') && !document.querySelector('.mode-group [aria-busy="true"]'));
       }
     }
+    checkpoint = 'accessibility tree';
     const client = await page.createCDPSession();
     try {
       const { frameTree } = await client.send('Page.getFrameTree');
@@ -71,6 +76,7 @@ try {
       assert.ok(!nodes.some(node => !node.ignored && node.role?.value === 'StaticText' && node.name?.value === '18000'),
         'Decorative line numbers must not be announced');
     } finally { await client.detach(); }
+    checkpoint = 'copy and deep search';
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
       writeText: async (value: string) => { (window as any).__copiedCode = value; }
     } }));
@@ -102,6 +108,7 @@ try {
     assert.ok(Math.abs(wrapped.gap) < 1, 'Wrapped rows keep continuous source geometry');
     fs.mkdirSync('.local/input-presentation', { recursive: true });
     await page.screenshot({ path: '.local/input-presentation/preview-code-accessibility.png' });
+    checkpoint = 'runtime screen-reader changes';
     await page.evaluate(() => document.body.classList.remove('vscode-using-screen-reader'));
     await page.waitForFunction(() => {
       const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
@@ -118,6 +125,16 @@ try {
     await ready();
     assert.deepEqual(host.errors, []);
     console.log('Accessible giant Preview: full AX text, bounded markup, copy, deep search, warm switching and runtime screen-reader changes passed');
+  } catch (error) {
+    console.error('Accessible Preview failure', { checkpoint, errors: host.errors, state: await page.evaluate(() => {
+      const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
+      const rows = [...doc?.querySelectorAll<HTMLElement>('.meo-export-code-line-source') ?? []];
+      return { visibility: document.visibilityState, mode: document.querySelector<HTMLElement>('#app')?.dataset.mode,
+        editorInert: document.querySelector<HTMLElement>('.editor-host')?.inert,
+        busy: !!document.querySelector('.mode-group [aria-busy="true"]'), rows: rows.length,
+        colored: rows.filter(row => row.dataset.meoShiki).length, firstColor: rows[0]?.dataset.meoShiki };
+    }).catch(String) });
+    throw error;
   } finally { host.dispose(); await page.close(); }
 } catch (error) { primary = error; throw error; }
 finally { server.stop(true); if (primary === undefined) await closeTestBrowser(browser); else await closeTestBrowser(browser, primary); }

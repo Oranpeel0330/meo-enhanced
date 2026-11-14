@@ -51,7 +51,7 @@ import {
   isPreviewCodeHighlightReady,
   previewCodeReadingBand
 } from './previewCodeHighlight';
-import { activateShikiCodeHighlighting, subscribeShikiRefresh, setShikiTheme, getShikiThemeVersion, type RawVscodeTheme } from './shikiHighlighter';
+import { activateShikiCodeHighlighting, prepareShikiCodeHighlighting, subscribeShikiRefresh, setShikiTheme, getShikiThemeVersion, type RawVscodeTheme } from './shikiHighlighter';
 import { createToolbarDropdown } from './toolbarDropdown';
 import { createPreviewFontPicker } from '../adapters/previewFontPicker';
 import { fallbackPreviewFonts, type PreviewFont } from '../../../src/foundation/previewFonts';
@@ -2658,6 +2658,10 @@ export function createPreviewController({
     pendingText = text;
     updateViewportAlignment();
     setStatus(null);
+    // A fence marker is only a positive asset hint, not a syntax result. Fetch
+    // while the Host renders; waiting for its first code chunk loses this lead.
+    // Other code forms retain the confirmed-payload path below.
+    if (isSourceColoringEnabled() && (text.includes('```') || text.includes('~~~'))) prepareShikiCodeHighlighting();
     return previewRenderTransport.render({
       text,
       uiLanguage,
@@ -2687,6 +2691,9 @@ export function createPreviewController({
         return;
       }
       let value = result.value;
+      if (isSourceColoringEnabled() && (value.document
+        ? value.document.blocks.some(block => /^(?:fence|code_block|code_band)$/.test(block.kind))
+        : value.html.includes('class="hljs'))) prepareShikiCodeHighlighting();
       const root = activeFrameDocument?.querySelector<HTMLElement>('main.meo-export-doc');
       if (value.document && root && (!preserveFrame || frameRenderedText !== requestText)) {
         // Keep the current reading DOM and its owners intact until all chunks
@@ -3259,13 +3266,22 @@ export function createPreviewController({
     if (!scrollElement) {
       return;
     }
+    // Same-document presentation can fall back from a glyph to a source-range
+    // anchor. It must use the same virtual-prefix compensation during native
+    // motion: even writing the unchanged scrollTop abandons the browser's target.
+    const preserveNativeReading = acceptingViewportProjection !== null
+      && !acceptingViewportProjection.mapSourceLine && isViewportInteracting();
+    const restoreProjectedTop = (top: number) => {
+      if (preserveNativeReading && previewViewport) restoreVisualReadingScrollTop(getFrameDocument()!, top);
+      else scrollElement.scrollTop = top;
+    };
     if (sourceRange) {
       const range = findVisualRangeProjection(sourceRange, scrollElement.scrollTop + Math.max(0, viewportOffset), readingFlow);
       if (range) {
         const top = range.top + (range.bottom - range.top) * Math.max(0, Math.min(1, sourceRange.progress))
           - Math.max(0, viewportOffset);
         if (previewViewport) {
-          if (previewViewport.restoreReadingScrollTop(top)) { sourceMapDirty = true; localGeometryViewport = null; }
+          if (previewViewport.restoreReadingScrollTop(top, preserveNativeReading)) { sourceMapDirty = true; localGeometryViewport = null; }
         } else if (restoreFullPreviewReadingScrollTop(getFrameDocument()!, top)) sourceMapDirty = true;
         return;
       }
@@ -3306,10 +3322,10 @@ export function createPreviewController({
       const progress = sourceRange?.startLine === line && sourceRange.endLine === line
         ? sourceRange.progress : 0;
       const ratio = Math.max(0, Math.min(1, (line - source.exact.start + progress) / lineSpan));
-      scrollElement.scrollTop = source.exact.top
+      restoreProjectedTop(source.exact.top
         + (source.exact.bottom - source.exact.top) * ratio
         + Math.max(0, lineOffset)
-        - Math.max(0, viewportOffset);
+        - Math.max(0, viewportOffset));
       return;
     }
     if (source.before && source.after) {
@@ -3319,13 +3335,13 @@ export function createPreviewController({
       const ratio = Math.max(0, Math.min(1, continuous
         ? (line - source.before.end - 1 + sourceRange.progress) / gapLines
         : (line - source.before.end) / lineGap));
-      scrollElement.scrollTop = source.before.bottom
+      restoreProjectedTop(source.before.bottom
         + (source.after.top - source.before.bottom) * ratio
-        - Math.max(0, viewportOffset);
+        - Math.max(0, viewportOffset));
       return;
     }
     const edge = source.before ?? source.after;
-    if (edge) scrollElement.scrollTop = edge.top - Math.max(0, viewportOffset);
+    if (edge) restoreProjectedTop(edge.top - Math.max(0, viewportOffset));
   };
   const retainViewportProjection = (position: PreviewViewportPosition): void => {
     const frameDocument = getFrameDocument();

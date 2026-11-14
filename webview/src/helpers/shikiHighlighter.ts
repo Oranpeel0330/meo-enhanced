@@ -1,6 +1,6 @@
 import type { HighlighterCore } from 'shiki/core';
 import { bundledLanguages, bundledLanguagesInfo } from 'shiki/langs';
-import { createBackgroundShiki } from './backgroundShiki';
+import { createBackgroundShiki, prepareBackgroundShiki } from './backgroundShiki';
 import { toShikiTheme } from './shikiTheme';
 import { createShikiTokenCache } from './shikiTokenCache';
 import { tokenizeShikiCode } from './shikiTokenization';
@@ -173,6 +173,13 @@ export function activateShikiCodeHighlighting(surface: ShikiSurface = 'editor'):
       discardHighlighter(state);
     }
   };
+}
+
+/** Overlap cold asset loading with a known code-bearing Preview's layout.
+ * A failed hint leaves the normal token request's retry path in charge. */
+export function prepareShikiCodeHighlighting(): void {
+  const uri = typeof document === 'undefined' ? undefined : document.body.dataset.meoShikiWorkerSrc;
+  if (uri) void prepareBackgroundShiki(uri).catch(() => undefined);
 }
 
 function cancelRefresh(state: ShikiRuntimeState): void {

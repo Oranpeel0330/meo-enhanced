@@ -30,16 +30,28 @@ const fixture = (large: boolean) => Array.from({ length: 24 }, (_, index) => par
   ].join('\n')).join('\n') + (large ? '\n' + 'Distant plain paragraph.\n\n'.repeat(9_000)
     + `![Distant control](${assets.url}image/99)` : '');
 
-type Sample = { time: number; scrolling: boolean; targets: { kind: string; id: string; ready: boolean }[] };
+type Sample = { time: number; scrolling: boolean; targets: { kind: string; id: string; ready: boolean; rows?: number; colored?: number }[] };
 const reports: unknown[] = [];
 let primaryError: unknown;
 try {
-  for (const large of [false, true]) {
+  for (const { large, coldWorker } of [{ large: false, coldWorker: false }, { large: true, coldWorker: false }, { large: true, coldWorker: true }]) {
     requests.length = resolutions.length = network.length = 0;
     const text = fixture(large);
     assert.equal(assessLargeDocument(text).windowedPreview, large);
     const page = await browser.newPage();
-    const host = await open(page, text, false, 'preview', { resolveImageSrc: async source => {
+    let renderRequestedAt = 0;
+    if (coldWorker) await page.evaluateOnNewDocument(() => {
+      const nativeFetch = window.fetch;
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith('/shiki-highlight-worker.js')) {
+          (window as any).__coldWorkerRequestAt ??= Date.now();
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        return nativeFetch(input, init);
+      };
+    });
+    const host = await open(page, text, false, 'preview', { ...(coldWorker ? { beforePreviewRender: async () => { renderRequestedAt ||= Date.now(); } } : {}), resolveImageSrc: async source => {
       resolutions.push(source);
       if (!source.startsWith('poster-')) return source;
       await new Promise(resolve => setTimeout(resolve, 180));
@@ -53,15 +65,16 @@ try {
         const sample = () => {
           if (!probe.active) return;
           const targets: Sample['targets'] = [];
-          const collect = (node: Element, kind: string, id: string, ready: boolean) => {
+          const collect = (node: Element, kind: string, id: string, ready: boolean, syntax?: { rows: number; colored: number }) => {
             probe.mounted[`${kind}:${id}`] ??= performance.now();
             const bounds = node.getBoundingClientRect();
-            if (bounds.height > 0 && bounds.top < doc.defaultView!.innerHeight - 8 && bounds.bottom > 8) targets.push({ kind, id, ready });
+            if (bounds.height > 0 && bounds.top < doc.defaultView!.innerHeight - 8 && bounds.bottom > 8) targets.push({ kind, id, ready, ...syntax });
           };
           for (const code of doc.querySelectorAll('code.hljs')) {
             const id = code.textContent?.match(/RESOURCE_CODE_(\d+)/)?.[1];
             const rows = [...code.querySelectorAll<HTMLElement>('.meo-export-code-line-source')];
-            if (id) collect(code, 'code', id, rows.length > 0 && rows.every(row => !!row.dataset.meoShiki));
+            if (id) collect(code, 'code', id, rows.length > 0 && rows.every(row => !!row.dataset.meoShiki),
+              { rows: rows.length, colored: rows.filter(row => !!row.dataset.meoShiki).length });
           }
           for (const image of doc.images) {
             const id = image.alt.match(/RESOURCE_IMAGE_(\d+)/)?.[1];
@@ -82,8 +95,10 @@ try {
         };
         sample();
         const bounds = frame.getBoundingClientRect();
-        return { x: bounds.right - 35, y: bounds.top + 180 };
+        return { x: bounds.right - 35, y: bounds.top + 180, workerRequestedAt: (window as any).__coldWorkerRequestAt as number | undefined };
       });
+      if (coldWorker) assert.ok(point.workerRequestedAt && point.workerRequestedAt <= renderRequestedAt,
+        'Cold syntax assets begin before Host rendering, without waiting for resource readiness before the wheels');
       await page.mouse.move(point.x, point.y);
       // Begin cold: no resource-ready wait before trusted, continuous wheels.
       for (let turn = 0; turn < 42; turn++) {
@@ -104,7 +119,10 @@ try {
         return { key, frames: visible.length, ready: ready.length, initialBlank: ready.length ? visible.indexOf(ready[0]!) : visible.length,
           firstVisible: visible[0]?.time, lastVisible: visible.at(-1)?.time, firstReady: anyReady?.time };
       }).filter(entry => entry.frames >= 8);
-      reports.push({ large, entries, requests: [...requests], network: network.map(event => ({ ...event, time: event.time - observation.origin })) });
+      reports.push({ large, coldWorker, entries, requests: [...requests], errors: host.errors,
+        blankCode: moving.flatMap(sample => sample.targets.filter(target => target.kind === 'code' && !target.ready)
+          .map(target => ({ time: sample.time, ...target }))),
+        network: network.map(event => ({ ...event, time: event.time - observation.origin })) });
       fs.mkdirSync('.local/probes', { recursive: true });
       fs.writeFileSync('.local/probes/preview-resource-preparation-production.json', JSON.stringify(reports, null, 2));
       for (const kind of ['code', 'image', 'math', 'poster']) {
@@ -124,6 +142,23 @@ try {
       await page.screenshot({ path: screenshot });
     } finally { host.dispose(); await page.close(); }
   }
+  // A cold frame starts its nearby cache before the first scroll/IO crossing.
+  // This separate idle case does not add a readiness wait to the cold wheels.
+  requests.length = 0;
+  const idlePage = await browser.newPage();
+  const idleText = fixture(true);
+  const idleHost = await open(idlePage, idleText, false, 'preview', { resolveImageSrc: source => source });
+  try {
+    await idlePage.waitForFunction(() => document.querySelector<HTMLIFrameElement>('.preview-frame')
+      ?.contentDocument?.scrollingElement?.scrollTop === 0);
+    const deadline = performance.now() + 5000;
+    while (!requests.includes('/image/0') && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(requests.includes('/image/0'), 'Initial nearby cache starts without a wheel or resource intersection');
+    assert.equal(await idlePage.$eval('.preview-frame', frame => (frame as HTMLIFrameElement).contentDocument!.scrollingElement!.scrollTop), 0);
+    assert.equal(idleHost.readHost(), idleText);
+    assert.deepEqual(idleHost.errors, []);
+    reports.push({ idle: 'initial nearby preparation without input' });
+  } finally { idleHost.dispose(); await idlePage.close(); }
   heldImage = new Promise<void>(resolve => { releaseHeldImage = resolve; });
   const page = await browser.newPage();
   const previous = `![Late control](${assets.url}held.svg)\n\n` + fixture(true);
