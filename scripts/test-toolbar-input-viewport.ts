@@ -928,8 +928,11 @@ async function runPaintedActivationClick(browser: Browser, mode: 'live' | 'sourc
     });
     assert.equal(clock.now, 68, mode + ' timeout clock did not preserve 0\u219234\u219268');
     assert.equal(clock.trusted, true, mode + ' caret click was not trusted');
-    assert.deepEqual(clock.pending.map((timer: { due: number }) => timer.due), [214],
-      mode + ' only the selection statistics debounce may remain after the cancelled activation guard');
+    // Live selection also schedules the reading-preparation owner's 40ms turn.
+    // The original activation guard ID was checked above; keep an exact queue
+    // assertion so an unexpected focus callback still fails this contract.
+    assert.deepEqual(clock.pending.map((timer: { due: number }) => timer.due), mode === 'live' ? [214, 74] : [214],
+      mode + ' only selection statistics and Live reading preparation may remain after the cancelled activation guard');
     frames.push({ data: Buffer.from(await page.screenshot({ captureBeyondViewport: false })).toString('base64'), sequence: frames.length });
     await input.send('Page.stopScreencast');
     input.off('Page.screencastFrame', observeFrame);

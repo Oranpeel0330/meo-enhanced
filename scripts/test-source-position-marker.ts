@@ -759,9 +759,11 @@ async function assertMarkerPrecision(page: import('puppeteer-core').Page, bundle
 }
 
 async function assertMarkerContinuity(page: import('puppeteer-core').Page, bundle: string, windowed: boolean, imageAbove: boolean, navigationOnly = false): Promise<void> {
-  const prefix = imageAbove ? Array.from({ length: 40 }, (_, index) => `Before image ${index}: upstream context.\n\n`).join('')
+  const prefix = imageAbove ? Array.from({ length: 200 }, (_, index) => `Before image ${index}: upstream context.\n\n`).join('')
     + '![Offscreen image](marker-image.svg)\n\n'
-    + Array.from({ length: 40 }, (_, index) => `After image ${index}: upstream context.\n\n`).join('') : '';
+    // Keep the unloaded geometry witness beyond the nearby idle preparation
+    // band as well as the viewport; a merely offscreen image may warm legally.
+    + Array.from({ length: 200 }, (_, index) => `After image ${index}: upstream context.\n\n`).join('') : '';
   const lineOffset = prefix.split('\n').length - 1;
   const text = prefix + '# Position continuity\n\n- Typing target.\n- Neighbor item.\n\nFollowing paragraph.\n\n```text\nAlpha\n\nOmega\n```\n\n<!-- Hidden navigation target -->\n\n'
     + Array.from({ length: windowed ? 5000 : navigationOnly ? 50 : 10 }, (_, index) => `Paragraph ${index} with stable reading context.\n\n`).join('');
