@@ -758,13 +758,17 @@ try {
   for (const mode of ['source', 'live']) {
     await page.click(`button[data-mode="${mode}"]`);
     await page.waitForSelector(`.cm-editor.meo-mode-${mode}`);
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('.editor-host')!.inert
+      && document.querySelector<HTMLElement>('.editor-loading')?.hidden !== false
+      && !document.querySelector('.mode-group [aria-busy="true"]'));
     for (const method of ['button', 'backdrop', 'escape'] as const) {
       for (const [anchor, head] of [[2, 2], [1, 4], [4, 1]]) {
         const before = await page.evaluate(({ anchor, head }) => {
           const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.cm-editor'));
           view.dispatch({ selection: { anchor, head } }); view.focus();
-          return { text: view.state.doc.toString(), scroll: view.scrollDOM.scrollTop };
+          return { text: view.state.doc.toString(), scroll: view.scrollDOM.scrollTop, focus: view.hasFocus };
         }, { anchor, head });
+        assert.equal(before.focus, true, `${mode}/${method}: settings starts from an interactive focused editor`);
         await page.click('.more-tools-wrapper > .format-button'); await page.click('.more-tools-settings-button');
         await closeSettings(method);
         const restored = await page.evaluate(() => {
@@ -1859,6 +1863,9 @@ try {
   assert.equal(assessLargeDocument(largeText).boundedEditorWork, true);
   await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
   await openFixture(largeText);
+  // The feedback popover and About share one successful environment snapshot.
+  // Select the remote fixture before either surface can request that snapshot.
+  await page.evaluate(() => { (window as any).__environment = {appName:'Visual Studio Code',appVersion:'1.140.0',system:'Linux 6.8.0',architecture:'arm64',remoteName:'ssh-remote'}; });
   await page.waitForSelector('.cm-editor.meo-mode-source');
   await page.waitForFunction(() => !document.querySelector('.mode-toolbar')?.classList.contains('meo-preload-toolbar'));
   await page.waitForFunction(() => !document.querySelector<HTMLElement>('.editor-host')!.inert
@@ -1880,7 +1887,6 @@ try {
   assert.deepEqual(await page.evaluate(() => (window as any).__messages.at(-1)), { type: 'openLink', href: 'https://github.com/huangko555/meo-enhanced/issues/new' },
     'The feedback description activates its whole row in the optimized document');
   await page.click('.more-tools-wrapper > .format-button');
-  await page.evaluate(() => { (window as any).__environment = {appName:'Visual Studio Code',appVersion:'1.140.0',system:'Linux 6.8.0',architecture:'arm64',remoteName:'ssh-remote'}; });
   await page.locator('.more-tools-sponsor-button').click();
   await page.waitForSelector('.settings-window[open][data-tab="about"]');
   await page.waitForSelector('.settings-about-copy:not([disabled])');
