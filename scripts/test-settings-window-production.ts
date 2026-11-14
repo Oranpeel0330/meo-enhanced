@@ -471,7 +471,7 @@ try {
       await page.click('.more-tools-wrapper > .format-button');
       assert.deepEqual(await page.$$eval('.more-tools-panel [role="menuitemcheckbox"]', nodes => nodes.map(node => (node as HTMLElement).dataset.action)),
         ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'liveStrongColoring', 'latexDelimiters']);
-      assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), '文档设置');
+      assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), '快速设置');
       assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), 'false');
       await page.click('.more-tools-wrapper > .format-button');
       await open();
@@ -506,7 +506,7 @@ try {
           : String.raw`When enabled, recognize \(...\) as inline math and \[...\] as display math.`);
         await page.click('.settings-close');
         await page.click('.more-tools-wrapper > .format-button');
-        assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), language === 'zh-CN' ? '文档设置' : 'Document settings');
+        assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), language === 'zh-CN' ? '快速设置' : 'Quick settings');
         assert.equal(await page.$eval(`${quickSwitchSelector} .more-tools-option-label`, node => node.textContent), language === 'zh-CN' ? 'LaTeX 风格公式' : 'LaTeX math');
         assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), 'true');
         assert(await page.$eval(`${quickSwitchSelector} .more-tools-option-label`, node => node.scrollWidth <= node.clientWidth), 'quick switch label fits');
@@ -737,7 +737,7 @@ try {
   assert.equal(await page.$eval('.more-tools-panel', element => element.getBoundingClientRect().width), 288);
   assert.equal(await page.$$eval('.more-tools-panel .more-tools-option', elements => elements.length), 8);
   assert.deepEqual(await page.$$eval('.more-tools-panel [role="menuitemcheckbox"]', elements => elements.map(element => (element as HTMLElement).dataset.action)), ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'liveStrongColoring', 'latexDelimiters']);
-  assert.deepEqual(await page.$$eval('.more-tools-panel .more-tools-section-label', elements => elements.map(element => element.textContent)), ['文档设置', '界面设置', '更多设置', '关于与支持']);
+  assert.deepEqual(await page.$$eval('.more-tools-panel .more-tools-section-label', elements => elements.map(element => element.textContent)), ['快速设置', '全部设置', '反馈与支持']);
   assert.equal(await page.$eval('.more-tools-sponsor-button', element => element.previousElementSibling?.classList.contains('more-tools-feedback-link')), true);
   await page.evaluate(() => { (window as any).__failNextEnvironment = true; });
   await page.click('.more-tools-sponsor-button');

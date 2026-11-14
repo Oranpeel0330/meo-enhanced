@@ -1200,9 +1200,9 @@ toolbarOverflowSection.id = 'toolbar-overflow-panel';
 toolbarOverflowSection.setAttribute('role', 'group');
 toolbarOverflowSection.setAttribute('aria-label', activeUiStrings.toolbarOverflow);
 toolbarOverflowSection.hidden = true;
-const displaySettingsHeading = document.createElement('div');
-displaySettingsHeading.className = 'more-tools-section-label';
-displaySettingsHeading.textContent = activeUiStrings.documentSettings;
+const quickSettingsHeading = document.createElement('div');
+quickSettingsHeading.className = 'more-tools-section-label';
+quickSettingsHeading.textContent = activeUiStrings.quickSettings;
 const preferencesHeading = document.createElement('div');
 preferencesHeading.className = 'more-tools-section-label';
 const preferencesLabel = document.createElement('span'); preferencesLabel.className = 'more-tools-preferences-label';
@@ -1213,9 +1213,6 @@ moreSettingsButton.append(createMoreToolsControlHeading(SlidersHorizontal, prefe
 const openingDocumentsHeading = document.createElement('div');
 openingDocumentsHeading.className = 'more-tools-section-label';
 openingDocumentsHeading.textContent = activeUiStrings.openingDocumentsSettings;
-const interfaceSettingsHeading = document.createElement('div');
-interfaceSettingsHeading.className = 'more-tools-section-label';
-interfaceSettingsHeading.textContent = activeUiStrings.interfaceSettings;
 const editorAppearanceControl = createSegmentedControl<EditorAppearance>({
   ariaLabel: activeUiStrings.editorAppearance,
   className: 'editor-appearance-control',
@@ -1283,7 +1280,7 @@ editorFontSizeStepper.append(decreaseEditorFontSizeBtn, editorFontSizeValue, inc
 
 const applyUiLanguage = (language: UiLanguage): void => {
   const strings = getUiStrings(language);
-  preferencesHeading.textContent = language === 'zh-CN' ? '更多设置' : 'More settings';
+  preferencesHeading.textContent = strings.allSettings;
   preferencesLabel.textContent = language === 'zh-CN' ? '外观 · 输入 · 快捷键' : 'Appearance · Input · Shortcuts';
   settingsWindow?.setLanguage(language);
   activeUiLanguage = language;
@@ -1372,9 +1369,8 @@ const applyUiLanguage = (language: UiLanguage): void => {
   moreToolsButton.dataset.tooltip = strings.more;
   moreToolsButton.setAttribute('aria-label', strings.moreTools);
   moreToolsPanel.setAttribute('aria-label', strings.moreTools);
-  displaySettingsHeading.textContent = strings.documentSettings;
+  quickSettingsHeading.textContent = strings.quickSettings;
   openingDocumentsHeading.textContent = strings.openingDocumentsSettings;
-  interfaceSettingsHeading.textContent = strings.interfaceSettings;
   supportHeading.textContent = strings.supportHeading;
   feedbackPrompt.textContent = strings.feedbackPrompt;
   reportIssueLabel.textContent = strings.reportIssue;
@@ -1464,14 +1460,13 @@ sponsorActionLabel.textContent = activeUiStrings.sponsorAction;
 sponsorProjectAction.append(sponsorActionLabel, createElement(ArrowRight, { width: 13, height: 13, 'aria-hidden': 'true' }));
 sponsorProjectButton.append(createMoreToolsControlHeading(Heart, sponsorProjectLabel), sponsorProjectAction);
 moreToolsPanel.append(
-  displaySettingsHeading,
+  quickSettingsHeading,
   sourceLineNumbersBtn,
   longCodeBlockFoldingBtn,
   contentMaxWidthBtn,
   contentMaxWidthRow,
   liveStrongColoringBtn,
   latexDelimitersBtn,
-  interfaceSettingsHeading,
   editorAppearanceRow,
   uiLanguageRow,
   editorFontSizeRow,
@@ -3888,7 +3883,7 @@ function getSettingsWindow(): ReturnType<typeof createSettingsWindow> {
   });
 }
 moreSettingsButton.addEventListener('click', () => { setMoreToolsVisible(false); getSettingsWindow().open(); });
-preferencesHeading.textContent = 'More settings';
+preferencesHeading.textContent = activeUiStrings.allSettings;
 preferencesLabel.textContent = 'Appearance · Input · Shortcuts';
 
 const withMessageErrorBoundary = (context: string, action: () => void): void => {

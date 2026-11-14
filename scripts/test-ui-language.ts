@@ -63,8 +63,8 @@ assert.deepEqual(
   [english.resumeFromLastPosition, chinese.resumeFromLastPosition],
   ['Resume from last position', '打开时恢复上一次阅读位置']
 );
-assert.deepEqual([english.supportHeading, english.feedbackPrompt, english.reportIssue], ['About & support', 'Questions or ideas?', 'Give feedback']);
-assert.deepEqual([chinese.supportHeading, chinese.feedbackPrompt, chinese.reportIssue], ['关于与支持', '遇到问题或有建议？', '去反馈']);
+assert.deepEqual([english.supportHeading, english.feedbackPrompt, english.reportIssue], ['Feedback & support', 'Questions or ideas?', 'Give feedback']);
+assert.deepEqual([chinese.supportHeading, chinese.feedbackPrompt, chinese.reportIssue], ['反馈与支持', '遇到问题或有建议？', '去反馈']);
 assert.equal(english.line, 'Lines');
 assert.equal(chinese.line, '行号');
 assert.equal(chinese.exportHtml, '导出为 HTML');
@@ -229,7 +229,7 @@ assert.equal(Object.isFrozen(chinese), true);
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const webviewIndexText = fs.readFileSync(path.join(repoRoot, 'webview/src/index.ts'), 'utf8');
-assert.match(webviewIndexText, /appendMoreToolsOptionContent\([^\n]+constrainWidth\)/);
+assert.match(webviewIndexText, /appendMoreToolsOptionContent\(\s*contentMaxWidthBtn, DocumentWidth, activeUiStrings\.constrainWidth,/);
 const packageText = fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8');
 const packageManifest = JSON.parse(packageText) as {
   contributes?: {

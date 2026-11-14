@@ -20,7 +20,7 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
       anchor.innerHTML = language === 'zh-CN' ? '<span>遇到问题或有建议？</span><span>去反馈 ↗</span>' : '<span>Questions or ideas?</span><span>Give feedback ↗</span>';
       const next = document.createElement('button'); next.className = 'more-tools-option'; next.type = 'button'; next.textContent = 'Support';
       const settings = document.createElement('div'); settings.style.height = '180px'; settings.style.flexShrink = '0';
-      for (const text of (language === 'zh-CN' ? ['界面设置', '编辑器外观', '界面语言', '字号大小', '更多设置', '关于与支持'] : ['Interface', 'Appearance', 'Language', 'Font size', 'More settings', 'About & support'])) {
+      for (const text of (language === 'zh-CN' ? ['快速设置', '编辑器外观', '界面语言', '字号大小', '全部设置', '反馈与支持'] : ['Quick settings', 'Appearance', 'Language', 'Font size', 'All settings', 'Feedback & support'])) {
         const row = document.createElement('div'); row.className = 'more-tools-navigation-option'; row.textContent = text; settings.append(row);
       }
       menu.append(settings, anchor, next); document.body.append(menu);

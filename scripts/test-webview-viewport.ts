@@ -919,11 +919,11 @@ async function main() {
         '显示行号', '折叠长代码块', '限制宽度', '粗体文字着色', 'LaTeX 风格公式',
         '外观 · 输入 · 快捷键', '遇到问题或有建议？', '支持项目'
       ]) ||
-      moreToolsLayout.topHeading !== '文档设置' ||
+      moreToolsLayout.topHeading !== '快速设置' ||
       moreToolsLayout.languageAutoLabel !== '自动' ||
       !moreToolsLayout.directChildren ||
       moreToolsLayout.separatorCount !== 0 ||
-      moreToolsLayout.supportHeading !== '关于与支持' ||
+      moreToolsLayout.supportHeading !== '反馈与支持' ||
       moreToolsLayout.feedbackPrompt !== '遇到问题或有建议？' ||
       moreToolsLayout.feedbackLabel !== '去反馈' ||
       moreToolsLayout.width > 288 ||

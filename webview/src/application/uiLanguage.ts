@@ -356,6 +356,8 @@ export type UiStrings = Readonly<{
   compareWithVersion: string;
   displaySettings: string;
   editorSettings: string;
+  quickSettings: string;
+  allSettings: string;
   documentSettings: string;
   openingDocumentsSettings: string;
   interfaceSettings: string;
@@ -459,7 +461,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     exportHtml: 'Export as HTML', exportPdf: 'Export as PDF', exportDocx: 'Export as Word', exportAsHtml: 'Export as HTML',
     exportAsPdf: 'Export as PDF', exportAsDocx: 'Export as Word document', exportHtmlWithContents: 'Export as HTML with Contents',
     exportPdfWithContents: 'Export as PDF with Contents', exportDocxWithContents: 'Export as Word with Contents', findAndReplace: 'Find and replace', more: 'Settings',
-    moreTools: 'Settings', toolbarOverflow: 'More tools', supportHeading: 'About & support', feedbackPrompt: 'Questions or ideas?', reportIssue: 'Give feedback', sponsorProject: 'Support the project', sponsorAction: 'Sponsor',
+    moreTools: 'Settings', toolbarOverflow: 'More tools', supportHeading: 'Feedback & support', feedbackPrompt: 'Questions or ideas?', reportIssue: 'Give feedback', sponsorProject: 'Support the project', sponsorAction: 'Sponsor',
     editorAppearance: 'UI theme', editorFontSize: 'Font size',
     custom: 'Custom', decreaseFontSize: 'Decrease font size', increaseFontSize: 'Increase font size',
     interfaceLanguage: 'Language', showLineNumbers: 'Show line numbers',
@@ -599,6 +601,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     currentEdits: 'Last Saved Version', recentSave: 'Before Agent Edits',
     gitHead: 'Git HEAD (Latest Commit)',
     compareWithVersion: 'Compare Against', displaySettings: 'Display Settings', editorSettings: 'Editor Settings',
+    quickSettings: 'Quick settings', allSettings: 'All settings',
     documentSettings: 'Document settings', openingDocumentsSettings: 'When opening documents', interfaceSettings: 'Interface settings',
     currentDiskVersionOption: 'Last Saved Version',
     beforeLastSaveVersionOption: 'Before Agent Edits',
@@ -714,7 +717,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     exportAsDocx: '导出为 Word 文档', exportHtmlWithContents: '导出为 HTML（含目录）', exportPdfWithContents: '导出为 PDF（含目录）',
     exportDocxWithContents: '导出为 Word（含目录）',
     findAndReplace: '查找和替换', more: '设置', moreTools: '设置', toolbarOverflow: '更多工具',
-    supportHeading: '关于与支持', feedbackPrompt: '遇到问题或有建议？', reportIssue: '去反馈', sponsorProject: '支持项目', sponsorAction: '去赞助',
+    supportHeading: '反馈与支持', feedbackPrompt: '遇到问题或有建议？', reportIssue: '去反馈', sponsorProject: '支持项目', sponsorAction: '去赞助',
     editorAppearance: '界面主题', editorFontSize: '字号大小', custom: '自定义',
     decreaseFontSize: '减小字号', increaseFontSize: '增大字号',
     interfaceLanguage: '界面语言', showLineNumbers: '显示行号',
@@ -868,6 +871,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     currentEdits: '最近保存版本', recentSave: 'Agent 编辑前版本',
     gitHead: 'Git HEAD（最新提交）',
     compareWithVersion: '比较方式', displaySettings: '显示设置', editorSettings: '编辑器设置',
+    quickSettings: '快速设置', allSettings: '全部设置',
     documentSettings: '文档设置', openingDocumentsSettings: '打开文档时', interfaceSettings: '界面设置',
     currentDiskVersionOption: '与最近保存版本比较',
     beforeLastSaveVersionOption: '与 Agent 编辑前版本比较',
