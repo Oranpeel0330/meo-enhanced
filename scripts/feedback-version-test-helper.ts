@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import type { Page } from 'puppeteer-core';
 
-/** Exercise production adapters with trusted input, shared About data, and synchronous visibility transitions. */
+/** Exercise production adapters with trusted input, shared About data, and a short dismissal grace period. */
 export async function testFeedbackVersionPopover(ownerPage: Page, script: string, artifacts: string) {
   for (const language of ['zh-CN', 'en'] as const) for (const appearance of ['light', 'dark'] as const) {
     const page = await ownerPage.browser().newPage(); page.setDefaultTimeout(5000);
@@ -40,8 +40,9 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
       const popover = harness.createFeedbackVersionPopover({ anchor, menu, information, focusNext: () => next.focus() });
       popover.setLanguage(language);
       const popup = document.querySelector<HTMLElement>('.feedback-version-popover')!;
-      const timing = scope.feedbackTiming = { events: [] };
-      for (const target of [anchor, popup, next]) for (const type of ['pointerenter', 'pointerleave', 'focusin', 'focusout', 'keydown']) target.addEventListener(type, event => timing.events.push({ type: event.type, key: (event as KeyboardEvent).key, target: target.className, hidden: popup.hidden }));
+      const timing = scope.feedbackTiming = { events: [], hiddenAt: 0 };
+      for (const target of [anchor, popup, next]) for (const type of ['pointerenter', 'pointerleave', 'focusin', 'focusout', 'keydown']) target.addEventListener(type, event => timing.events.push({ type: event.type, key: (event as KeyboardEvent).key, target: target.className, hidden: popup.hidden, at: performance.now() }));
+      new MutationObserver(() => { if (popup.hidden) timing.hiddenAt = performance.now(); }).observe(popup, { attributes: true, attributeFilter: ['hidden'] });
       scope.feedbackFixture = { popover, source, anchor, menu, next };
     }, { language, appearance });
     const expectedReads = language === 'zh-CN' && appearance === 'light' ? 2 : 1;
@@ -98,8 +99,15 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
     } else assert.match(await page.$eval('.feedback-version-values', e => e.textContent), /ssh-remote/);
     await page.mouse.move(5, 600, { steps: 5 });
     assert.equal(await page.evaluate(() => (window as any).feedbackTiming.events.filter((event: any) =>
-      event.type === 'pointerleave' && (event.target.includes('more-tools-feedback-link') || event.target.includes('feedback-version-popover'))).at(-1).hidden), true,
-      'Leaving both regions hides the popover within the native pointerleave event');
+      event.type === 'pointerleave' && (event.target.includes('more-tools-feedback-link') || event.target.includes('feedback-version-popover'))).at(-1).hidden), false,
+      'Leaving both regions preserves the popover during the dismissal grace period');
+    await page.waitForSelector('.feedback-version-popover[hidden]');
+    const hideDelay = await page.evaluate(() => {
+      const timing = (window as any).feedbackTiming;
+      return timing.hiddenAt - timing.events.filter((event: any) => event.type === 'pointerleave'
+        && (event.target.includes('more-tools-feedback-link') || event.target.includes('feedback-version-popover'))).at(-1).at;
+    });
+    assert.ok(hideDelay >= 95 && hideDelay < 1000, `Dismissal allows 100ms to cross the gap (${hideDelay}ms)`);
     assert.equal(await page.$eval('.feedback-version-popover', e => (e as HTMLElement).hidden), true);
     await page.hover('.more-tools-feedback-link');
     await page.waitForSelector('.feedback-version-popover:not([hidden])');
@@ -109,7 +117,7 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
     });
     await page.mouse.move(gap.x, gap.y, { steps: 5 });
     assert.equal(await page.$eval('.feedback-version-popover', e => (e as HTMLElement).hidden), false,
-      'The transparent pointer bridge keeps the panel open without a dismissal delay');
+      'Crossing the pointer bridge cancels the pending dismissal');
     await page.hover('.feedback-version-copy');
     await page.click('.feedback-version-copy');
     await page.waitForFunction(() => /已复制|Copied/.test(document.querySelector('.feedback-version-copy')!.getAttribute('aria-label')!));
@@ -213,6 +221,6 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
     assert.equal(await page.$('.feedback-version-popover'), null, 'Disposal removes the portal and releases its listeners');
     assert.deepEqual(errors, [], 'The feedback interaction has no browser errors');
     await page.close();
-    console.log(`Feedback versions ${language}/${appearance}: immediate reveal/dismissal, pointer bridge, copy/retry, late completion, keyboard, shared snapshot and narrow layout passed`);
+    console.log(`Feedback versions ${language}/${appearance}: immediate reveal, 100ms dismissal, pointer bridge, copy/retry, late completion, keyboard, shared snapshot and narrow layout passed`);
   }
 }

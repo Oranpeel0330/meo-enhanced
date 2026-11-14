@@ -16,11 +16,16 @@ export function createFeedbackVersionPopover(options: {
   element.append(information.element); doc.body.append(element);
   anchor.setAttribute('aria-controls', element.id); anchor.setAttribute('aria-expanded', 'false');
   const events = new AbortController();
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
   let positionFrame: number | undefined, disposed = false;
   const contains = (target: Node | null) => !!target && (anchor.contains(target) || element.contains(target));
   const clamp = (value: number, minimum: number, maximum: number) => Math.max(minimum, Math.min(value, maximum));
 
+  function cancelClose() {
+    clearTimeout(closeTimer); closeTimer = undefined;
+  }
   function hide() {
+    cancelClose();
     if (positionFrame !== undefined) view.cancelAnimationFrame(positionFrame); positionFrame = undefined;
     element.hidden = true; anchor.classList.remove('is-version-open'); anchor.setAttribute('aria-expanded', 'false'); information.close();
   }
@@ -46,11 +51,13 @@ export function createFeedbackVersionPopover(options: {
     positionFrame = view.requestAnimationFrame(() => { positionFrame = undefined; position(); });
   }
   function show() {
+    cancelClose();
     if (disposed || menu.hidden) return;
     element.hidden = false; anchor.classList.add('is-version-open'); anchor.setAttribute('aria-expanded', 'true');
     information.open(); position();
   }
   function enter() {
+    cancelClose();
     if (element.hidden) show();
   }
   function leave(event: PointerEvent | FocusEvent) {
@@ -58,7 +65,12 @@ export function createFeedbackVersionPopover(options: {
     // Pointer transitions must not dismiss a version panel being used by keyboard.
     if (event.type === 'pointerleave' && (anchor.matches(':focus-visible') || element.querySelector(':focus-visible'))) return;
     if (event.type === 'focusout' && (anchor.matches(':hover') || element.matches(':hover'))) return;
-    hide();
+    cancelClose();
+    closeTimer = setTimeout(() => {
+      closeTimer = undefined;
+      if (anchor.matches(':hover') || element.matches(':hover') || anchor.matches(':focus-visible') || element.querySelector(':focus-visible')) return;
+      hide();
+    }, 100);
   }
   function keydown(event: KeyboardEvent) {
     if (event.key === 'Escape' && !element.hidden) {
