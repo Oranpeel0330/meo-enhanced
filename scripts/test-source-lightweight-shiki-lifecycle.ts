@@ -112,7 +112,9 @@ async function main(): Promise<void> {
           namespace: 'shiki-lifecycle-test'
         }));
         builder.onResolve({ filter: /^@shikijs\/langs\// }, (args) => ({
-          path: args.path.slice('@shikijs/langs/'.length),
+          // Keep the qualified path: a bare language name such as postcss can
+          // collide with a real package imported by the editor under test.
+          path: args.path,
           namespace: 'shiki-language-test'
         }));
         builder.onLoad({ filter: /^core$/, namespace: 'shiki-lifecycle-test' }, () => ({
@@ -129,7 +131,7 @@ async function main(): Promise<void> {
         }));
         builder.onLoad({ filter: /.*/, namespace: 'shiki-language-test' }, (args) => ({
           loader: 'js',
-          contents: `export default [{ name: ${JSON.stringify(args.path)}, scopeName: 'test.' + ${JSON.stringify(args.path)}, patterns: [],
+          contents: `export default [{ name: ${JSON.stringify(args.path.slice('@shikijs/langs/'.length))}, scopeName: 'test.' + ${JSON.stringify(args.path)}, patterns: [],
             repository: { fenced_code_block_latex: { begin: '(?:la|)tex', patterns: [{ patterns: [] }] } } }];`
         }));
       }
