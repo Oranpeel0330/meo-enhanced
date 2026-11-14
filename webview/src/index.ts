@@ -401,7 +401,10 @@ latexDelimitersBtn.className = 'more-tools-option more-tools-toggle-option';
 latexDelimitersBtn.dataset.action = 'latexDelimiters';
 latexDelimitersBtn.setAttribute('role', 'menuitemcheckbox');
 latexDelimitersBtn.setAttribute('aria-checked', 'false');
-appendMoreToolsOptionContent(latexDelimitersBtn, Sigma, activeUiStrings.latexMathDelimitersShort);
+const latexDelimitersTooltip = appendMoreToolsOptionContent(
+  latexDelimitersBtn, Sigma, activeUiStrings.latexMathDelimitersShort,
+  { id: 'latex-delimiters-tooltip', text: activeUiStrings.latexMathDelimitersDescription, placement: 'top' }
+);
 
 const sourceLineNumbersBtn = document.createElement('button');
 sourceLineNumbersBtn.type = 'button';
@@ -1281,7 +1284,7 @@ editorFontSizeStepper.append(decreaseEditorFontSizeBtn, editorFontSizeValue, inc
 const applyUiLanguage = (language: UiLanguage): void => {
   const strings = getUiStrings(language);
   preferencesHeading.textContent = strings.allSettings;
-  preferencesLabel.textContent = language === 'zh-CN' ? '外观 · 输入 · 快捷键' : 'Appearance · Input · Shortcuts';
+  preferencesLabel.textContent = language === 'zh-CN' ? '外观 · 输入 · 快捷键 · 其他' : 'Appearance · Input · Shortcuts · etc.';
   settingsWindow?.setLanguage(language);
   activeUiLanguage = language;
   documentBlocks.refreshAppearance();
@@ -1334,6 +1337,7 @@ const applyUiLanguage = (language: UiLanguage): void => {
   sourceLineNumbersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.showLineNumbers;
   liveStrongColoringBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.strongColoring;
   latexDelimitersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.latexMathDelimitersShort;
+  latexDelimitersTooltip?.setContent({ text: strings.latexMathDelimitersDescription, kind: 'description' });
   longCodeBlockFoldingBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.foldLongCodeBlocks;
   largeDocumentOptimizationBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.largeDocumentStartup;
   largeDocumentTooltip?.setContent({ text: strings.largeDocumentStartupHint, kind: 'description' });
@@ -3884,7 +3888,7 @@ function getSettingsWindow(): ReturnType<typeof createSettingsWindow> {
 }
 moreSettingsButton.addEventListener('click', () => { setMoreToolsVisible(false); getSettingsWindow().open(); });
 preferencesHeading.textContent = activeUiStrings.allSettings;
-preferencesLabel.textContent = 'Appearance · Input · Shortcuts';
+preferencesLabel.textContent = 'Appearance · Input · Shortcuts · etc.';
 
 const withMessageErrorBoundary = (context: string, action: () => void): void => {
   try {

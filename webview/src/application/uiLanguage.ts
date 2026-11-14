@@ -461,7 +461,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     exportHtml: 'Export as HTML', exportPdf: 'Export as PDF', exportDocx: 'Export as Word', exportAsHtml: 'Export as HTML',
     exportAsPdf: 'Export as PDF', exportAsDocx: 'Export as Word document', exportHtmlWithContents: 'Export as HTML with Contents',
     exportPdfWithContents: 'Export as PDF with Contents', exportDocxWithContents: 'Export as Word with Contents', findAndReplace: 'Find and replace', more: 'Settings',
-    moreTools: 'Settings', toolbarOverflow: 'More tools', supportHeading: 'Feedback & support', feedbackPrompt: 'Questions or ideas?', reportIssue: 'Give feedback', sponsorProject: 'Support the project', sponsorAction: 'Sponsor',
+    moreTools: 'Settings', toolbarOverflow: 'More tools', supportHeading: 'Feedback & support', feedbackPrompt: 'Having trouble or ideas?', reportIssue: 'Feedback', sponsorProject: 'Support the project', sponsorAction: 'Sponsor',
     editorAppearance: 'UI theme', editorFontSize: 'Font size',
     custom: 'Custom', decreaseFontSize: 'Decrease font size', increaseFontSize: 'Increase font size',
     interfaceLanguage: 'Language', showLineNumbers: 'Show line numbers',

@@ -452,6 +452,31 @@ try {
     const open = async () => { await page.click('.more-tools-wrapper > .format-button'); await page.click('.more-tools-settings-button'); };
     const switchSelector = '[data-setting="latexDelimiters"] [role="switch"]';
     const quickSwitchSelector = '.more-tools-panel [data-action="latexDelimiters"]';
+    const showQuickMathHint = async (expected: string) => {
+      const checked = await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked'));
+      const info = `${quickSwitchSelector} .more-tools-option-info`;
+      await page.mouse.move(0, 700);
+      await page.hover(info);
+      await page.waitForFunction(text => {
+        const tooltip = document.querySelector('#latex-delimiters-tooltip.is-visible');
+        return tooltip?.querySelector('.meo-tooltip-text')?.textContent === text && getComputedStyle(tooltip).opacity === '1';
+      }, {}, expected);
+      assert.equal(await page.$eval('#latex-delimiters-tooltip', tooltip => {
+        const bounds = tooltip.getBoundingClientRect();
+        return bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight
+          && tooltip.scrollWidth <= tooltip.clientWidth && tooltip.scrollHeight <= tooltip.clientHeight;
+      }), true, 'the full math explanation fits the viewport without clipping');
+      await page.click(info);
+      assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), checked,
+        'clicking the information icon does not toggle math syntax');
+      assert.equal(await page.$eval('.more-tools-panel', node => (node as HTMLElement).hidden), false);
+      await page.mouse.move(0, 700);
+      await page.focus('.more-tools-panel [data-action="liveStrongColoring"]');
+      await page.keyboard.press('Tab');
+      await page.waitForFunction(text => document.querySelector('#latex-delimiters-tooltip.is-visible .meo-tooltip-text')?.textContent === text, {}, expected);
+      assert.equal(await page.$eval(quickSwitchSelector, node => node === document.activeElement), true,
+        'keyboard focus reaches the math switch and shows its explanation');
+    };
     const mathCount = () => page.evaluate(() => {
       const h = (window as any).EditingSettingsHarness;
       const view = h.EditorView.findFromDOM(document.querySelector('.cm-editor'));
@@ -473,6 +498,7 @@ try {
         ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'liveStrongColoring', 'latexDelimiters']);
       assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), '快速设置');
       assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), 'false');
+      await showQuickMathHint('开启后，将 \\(...\\) 识别为行内公式，将 \\[...\\] 识别为块级公式。');
       await page.click('.more-tools-wrapper > .format-button');
       await open();
       assert.equal(await page.$eval(switchSelector, e => e.getAttribute('aria-checked')), 'false');
@@ -511,6 +537,18 @@ try {
         assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), 'true');
         assert(await page.$eval(`${quickSwitchSelector} .more-tools-option-label`, node => node.scrollWidth <= node.clientWidth), 'quick switch label fits');
         await page.screenshot({ path: `.local/latex-delimiters/quick-settings-${language}-${appearance}.png` });
+        const description = language === 'zh-CN'
+          ? '开启后，将 \\(...\\) 识别为行内公式，将 \\[...\\] 识别为块级公式。'
+          : String.raw`When enabled, recognize \(...\) as inline math and \[...\] as display math.`;
+        for (const width of [1100, 430]) {
+          await page.setViewport({ width, height: 780 });
+          await showQuickMathHint(description);
+          assert.equal(await page.$$eval('.more-tools-preferences-label, .more-tools-feedback-prompt', nodes =>
+            nodes.every(node => node.scrollWidth <= node.clientWidth)), true,
+            'the complete settings and feedback labels fit');
+          await page.screenshot({ path: `.local/latex-delimiters/quick-hint-${language}-${appearance}-${width}.png` });
+        }
+        await page.setViewport({ width: 1100, height: 780 });
         await page.click('.more-tools-settings-button');
       }
       await page.click('.settings-close');
@@ -1259,7 +1297,7 @@ try {
     await page.click('.settings-tab[data-tab="appearance"]'); await page.click(`[data-appearance-mode="${appearance}"]`);
     assert.equal(await page.evaluate(() => document.documentElement.lang), language);
     assert.equal(await page.evaluate(() => document.documentElement.dataset.editorAppearance), appearance);
-    assert.equal(await page.$eval('.more-tools-settings-button', element => element.textContent), language === 'en' ? 'Appearance · Input · Shortcuts' : '外观 · 输入 · 快捷键');
+    assert.equal(await page.$eval('.more-tools-settings-button', element => element.textContent), language === 'en' ? 'Appearance · Input · Shortcuts · etc.' : '外观 · 输入 · 快捷键 · 其他');
     await page.click('.settings-tab[data-tab="shortcuts"]');
     assert.equal(await page.$eval('[data-command="saveAs"] .settings-item-title', e => e.textContent), language === 'en' ? 'Save as…' : '另存为…');
     assert.ok(await page.$('[data-command="saveAs"] [data-edit-command="saveAs"]'));
