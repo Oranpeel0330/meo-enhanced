@@ -8330,7 +8330,8 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 .settings-item-dependent { padding-left: 24px; }
 .settings-item-dependent.is-disabled .settings-item-text { color: var(--meo-ui-text-disabled); }
 .settings-item-dependent.is-disabled .settings-description { color: var(--meo-ui-text-disabled); }
-.more-tools-width-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; box-sizing: border-box; padding: 4px 8px 8px 32px; }
+.more-tools-width-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; box-sizing: border-box; min-height: 30px; padding: 1px 8px 3px 32px; }
+.more-tools-width-row::before { content: ''; position: absolute; top: 3px; left: 15px; box-sizing: border-box; width: 11px; height: 11px; border-left: 1px solid var(--meo-ui-text); border-bottom: 1px solid var(--meo-ui-text); border-bottom-left-radius: 5px; pointer-events: none; }
 .more-tools-width-row[hidden] { display: none; }
 .more-tools-width-row .content-width-stepper { grid-template-columns: 16px 34px 14px 16px; }
 .content-width-field { display: flex; flex-direction: column; align-items: flex-end; flex: 0 0 auto; gap: 4px; }
