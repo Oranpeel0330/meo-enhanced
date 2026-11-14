@@ -1768,11 +1768,16 @@ These additions retain their current release registrations; native smooth-scroll
 continuity is checked separately by the existing production scroll contracts.
 
 `test-mermaid-reading-generation-production.ts` starts trusted wheels immediately
-with the real cold engine, a 40-node nested flowchart, and ordinary/windowed Live,
-Preview and Source split. Graph nodes must be visible during continuous motion within 500ms of
+with the real cold engine, a wide 40-node nested flowchart and a tall 16-node flowchart,
+and ordinary/windowed Live, Preview and Source split. Graph nodes must be visible during continuous motion within 500ms of
 entry; display preserves following text geometry and performs no scrollTop writes
 after the first wheel. Temporary box constraints retire through the existing idle
-owner. Motion and settled screenshots accompany per-frame evidence. The packaged
+owner. The actual SVG projection retains its first scale through that release;
+tall graphs are temporarily clipped in their smaller reading box and fully exposed
+after settlement. The tall fixture holds the real engine entry request until the
+box enters the viewport, so offscreen preparation cannot bypass the transition;
+the wide fixture retains its natural preparation path. Motion and settled screenshots
+accompany per-frame evidence. The packaged
 module/reference parity test separately checks that cooperative DOM work preserves
 the official renderer's complete geometry under CSP and offline loading.
 

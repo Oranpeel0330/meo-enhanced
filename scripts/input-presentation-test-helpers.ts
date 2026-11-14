@@ -147,6 +147,7 @@ async function assertStablePaint(page: Page, clip: PaintClip | readonly PaintCli
 
 async function open(page: Page, text: string, coldPreview = false, initialMode: 'source' | 'live' | 'preview' = 'source',
   testOptions: { uiLanguage?: 'en' | 'zh-CN'; beforePreviewRender?: () => Promise<void>; outlineVisible?: boolean; latexDelimiters?: boolean;
+    beforeMermaidLoad?: () => Promise<void>;
     resolveImageSrc?: (url: string) => string | Promise<string> } = {}) {
   let hostText = text, version = 1, ready = false, firstRender = false;
   let renderedText = '', renderedDocumentId: string | undefined;
@@ -160,7 +161,9 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
   await page.setCacheEnabled(false);
   await page.setRequestInterception(true);
   page.on('request', request => {
-    if (coldPreview && ready && !firstRender && request.resourceType() === 'script' && /\/index-[^/]+\.js$/.test(request.url())) {
+    if (testOptions.beforeMermaidLoad && new URL(request.url()).pathname === '/mermaid/mermaidRuntime.js') {
+      void testOptions.beforeMermaidLoad().then(() => request.continue()).catch(error => errors.push(String(error)));
+    } else if (coldPreview && ready && !firstRender && request.resourceType() === 'script' && /\/index-[^/]+\.js$/.test(request.url())) {
       held.push(() => request.continue());
     } else void request.continue();
   });

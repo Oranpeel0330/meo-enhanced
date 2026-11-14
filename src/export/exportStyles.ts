@@ -1188,7 +1188,8 @@ th:empty::before {
 .meo-export-mermaid.meo-reading-size-held .meo-export-mermaid-svg svg {
   width: 100%;
   height: auto;
-  max-height: 100%;
+  /* Hold reading geometry without shrinking the diagram into its placeholder. */
+  max-height: none;
 }
 .meo-export-mermaid > pre.meo-export-code-block {
   margin: 0;
