@@ -16,14 +16,11 @@ export function createFeedbackVersionPopover(options: {
   element.append(information.element); doc.body.append(element);
   anchor.setAttribute('aria-controls', element.id); anchor.setAttribute('aria-expanded', 'false');
   const events = new AbortController();
-  let openTimer: ReturnType<typeof setTimeout> | undefined, closeTimer: ReturnType<typeof setTimeout> | undefined;
   let positionFrame: number | undefined, disposed = false;
   const contains = (target: Node | null) => !!target && (anchor.contains(target) || element.contains(target));
   const clamp = (value: number, minimum: number, maximum: number) => Math.max(minimum, Math.min(value, maximum));
 
   function hide() {
-    clearTimeout(openTimer); clearTimeout(closeTimer);
-    openTimer = closeTimer = undefined;
     if (positionFrame !== undefined) view.cancelAnimationFrame(positionFrame); positionFrame = undefined;
     element.hidden = true; anchor.classList.remove('is-version-open'); anchor.setAttribute('aria-expanded', 'false'); information.close();
   }
@@ -49,26 +46,19 @@ export function createFeedbackVersionPopover(options: {
     positionFrame = view.requestAnimationFrame(() => { positionFrame = undefined; position(); });
   }
   function show() {
-    clearTimeout(openTimer); clearTimeout(closeTimer);
-    openTimer = closeTimer = undefined;
     if (disposed || menu.hidden) return;
     element.hidden = false; anchor.classList.add('is-version-open'); anchor.setAttribute('aria-expanded', 'true');
     information.open(); position();
   }
   function enter() {
-    clearTimeout(closeTimer);
-    if (!element.hidden || openTimer !== undefined) return;
-    openTimer = setTimeout(() => { openTimer = undefined; show(); }, 180);
+    if (element.hidden) show();
   }
-  function leave() {
-    // Hiding beneath the pointer can deliver a late leave after keyboard focus
-    // has already returned. Preserve that focus session's pending reveal.
-    if (anchor.matches(':focus-visible') || element.querySelector(':focus-visible')) { clearTimeout(closeTimer); return; }
-    clearTimeout(openTimer); openTimer = undefined; clearTimeout(closeTimer);
-    closeTimer = setTimeout(() => {
-      if (anchor.matches(':hover') || element.matches(':hover') || anchor.matches(':focus-visible') || element.querySelector(':focus-visible')) return;
-      hide();
-    }, 180);
+  function leave(event: PointerEvent | FocusEvent) {
+    if (contains(event.relatedTarget as Node | null)) return;
+    // Pointer transitions must not dismiss a version panel being used by keyboard.
+    if (event.type === 'pointerleave' && (anchor.matches(':focus-visible') || element.querySelector(':focus-visible'))) return;
+    if (event.type === 'focusout' && (anchor.matches(':hover') || element.matches(':hover'))) return;
+    hide();
   }
   function keydown(event: KeyboardEvent) {
     if (event.key === 'Escape' && !element.hidden) {
@@ -83,14 +73,14 @@ export function createFeedbackVersionPopover(options: {
       const buttons = [...element.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([hidden])')];
       if (event.shiftKey && event.target === buttons[0]) { anchor.focus(); event.preventDefault(); }
       else if (!event.shiftKey && event.target === buttons.at(-1)) {
-        options.focusNext(); clearTimeout(closeTimer); closeTimer = setTimeout(hide, 180); event.preventDefault();
+        options.focusNext(); hide(); event.preventDefault();
       }
     }
   }
   for (const target of [anchor, element] as HTMLElement[]) {
     target.addEventListener('pointerenter', enter, { signal: events.signal });
     target.addEventListener('pointerleave', leave, { signal: events.signal });
-    target.addEventListener('focusin', () => { if (element.contains(doc.activeElement)) clearTimeout(closeTimer); else enter(); }, { signal: events.signal });
+    target.addEventListener('focusin', enter, { signal: events.signal });
     target.addEventListener('focusout', leave, { signal: events.signal });
     target.addEventListener('keydown', keydown, { signal: events.signal });
   }

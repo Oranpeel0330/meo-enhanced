@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import type { Page } from 'puppeteer-core';
 
-/** Exercise production adapters with trusted input, shared About data, and observable timer transitions. */
+/** Exercise production adapters with trusted input, shared About data, and synchronous visibility transitions. */
 export async function testFeedbackVersionPopover(ownerPage: Page, script: string, artifacts: string) {
   for (const language of ['zh-CN', 'en'] as const) for (const appearance of ['light', 'dark'] as const) {
     const page = await ownerPage.browser().newPage(); page.setDefaultTimeout(5000);
@@ -40,20 +40,17 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
       const popover = harness.createFeedbackVersionPopover({ anchor, menu, information, focusNext: () => next.focus() });
       popover.setLanguage(language);
       const popup = document.querySelector<HTMLElement>('.feedback-version-popover')!;
-      const timing = scope.feedbackTiming = { transitions: [], events: [], entered: 0, left: 0 };
-      for (const target of [anchor, popup, next]) for (const type of ['focusin', 'focusout', 'keydown']) target.addEventListener(type, event => timing.events.push({ type: event.type, key: (event as KeyboardEvent).key, target: target.className, at: performance.now() }));
-      anchor.addEventListener('pointerenter', () => { if (!timing.entered) timing.entered = performance.now(); });
-      anchor.addEventListener('pointerleave', () => { timing.left = performance.now(); });
-      new MutationObserver(() => timing.transitions.push({ hidden: popup.hidden, at: performance.now() })).observe(popup, { attributes: true, attributeFilter: ['hidden'] });
+      const timing = scope.feedbackTiming = { events: [] };
+      for (const target of [anchor, popup, next]) for (const type of ['pointerenter', 'pointerleave', 'focusin', 'focusout', 'keydown']) target.addEventListener(type, event => timing.events.push({ type: event.type, key: (event as KeyboardEvent).key, target: target.className, hidden: popup.hidden }));
       scope.feedbackFixture = { popover, source, anchor, menu, next };
     }, { language, appearance });
     const expectedReads = language === 'zh-CN' && appearance === 'light' ? 2 : 1;
     if (expectedReads === 2) await page.evaluate(() => { (window as any).readFailure = true; });
     assert.equal(await page.evaluate(() => (window as any).reads), 0, 'Environment is lazy');
     await page.hover('.more-tools-feedback-link');
-    await page.waitForSelector('.feedback-version-popover:not([hidden])');
-    const revealDelay = await page.evaluate(() => { const s = (window as any).feedbackTiming; return s.transitions.find((v: any) => !v.hidden).at - s.entered; });
-    assert.ok(revealDelay >= 175 && revealDelay < 1000, `Reveal waits 180ms (${revealDelay})`);
+    assert.equal(await page.evaluate(() => (window as any).feedbackTiming.events.find((event: any) =>
+      event.type === 'pointerenter' && event.target.includes('more-tools-feedback-link')).hidden), false,
+      'The popover is visible within the native pointerenter event, without a timer');
     if (expectedReads === 2) {
       await page.waitForSelector('.feedback-version-retry:not([hidden])');
       await page.click('.feedback-version-retry');
@@ -99,22 +96,19 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
       assert.ok(geometry.height <= 160, 'The footer sizes to its contents without reserving extra whitespace');
     } else assert.match(await page.$eval('.feedback-version-values', e => e.textContent), /ssh-remote/);
     await page.mouse.move(5, 600, { steps: 5 });
-    await page.waitForSelector('.feedback-version-popover[hidden]').catch(async error => {
-      console.log('Feedback dismissal state:', await page.evaluate(() => ({
-        anchorHovered: document.querySelector('.more-tools-feedback-link')!.matches(':hover'),
-        popoverHovered: document.querySelector('.feedback-version-popover')!.matches(':hover'),
-        focused: document.activeElement?.tagName,
-        focusVisible: [...document.querySelectorAll(':focus-visible')].map(e => e.outerHTML),
-        timing: (window as any).feedbackTiming
-      })));
-      throw error;
-    });
-    const hideDelay = await page.evaluate(() => { const s = (window as any).feedbackTiming; return s.transitions.filter((v: any) => v.hidden).at(-1).at - s.left; });
-    assert.ok(hideDelay >= 175 && hideDelay < 1000, `Dismissal waits 180ms (${hideDelay})`);
+    assert.equal(await page.evaluate(() => (window as any).feedbackTiming.events.filter((event: any) =>
+      event.type === 'pointerleave' && (event.target.includes('more-tools-feedback-link') || event.target.includes('feedback-version-popover'))).at(-1).hidden), true,
+      'Leaving both regions hides the popover within the native pointerleave event');
+    assert.equal(await page.$eval('.feedback-version-popover', e => (e as HTMLElement).hidden), true);
     await page.hover('.more-tools-feedback-link');
     await page.waitForSelector('.feedback-version-popover:not([hidden])');
-    const gap = await page.$eval('.feedback-version-popover', e => { const r = e.getBoundingClientRect(); return { x: r.right + 1, y: r.top + 20 }; });
+    const gap = await page.$eval('.feedback-version-popover', e => {
+      const r = e.getBoundingClientRect(), anchor = document.querySelector('.more-tools-feedback-link')!.getBoundingClientRect();
+      return { x: r.right + 1, y: (anchor.top + anchor.bottom) / 2 };
+    });
     await page.mouse.move(gap.x, gap.y, { steps: 5 });
+    assert.equal(await page.$eval('.feedback-version-popover', e => (e as HTMLElement).hidden), false,
+      'The transparent pointer bridge keeps the panel open without a dismissal delay');
     await page.hover('.feedback-version-copy');
     await page.click('.feedback-version-copy');
     await page.waitForFunction(() => /已复制|Copied/.test(document.querySelector('.feedback-version-copy')!.getAttribute('aria-label')!));
@@ -210,9 +204,9 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
     await page.evaluate(language => { (window as any).feedbackFixture.popover.setLanguage(language); }, language === 'en' ? 'zh-CN' : 'en');
     assert.equal(await page.$eval('.feedback-version-title', e => e.textContent), language === 'en' ? '版本信息' : 'Version information', 'An already-open popover changes language');
     await page.evaluate(() => { const s = window as any; s.feedbackFixture.popover.dispose(); s.sharedAbout.dispose(); });
-    assert.equal(await page.$('.feedback-version-popover'), null, 'Disposal removes the portal and cancels its timers');
+    assert.equal(await page.$('.feedback-version-popover'), null, 'Disposal removes the portal and releases its listeners');
     assert.deepEqual(errors, [], 'The feedback interaction has no browser errors');
     await page.close();
-    console.log(`Feedback versions ${language}/${appearance}: 180ms reveal/dismissal, pointer bridge, copy/retry, late completion, keyboard, shared snapshot and narrow layout passed`);
+    console.log(`Feedback versions ${language}/${appearance}: immediate reveal/dismissal, pointer bridge, copy/retry, late completion, keyboard, shared snapshot and narrow layout passed`);
   }
 }
