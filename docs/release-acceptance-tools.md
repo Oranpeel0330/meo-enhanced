@@ -107,6 +107,12 @@ exit success. Preserve source, event, geometry, history and OS assertions in
 their owning tests. `receipt.expect` checks additional dot-separated fields.
 No exit code alone, old receipt or driver fixture establishes native acceptance.
 
+When an owner reuses a disposable workspace, give each command a run-specific
+request ID and a fresh nonce. The observer must echo that ID, and the controller
+must verify it before accepting the reply. An existing reply file must never
+complete a new command. Collect failure diagnostics before cleanup, and resolve
+the current document again before an independent owner uses a retained Frame.
+
 `{session}` shares one invocation's setup directory; `{artifact}` supplies the
 verified VSIX. `MEO_ACCEPTANCE_RUN_ID` identifies the invocation. Include all
 external/shared helper and fixture inputs in `inputs`. Setup and cleanup can

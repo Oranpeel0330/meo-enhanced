@@ -116,11 +116,37 @@ exports.run = async () => {
       const preview = await (await frame.$('.preview-frame')).contentFrame();
       assert.ok(preview);
       for (const gesture of ['Ctrl+Alt+P', 'F1', 'Ctrl+Alt+O', 'Ctrl+K Ctrl+M']) {
+        await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+        await frame.$eval('.preview-frame', element => element.focus({ preventScroll: true }));
         await preview.evaluate(() => { document.body.tabIndex = -1; document.body.focus({ preventScroll: true }); });
-        if (gesture === 'F1') await page.keyboard.press('F1');
-        else if (gesture === 'Ctrl+K Ctrl+M') { await chord('k'); await chord('m'); }
-        else await chord(gesture === 'Ctrl+Alt+P' ? 'p' : 'o', true);
-        await expectQuickInput(surface, gesture, gesture !== 'Ctrl+Alt+O');
+        await preview.waitForFunction(() => document.hasFocus() && document.activeElement === document.body,
+          { timeout: 4000 });
+        await preview.evaluate(() => {
+          window.__shortcutKeys = [];
+          window.__shortcutKeyListener = event => window.__shortcutKeys.push({
+            key: event.key, ctrl: event.ctrlKey, alt: event.altKey, trusted: event.isTrusted,
+          });
+          document.addEventListener('keydown', window.__shortcutKeyListener, true);
+        });
+        try {
+          if (gesture === 'F1') await page.keyboard.press('F1');
+          else if (gesture === 'Ctrl+K Ctrl+M') {
+            await chord('k');
+            await page.waitForFunction(() => [...document.querySelectorAll('.statusbar-item')].some(item =>
+              item.getBoundingClientRect().height > 0 && /Ctrl\+K.*Waiting for second key of chord/i.test(item.textContent)),
+            { timeout: 4000 });
+            await chord('m');
+          } else await chord(gesture === 'Ctrl+Alt+P' ? 'p' : 'o', true);
+          await expectQuickInput(surface, gesture, gesture !== 'Ctrl+Alt+O');
+        } finally {
+          const receipt = await preview.evaluate(() => {
+            document.removeEventListener('keydown', window.__shortcutKeyListener, true);
+            const receipt = { focused: document.hasFocus(), keys: window.__shortcutKeys };
+            delete window.__shortcutKeys; delete window.__shortcutKeyListener;
+            return receipt;
+          });
+          report.shortcutAttempts ??= []; report.shortcutAttempts.push({ surface, gesture, ...receipt });
+        }
       }
       report.phase = `${surface}-context-menu`;
       const points = await preview.evaluate(() => {
