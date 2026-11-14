@@ -995,6 +995,10 @@ one. The pointer driver keeps that same mapping. Receipt diagnostics distinguish
 the DOM observation time, Node binding arrival, acknowledgment and underlying
 failure; they do not extend the input deadline or authorize a press after a
 missing timely move receipt.
+Register the receipt in the observed frame's current CDP execution context. A
+page-level exposed function can skip a previously loaded child when the attached
+Workbench did not report its loading history. Check the receiver before input,
+retain its original deadline, and remove that context's binding and listener.
 
 Before using browser-protocol pointer input in an installed Workbench, run
 `bun scripts/test-native-input-delivery.ts`. This bounded driver contract verifies

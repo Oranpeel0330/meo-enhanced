@@ -68,6 +68,16 @@ if (args.has('--browser-url')) {
     const clicked = await driver.click('#click');
     assert.equal(await frame.evaluate(() => (window as any).clicks), 1);
     assert.ok(clicked.events.some((event: any) => event.type === 'pointerdown' && event.trusted));
+    // Model an attached, already-loaded child that the page-level convenience
+    // API skips. The real frame-scoped receiver must still observe native input.
+    const expose = page.exposeFunction;
+    (page as any).exposeFunction = async () => {};
+    try {
+      const attached = await driver.click('#click');
+      assert.equal(attached.observer.bindingType, 'function');
+      assert.ok(attached.bindingReceipts.some((event: any) => event.type === 'pointerup'));
+      assert.equal(await frame.evaluate(() => (window as any).clicks), 2);
+    } finally { page.exposeFunction = expose; }
     const dragged = await driver.drag('#drag', 30);
     assert.equal(await frame.$eval('#drag', node => node.getBoundingClientRect().width), 50);
 
@@ -108,7 +118,7 @@ if (args.has('--browser-url')) {
     try {
       await assert.rejects(retargeted.click('#click'), (error: any) => error.stage === 'pointerdown'
         && error.evidence.events.some((event: any) => event.type === 'pointerdown' && event.trusted && !event.targetMatches));
-      assert.equal(await frame.evaluate(() => (window as any).clicks), 1, 'A different target must not count as the intended click');
+      assert.equal(await frame.evaluate(() => (window as any).clicks), 2, 'A different target must not count as the intended click');
     } finally { await frame.evaluate(() => document.getElementById('late-cover')?.remove()); }
 
     await frame.evaluate(() => Object.defineProperty(window, 'frameElement', {
@@ -121,7 +131,7 @@ if (args.has('--browser-url')) {
     assert.equal(shadowed.frame, frame, 'The unique active frame must still be found through its CDP owner');
     const shadowedDriver = await createPointerDriver(shadowed);
     const shadowedClick = await shadowedDriver.click('#click');
-    assert.equal(await frame.evaluate(() => (window as any).clicks), 2);
+    assert.equal(await frame.evaluate(() => (window as any).clicks), 3);
     assert.ok(shadowedClick.events.some((event: any) => event.type === 'pointerdown' && event.trusted));
     const shadowedDrag = await shadowedDriver.drag('#drag', 45);
     assert.equal(await frame.$eval('#drag', node => node.getBoundingClientRect().width), 65);

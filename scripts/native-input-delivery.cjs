@@ -97,7 +97,7 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
     const evidence = { selector, delta, commands: [], events: [], bindingReceipts: [],
       timeline: { startedAt: Date.now() }, releaseAttempted: false };
     const binding = '__meoInputReceipt_' + Math.random().toString(36).slice(2);
-    let stage = 'target', armed = false, held = false, bound = false, notify;
+    let stage = 'target', armed = false, held = false, bound = false, notify, client, contextId, receive;
     // Receiving an input is independent of the render task it starts. Observe
     // through the protocol binding, so a busy renderer cannot starve polling.
     const waitForReceipt = predicate => {
@@ -113,13 +113,28 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
     try {
       let point = await pointFor(selector);
       evidence.point = point;
-      await page.exposeFunction(binding, event => {
-        evidence.bindingReceipts.push({ type: event.type, observedAt: event.observedAt, receivedAt: Date.now() });
-        evidence.events.push(event); notify?.();
-      });
+      stage = 'observation';
+      // Attached older Workbenches can omit frame loading history, causing
+      // page.exposeFunction to skip an already interactive child frame. Bind
+      // to the observed frame's actual CDP context instead of that page hint.
+      await frame.evaluate(() => undefined);
+      client = frame.client;
+      contextId = frame.mainRealm().context?.id;
+      assert.ok(client && Number.isInteger(contextId), 'The observed Chromium frame must have a CDP context');
+      receive = event => {
+        if (event.name !== binding || event.executionContextId !== contextId) return;
+        try {
+          const receipt = JSON.parse(event.payload);
+          evidence.bindingReceipts.push({ type: receipt.type, observedAt: receipt.observedAt, receivedAt: Date.now() });
+          evidence.events.push(receipt); notify?.();
+        } catch (error) { (evidence.receiverErrors ??= []).push(String(error)); }
+      };
+      client.on('Runtime.bindingCalled', receive);
+      await client.send('Runtime.addBinding', { name: binding, executionContextId: contextId });
       bound = true;
       evidence.observer = await frame.evaluate(({ selector, binding }) => {
         if (window.__meoInputDelivery) throw Error('Another pointer probe is active');
+        if (typeof window[binding] !== 'function') throw Error('The observed frame receipt binding was not installed');
         const events = [], bindingErrors = [];
         const expectedTarget = document.querySelector(selector);
         const record = event => {
@@ -128,7 +143,7 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
             target: event.target?.tagName, className: String(event.target?.className ?? ''),
             targetMatches: Boolean(expectedTarget?.isConnected && expectedTarget.contains(event.target)) };
           events.push(receipt);
-          try { void window[binding](receipt).catch(error => bindingErrors.push(String(error))); }
+          try { window[binding](JSON.stringify(receipt)); }
           catch (error) { bindingErrors.push(String(error)); }
         };
         for (const type of ['pointerdown', 'pointermove', 'pointerup']) window.addEventListener(type, record, true);
@@ -178,7 +193,7 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
       await waitForReceipt(event => event.type === 'pointerup' && event.trusted && event.pointerId === down.pointerId);
       return evidence;
     } catch (cause) {
-      evidence.cause = String(cause.stack || cause);
+      evidence.cause = String(cause?.stack || cause);
       evidence.timeline.failedAt = Date.now();
       throw new NativeInputCapabilityError(stage, evidence, cause);
     } finally {
@@ -199,13 +214,12 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
       }
       if (bound) {
         try {
-          await page.removeExposedFunction(binding);
-          // Puppeteer's public removal leaves an undefined wrapper property.
-          await Promise.all(page.frames().map(target => target.evaluate(name => { delete window[name]; }, binding)
-            .catch(error => { if (!target.detached) throw error; })));
+          await client.send('Runtime.removeBinding', { name: binding });
+          await frame.evaluate(name => { delete window[name]; }, binding);
         }
         catch (error) { evidence.observationError = String(error); }
       }
+      if (client && receive) client.off('Runtime.bindingCalled', receive);
     }
   };
   return { click: selector => gesture(selector), drag: (selector, x, y = 0) => gesture(selector, { x, y }) };

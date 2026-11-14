@@ -80,8 +80,17 @@ exports.run = async () => {
     };
     // A toolbar/editor baseline proves the profile binding and native test input work.
     await frame.$eval('[data-mode="live"]', button => button.click());
-    await frame.$eval('.editor-host .cm-content', content => content.focus({ preventScroll: true }));
+    await frame.waitForFunction(() => document.querySelector('#app')?.dataset.mode === 'live'
+      && document.querySelector('.editor-host')?.inert === false
+      && document.querySelector('.editor-loading')?.hidden === true
+      && !document.querySelector('.mode-group [aria-busy="true"]'));
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    await frame.$eval('.editor-host .cm-content', content => content.focus({ preventScroll: true }));
+    report.baseline = await frame.evaluate(() => ({ mode: document.querySelector('#app')?.dataset.mode,
+      focused: document.hasFocus(), editorFocused: !!document.activeElement?.closest('.cm-content'),
+      inert: document.querySelector('.editor-host')?.inert, active: document.activeElement?.className }));
+    assert.equal(report.baseline.focused, true, 'The native baseline starts in the focused document');
+    assert.equal(report.baseline.editorFocused, true, 'Activate the group before focusing the interactive editor');
     await chord('p', true);
     await expectQuickInput('live', 'Ctrl+Alt+P', true);
     for (const surface of ['preview', 'side']) {
