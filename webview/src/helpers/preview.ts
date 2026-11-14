@@ -4038,19 +4038,41 @@ function bindPreviewLinks(
 }
 
 function bindPreviewContextMenu(frame: HTMLIFrameElement, signal: AbortSignal): void {
+  const ownerDocument = frame.ownerDocument;
+  let contextMenuCopyPending = false;
+  const clearContextMenuCopy = (): void => { contextMenuCopyPending = false; };
+  // A new outer-editor action retires the menu's claim on clipboard focus.
+  // The host may focus only body while returning from its own native menu.
+  ownerDocument.defaultView?.addEventListener('pointerdown', clearContextMenuCopy, { capture: true, signal });
+  ownerDocument.defaultView?.addEventListener('keydown', clearContextMenuCopy, { capture: true, signal });
+  ownerDocument.defaultView?.addEventListener('focusin', event => {
+    if (event.target !== frame && event.target !== ownerDocument.body && event.target !== ownerDocument.documentElement) {
+      clearContextMenuCopy();
+    }
+  }, { capture: true, signal });
   for (const type of ['copy', 'cut', 'paste'] as const) {
-    frame.ownerDocument.defaultView?.addEventListener(type, event => {
-      if (!event.isTrusted || event.defaultPrevented || frame.ownerDocument.activeElement !== frame) return;
+    ownerDocument.defaultView?.addEventListener(type, event => {
+      if (!event.isTrusted || event.defaultPrevented) return;
+      const active = ownerDocument.activeElement;
+      const restoreMenuFocus = type === 'copy' && contextMenuCopyPending
+        && (active === ownerDocument.body || active === ownerDocument.documentElement)
+        && frame.isConnected && !frame.closest('[inert]')
+        && frame.contentDocument?.documentElement.inert === false && frame.getClientRects().length > 0;
+      if (active !== frame && !restoreMenuFocus) return;
+      clearContextMenuCopy();
       // Host commands target the outer Document's retained Source selection.
       // The focused reading Document owns copying and native input controls;
       // cancel the outer command even when its read-only body cannot edit.
       event.preventDefault();
       event.stopPropagation();
+      if (restoreMenuFocus) frame.focus({ preventScroll: true });
       frame.contentDocument?.execCommand(type);
     }, { capture: true, signal });
   }
   frame.contentWindow?.addEventListener('contextmenu', event => {
-    if (!event.isTrusted || event.defaultPrevented) return;
+    if (!event.isTrusted) return;
+    clearContextMenuCopy();
+    if (event.defaultPrevented) return;
     const input = (event.target as Element | null)?.closest<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
     const editable = !!input && !input.matches(':disabled') && !input.readOnly
       && (input.localName === 'textarea' || ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes((input as HTMLInputElement).type));
@@ -4059,8 +4081,8 @@ function bindPreviewContextMenu(frame: HTMLIFrameElement, signal: AbortSignal): 
       'meoEnhanced.previewClipboardEditable': editable,
       preventDefaultContextMenuItems: !editable
     });
-    // Nested focus does not reach VS Code's last-focused-element tracker.
-    // Publish the existing frame focus before its menu borrows that focus.
+    // Hosts with child-focus tracking can retain this frame for their menu.
+    // The clipboard owner above also supports a bridge that restores only body.
     if (frame.ownerDocument.activeElement === frame) {
       frame.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
     }
@@ -4077,6 +4099,7 @@ function bindPreviewContextMenu(frame: HTMLIFrameElement, signal: AbortSignal): 
       shiftKey: event.shiftKey, metaKey: event.metaKey
     });
     frame.dispatchEvent(forwarded);
+    contextMenuCopyPending = forwarded.defaultPrevented && !editable;
     if (forwarded.defaultPrevented) event.preventDefault();
   }, { signal });
 }

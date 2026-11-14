@@ -117,6 +117,32 @@ try {
       assert.deepEqual(await page.evaluate(() => (window as any).__menuContext),
         { webviewSection: 'preview-readonly', 'meoEnhanced.previewClipboardEditable': false, preventDefaultContextMenuItems: true },
         'Reading content must use the readonly host menu');
+      const copyFromOuterBody = () => page.evaluate(() => {
+        const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!;
+        const reading = frame.contentDocument!;
+        const paragraph = reading.querySelector('main.meo-export-doc p')!;
+        const before = { top: paragraph.getBoundingClientRect().top, scrollTop: reading.scrollingElement!.scrollTop,
+          parentScrollTop: document.scrollingElement!.scrollTop };
+        let count = 0, copied: string | undefined, trusted = false;
+        const observeReading = (event: ClipboardEvent) => {
+          count++; copied = reading.defaultView!.getSelection()!.toString(); event.preventDefault();
+        };
+        const observeOuter = (event: ClipboardEvent) => { trusted = event.isTrusted; };
+        reading.addEventListener('copy', observeReading);
+        window.addEventListener('copy', observeOuter, { capture: true });
+        try {
+          document.body.tabIndex = -1; document.body.focus({ preventScroll: true });
+          const bodyFocused = document.activeElement === document.body;
+          const accepted = document.execCommand('copy');
+          return { bodyFocused, accepted, trusted, count, copied,
+            selection: reading.defaultView!.getSelection()!.toString(), before,
+            after: { top: paragraph.getBoundingClientRect().top, scrollTop: reading.scrollingElement!.scrollTop,
+              parentScrollTop: document.scrollingElement!.scrollTop } };
+        } finally {
+          reading.removeEventListener('copy', observeReading);
+          window.removeEventListener('copy', observeOuter, true);
+        }
+      });
       assert.equal(await page.evaluate(() => {
         const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
         doc.addEventListener('copy', event => {
@@ -134,11 +160,30 @@ try {
       await frames(page);
       assert.equal(host.readHost(), text, 'Host Cut from read-only Preview must not edit the Source document');
 
+      await selectAndRightClick();
+      const bodyCopy = await copyFromOuterBody();
+      assert.ok(bodyCopy.bodyFocused && bodyCopy.accepted && bodyCopy.trusted,
+        'Exercise the actual host bridge: a trusted copy command with outer body focused');
+      assert.equal(bodyCopy.count, 1, 'A handled reading menu must forward body-focused Copy exactly once');
+      assert.equal(bodyCopy.copied, selectedText);
+      assert.equal(bodyCopy.selection, selectedText, 'Restoring the nested clipboard owner must retain selection');
+      assert.deepEqual(bodyCopy.after, bodyCopy.before, 'Menu Copy must retain inner and outer reading geometry');
+
+      await selectAndRightClick();
+      await page.evaluate(() => { document.body.tabIndex = -1; document.body.focus({ preventScroll: true }); });
+      await page.keyboard.press('ArrowRight');
+      const canceledCopy = await copyFromOuterBody();
+      assert.ok(canceledCopy.bodyFocused && canceledCopy.trusted);
+      assert.equal(canceledCopy.count, 0, 'A new outer keyboard action must retire the old reading-menu claim');
+      assert.equal(canceledCopy.selection, selectedText, 'Retiring ownership must not destroy the retained reading range');
+
+      await selectAndRightClick();
       await page.evaluate(() => { (window as any).__contextMenus = []; });
       await page.evaluate(() => document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.body
         .addEventListener('contextmenu', event => event.preventDefault(), { once: true }));
       await page.mouse.click(point.x, point.y, { button: 'right' });
       assert.deepEqual(await page.evaluate(() => (window as any).__contextMenus), [], 'Already handled menus must stay inside Preview');
+      assert.equal((await copyFromOuterBody()).count, 0, 'An inner-handled menu must retire the previous host-menu claim');
       await frame.evaluate(() => document.body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })));
       assert.deepEqual(await page.evaluate(() => (window as any).__contextMenus), [], 'Synthetic page events must not open host menus');
 
@@ -171,7 +216,11 @@ try {
         } }));
         await page.keyboard.down('Control');
         try { await page.keyboard.press('a'); } finally { await page.keyboard.up('Control'); }
-        await page.evaluate(() => document.execCommand('copy'));
+        await page.evaluate(() => {
+          document.body.tabIndex = -1; document.body.focus({ preventScroll: true });
+          if (document.activeElement !== document.body) throw Error('Logical-selection copy must exercise body focus');
+          document.execCommand('copy');
+        });
         await page.waitForFunction(() => typeof (window as any).__copiedAll === 'string');
         const copied = await page.evaluate(() => (window as any).__copiedAll as string);
         assert.ok(copied.includes(selectedText) && copied.includes('Document end.'));

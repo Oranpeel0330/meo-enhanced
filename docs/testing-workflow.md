@@ -3000,6 +3000,13 @@ acceptance requires Cut/Paste to be visibly disabled on reading content, enabled
 in editable inputs, and these menu commands to stay out of the command palette.
 The windowed case also copies a logical selection across unmounted blocks through
 the existing owner.
+Exercise both an already focused Preview iframe and a host bridge that returns
+focus only to the outer body before invoking Copy. A handled reading menu may
+restore its nested clipboard owner once, retaining selection and both viewports;
+a new outer action or an inner-handled menu retires that claim. The windowed
+logical-selection case also uses body focus. Inspect the installed host's bridge
+when diagnosing focus: newer upstream source can have child-focus restoration
+that the installed build does not. Production fixtures must model the real path.
 `scripts/test-vscode-preview-shortcuts.ps1` separately checks the real workbench
 menu, read-only command isolation and native input clipboard operations in a
 disposable profile, restoring previous clipboard text.
