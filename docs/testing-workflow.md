@@ -972,6 +972,17 @@ separate contrast. These checks cover Chromium's accessibility representation;
 installed VS Code and real screen-reader speech/navigation still need native
 acceptance. They do not establish whether the historical failure was a regression.
 
+`scripts/test-preview-resource-preparation-production.ts` retains cold continuous
+wheels in ordinary and windowed documents, and repeats the windowed case with a
+250ms cold syntax-worker fetch. The original four-entry-frame and visible-ready
+requirements still apply. Fenced-code asset requests begin before Host rendering;
+the marker is a conservative download hint, not syntax ownership. Other code forms
+retain confirmed-payload preparation. Both use the existing retryable worker/WASM
+caches and do not start an engine or tokenize. A separate idle case checks nearby
+preparation without input, and document replacement retires late results. Failure
+reports retain blank code-row counts; the accessibility check identifies the
+specific switch, syntax, search or reader-change checkpoint before reporting state.
+
 Resolve the active content iframe through its browser-protocol frame owner and
 check its actual ID, CSS visibility and nonzero size. Older supported VS Code
 versions can omit `window.frameElement` inside an otherwise interactive Webview. A missing
@@ -2156,6 +2167,8 @@ source-line shifts retain the accepted reading revision until the new mapping
 commits. An initially offscreen image with known dimensions pairs both paths;
 every input frame compares the highlight with its actual target, catching an
 upstream placeholder reset even when the text's reading position stays stable.
+Keep that unloaded image beyond the idle preparation band at both the initial
+viewport and restored editing position; offscreen alone does not imply unloaded.
 Unmapped gaps, hidden comments, removed text and unloaded window bands
 hide the overlay, while mapped empty code lines and new cursor destinations
 remain valid. Both paths keep one overlay and full Preview hides it.
@@ -3398,7 +3411,10 @@ visible at stable positions, while precise marker edits still reveal source.
 `test-fenced-block-enter-stability.ts` checks literal newline indentation against
 native Markdown examples across Source/Live and both sizes, including HTML,
 Mermaid, math, quoted containers and undo; inner language brackets must not add
-an indentation level or a second newline.
+an indentation level or a second newline. Cold quoted math also retains its
+payload indentation before complete syntax is available, using the existing
+bounded command-local input context; preceding prose and code-literal negatives
+remain in the same Source/Live and ordinary/large matrix.
 `test-complex-input-presentation.ts --only=literal-enter` repeats quoted-code
 Enter against the real Worker in both modes and sizes, then replaces the document
 to verify that a prior literal continuation cannot leak into unrelated prose.

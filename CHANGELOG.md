@@ -6,6 +6,9 @@ Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ## 0.4.1
 - Added an adjustable 400–2400px maximum content width for Live and Source, with typed values and 100px steps in the dependent settings controls; Preview keeps its own layout.
 - Prepared nearby Live code colors and Preview resources before viewport entry, retaining bounded work and reading-position protection.
+- Loaded cold Preview syntax-worker assets alongside layout so nearby code can receive its final colors before continuous reading reaches it.
+- Kept logical reading-anchor fallbacks from interrupting native Preview scrolling while nearby resources finish rendering.
+- Preserved quoted formula indentation on Enter in cold large Source documents while background syntax is pending.
 - Reused cached Preview diagrams without starting the Mermaid engine, and suspended fully blocked Preview work until its existing owner can resume it.
 - Kept uncached Live diagrams from starting expensive layout during continuing native scrolling and momentum, while cached diagrams remain available during reading.
 - Added static HTML stylesheet links, CSS imports, background images and webfonts through shared resource resolution, with document styles and font names isolated from the editor.
