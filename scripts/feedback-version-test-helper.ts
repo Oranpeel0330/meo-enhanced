@@ -60,18 +60,19 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
     await page.waitForSelector('.feedback-version-copy:not([disabled])');
     await page.waitForFunction(() => {
       const popup = document.querySelector('.feedback-version-popover')!.getBoundingClientRect();
-      const menu = document.querySelector('.more-tools-panel')!.getBoundingClientRect();
-      return Math.abs(popup.bottom - menu.bottom) <= 0.5;
+      const anchor = document.querySelector('.more-tools-feedback-link')!.getBoundingClientRect();
+      return Math.abs(popup.top - anchor.top) <= 0.5;
     });
     assert.equal(await page.$eval('.feedback-version-popover', e => (e as HTMLElement).dataset.side), 'left');
     const geometry = await page.evaluate(() => {
       const popup = document.querySelector('.feedback-version-popover')!.getBoundingClientRect();
       const menu = document.querySelector('.more-tools-panel')!.getBoundingClientRect();
+      const anchor = document.querySelector('.more-tools-feedback-link')!.getBoundingClientRect();
       const copyStyle = getComputedStyle(document.querySelector('.feedback-version-copy')!);
       const note = document.querySelector('.feedback-version-status') as HTMLElement;
       const noteStyle = getComputedStyle(note);
       const valuesStyle = getComputedStyle(document.querySelector('.feedback-version-values')!);
-      return { gap: menu.left - popup.right, height: popup.height, bottomDifference: popup.bottom - menu.bottom,
+      return { gap: menu.left - popup.right, height: popup.height, topDifference: popup.top - anchor.top,
         iconOnly: document.querySelector('.feedback-version-copy')!.textContent === '' && !!document.querySelector('.feedback-version-copy > svg'),
         copyBorder: copyStyle.borderTopStyle !== 'none' && parseFloat(copyStyle.borderTopWidth) > 0,
         valuesBorder: valuesStyle.borderTopStyle !== 'none' && parseFloat(valuesStyle.borderTopWidth) > 0,
@@ -84,7 +85,7 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
     assert.ok(geometry.gap >= 0 && geometry.gap <= 2.5, 'The version popover stays close to its parent menu');
     assert.equal(geometry.iconOnly, true, 'Copy uses an icon with an accessible label');
     assert.equal(geometry.copyBorder, true, 'The icon button has a visible frame');
-    assert.ok(Math.abs(geometry.bottomDifference) <= 0.5, 'The popover bottom aligns with the settings menu bottom');
+    assert.ok(Math.abs(geometry.topDifference) <= 0.5, 'The popover top aligns with the feedback row top');
     assert.equal(geometry.valuesBorder, false, 'Version entries have no inner frame');
     assert.equal(geometry.valuesFontSize, 11, 'Version entries use the smaller text size');
     assert.ok(geometry.valuesFontWeights.every(weight => weight === '400'), 'Version labels and values use regular weight');
@@ -187,8 +188,13 @@ export async function testFeedbackVersionPopover(ownerPage: Page, script: string
       fixture.menu.style.left = '16px'; fixture.menu.style.right = 'auto'; fixture.popover.reposition();
     });
     await page.waitForFunction(() => {
-      const popup = document.querySelector<HTMLElement>('.feedback-version-popover')!, menu = document.querySelector('.more-tools-panel')!;
-      return popup.dataset.side === 'right' && Math.abs(popup.getBoundingClientRect().bottom - menu.getBoundingClientRect().bottom) <= 0.5;
+      const popup = document.querySelector<HTMLElement>('.feedback-version-popover')!, anchor = document.querySelector('.more-tools-feedback-link')!;
+      return popup.dataset.side === 'right' && Math.abs(popup.getBoundingClientRect().top - anchor.getBoundingClientRect().top) <= 0.5;
+    });
+    await page.setViewport({ width: 800, height: 320 });
+    await page.waitForFunction(() => {
+      const popup = document.querySelector<HTMLElement>('.feedback-version-popover')!, r = popup.getBoundingClientRect();
+      return popup.dataset.side === 'right' && r.top >= 8 && Math.abs(r.bottom - (innerHeight - 8)) <= 0.5;
     });
     await page.evaluate(() => {
       const fixture = (window as any).feedbackFixture;

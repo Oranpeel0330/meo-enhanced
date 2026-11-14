@@ -30,7 +30,7 @@ export function createFeedbackVersionPopover(options: {
     if (menu.hidden || a.bottom <= Math.max(8, m.top) || a.top >= Math.min(view.innerHeight - 8, m.bottom)) { hide(); return; }
     element.style.width = `${Math.min(232, view.innerWidth - 16)}px`;
     const { width, height } = element.getBoundingClientRect();
-    let left: number, top = clamp(m.bottom - height, 8, view.innerHeight - height - 8);
+    let left: number, top = clamp(a.top, 8, view.innerHeight - height - 8);
     if (m.left - width - menuGap >= 8) { left = m.left - width - menuGap; element.dataset.side = 'left'; }
     else if (m.right + width + menuGap <= view.innerWidth - 8) { left = m.right + menuGap; element.dataset.side = 'right'; }
     else {
