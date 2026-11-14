@@ -251,6 +251,20 @@ exports.run = async () => {
         && document.querySelector('.editor-host')?.inert === false
         && document.querySelector('.editor-loading')?.hidden === true
         && !document.querySelector('.mode-group [aria-busy="true"]'), {}, mode);
+      await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+      await frame.$eval('.editor-host .cm-content', content => content.focus({ preventScroll: true }));
+      await chord('Home');
+      await frame.waitForFunction(() => {
+        const content = document.querySelector('.editor-host .cm-content');
+        const scroller = document.querySelector('.editor-host .cm-scroller');
+        return document.hasFocus() && document.activeElement === content && scroller?.scrollTop <= 1;
+      }, { timeout: 4000 });
+      report.editorNavigation ??= [];
+      report.editorNavigation.push(await frame.evaluate(mode => ({
+        mode, gesture: 'Ctrl+Home', focused: document.hasFocus(),
+        active: document.activeElement?.className,
+        scrollTop: document.querySelector('.editor-host .cm-scroller').scrollTop,
+      }), mode));
       const point = await frame.$eval('.editor-host .cm-content', element => {
         const rect = element.getBoundingClientRect(); return { x: rect.left + 10, y: rect.top + 10 };
       });
