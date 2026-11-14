@@ -46,8 +46,15 @@ exports.run = async () => {
     };
     const expectClipboard = async (expected, label) => {
       const deadline = Date.now() + 5000;
-      while (await vscode.env.clipboard.readText() !== expected) {
-        if (Date.now() > deadline) throw Error(`${label}: Copy did not copy the Preview selection`);
+      let actual;
+      while ((actual = await vscode.env.clipboard.readText()) !== expected) {
+        if (Date.now() > deadline) {
+          report.clipboardFailure = { label, expected, actual,
+            workbench: await page.evaluate(() => ({ focused: document.hasFocus(), active: document.activeElement?.className })),
+            document: await frame.evaluate(() => ({ focused: document.hasFocus(), active: document.activeElement?.className,
+              previewSelection: document.querySelector('.preview-frame')?.contentWindow?.getSelection()?.toString() })) };
+          throw Error(`${label}: Copy did not copy the Preview selection`);
+        }
         await new Promise(resolve => setTimeout(resolve, 40));
       }
     };
@@ -62,7 +69,7 @@ exports.run = async () => {
       return { width: rect.width, height: rect.height, rowHeight: row.getBoundingClientRect().height,
         fontFamily: style.fontFamily, fontSize: style.fontSize, lineHeight: style.lineHeight };
     });
-    const previewMenus = [];
+    const previewMenus = report.previewMenus = [];
     const expectQuickInput = async (surface, gesture, commands) => {
       await page.waitForFunction(() => {
         const widget = document.querySelector('.quick-input-widget');
@@ -171,9 +178,32 @@ exports.run = async () => {
       const copy = await page.evaluate(() => {
         const label = [...document.querySelectorAll('.context-view .action-label')]
           .find(label => /^(Copy|复制)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0);
-        const rect = label.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        const rect = label.getBoundingClientRect();
+        const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        const hit = document.elementFromPoint(point.x, point.y)?.closest('.action-menu-item')?.querySelector('.action-label')?.textContent.trim();
+        window.__meoMenuClickReceipt = undefined;
+        window.__meoMenuClickObserver = event => {
+          window.__meoMenuClickReceipt = { trusted: event.isTrusted,
+            label: event.target?.closest('.action-menu-item')?.querySelector('.action-label')?.textContent.trim() };
+        };
+        window.addEventListener('pointerdown', window.__meoMenuClickObserver, { once: true, capture: true });
+        return { ...point, hit };
       });
-      await page.mouse.click(copy.x, copy.y);
+      let receipt;
+      try {
+        assert.match(copy.hit ?? '', /^(Copy|复制)$/, 'The native menu Copy point must hit the Copy row');
+        await page.mouse.click(copy.x, copy.y);
+      }
+      finally {
+        receipt = await page.evaluate(() => {
+          window.removeEventListener('pointerdown', window.__meoMenuClickObserver, true);
+          delete window.__meoMenuClickObserver;
+          const receipt = window.__meoMenuClickReceipt; delete window.__meoMenuClickReceipt;
+          return receipt;
+        });
+        report.menuCopyClicks ??= []; report.menuCopyClicks.push({ surface, point: copy, receipt });
+      }
+      assert.ok(receipt?.trusted && /^(Copy|复制)$/.test(receipt.label ?? ''), 'The native Copy row must receive the actual press');
       await expectClipboard(selected, `${surface}: menu`);
       assert.equal(await preview.evaluate(() => getSelection().toString()), selected);
       await vscode.env.clipboard.writeText(sentinel);

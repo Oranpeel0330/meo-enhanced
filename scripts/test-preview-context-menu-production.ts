@@ -7,6 +7,11 @@ const selectedText = 'Select this text.';
 let primaryError: unknown;
 try {
   const manifest = await Bun.file('package.json').json();
+  // The built-in action resolves the menu's borrowed Webview focus before it
+  // closes. An extension-host round trip must not intervene in this menu item.
+  assert.deepEqual(manifest.contributes.menus['webview/context'].map((entry: any) => entry.command), [
+    'meoEnhanced.preview.cut', 'editor.action.clipboardCopyAction', 'meoEnhanced.preview.paste'
+  ]);
   for (const action of ['copy', 'cut', 'paste']) {
     const command = `meoEnhanced.preview.${action}`;
     const descriptor = manifest.contributes.commands.find((entry: any) => entry.command === command);

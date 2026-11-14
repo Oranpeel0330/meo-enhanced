@@ -100,6 +100,6 @@
 | `meoEnhanced.toggleMode` | Live / Source 切换实际可用，Preview 经界面进入，[模式应用](../scripts/test-editor-mode-application.ts)、[生产模式运行](../scripts/test-editor-mode-runtime-browser.ts)；原生命令另验 |
 | `meoEnhanced.exportHtml`、`meoEnhanced.exportPdf`、`meoEnhanced.exportDocx` | 正确格式、取消、成功与失败反馈，[导出反馈](../scripts/test-vscode-export-feedback.ts)、[导出适配器](../scripts/test-export-webview-adapter.ts)；实际保存与文件打开另验 |
 | `meoEnhanced.managePreviewPresets` | 导入 / 更新、分享文件导出、移除、打开存储目录与按界面语言打开配置指南；取消不写入，[存储与原生对话框合同](../scripts/test-vscode-preview-presets.ts)；真实菜单另验 |
-| `meoEnhanced.preview.copy`、`meoEnhanced.preview.cut`、`meoEnhanced.preview.paste` | 仅用于 Preview 只读正文菜单，不出现在命令面板；复制委托宿主命令，剪切粘贴保持禁用且直接调用也不编辑文档；可编辑输入框保留默认菜单；[生产上下文与规模覆盖](../scripts/test-preview-context-menu-production.ts)、[真实菜单与剪贴板](../scripts/test-vscode-preview-shortcuts.ps1) |
+| Preview 只读正文剪贴板菜单与 `meoEnhanced.preview.copy`、`meoEnhanced.preview.cut`、`meoEnhanced.preview.paste` | 菜单 Copy 直接执行宿主内建命令，保留菜单焦点路由；隐藏的复制别名用于快捷键和直接调用。剪切粘贴保持禁用且直接调用也不编辑文档；可编辑输入框保留默认菜单；[生产上下文与规模覆盖](../scripts/test-preview-context-menu-production.ts)、[真实菜单与剪贴板](../scripts/test-vscode-preview-shortcuts.ps1) |
 
 发布报告必须分别列出：自动化结果、最终安装包验证、未覆盖的原生操作和已知问题。OS 焦点、原生菜单、系统剪贴板、文件对话框、支持的最低 VS Code 版本不能从无头浏览器结果推断为通过。若用户报告基础功能回归，候选立即失去验收结论；保存原证据，建立失败用例后重新检查受影响范围。

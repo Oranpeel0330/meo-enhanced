@@ -179,7 +179,7 @@
           "group": "5_cutcopypaste@1"
         },
         {
-          "command": "meoEnhanced.preview.copy",
+          "command": "editor.action.clipboardCopyAction",
           "when": "webviewId == meoEnhanced.editor && webviewSection == preview-readonly",
           "group": "5_cutcopypaste@2"
         },
