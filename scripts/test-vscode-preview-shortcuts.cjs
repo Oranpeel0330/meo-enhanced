@@ -270,6 +270,24 @@ exports.run = async () => {
       report.menuComparison = { preview: previewMenus, native: { mode, items, layout } };
       await page.keyboard.press('Escape');
       report.runs.push({ surface: mode, gesture: 'enabled native context menu', exact: true });
+      const paragraph = await frame.$$eval('.editor-host .cm-line', (lines, selected) => {
+        const line = lines.find(element => element.textContent === selected);
+        if (!line) throw Error('The native editor copy paragraph must be rendered');
+        const rect = line.getBoundingClientRect();
+        return { x: rect.left + Math.min(16, rect.width / 2), y: rect.top + rect.height / 2 };
+      }, 'Select and copy this paragraph.');
+      const paragraphRoot = (await readWebviewPoint({ frame, page }, paragraph)).root;
+      await page.mouse.click(paragraphRoot.x, paragraphRoot.y);
+      await page.keyboard.press('Home');
+      await page.keyboard.down('Shift');
+      try { await page.keyboard.press('End'); }
+      finally { await page.keyboard.up('Shift'); }
+      await frame.waitForFunction(() => document.hasFocus()
+        && getSelection().toString() === 'Select and copy this paragraph.', { timeout: 4000 });
+      await vscode.env.clipboard.writeText(`MEO_NATIVE_EDITOR_COPY_${mode}`);
+      await vscode.commands.executeCommand('editor.action.clipboardCopyAction');
+      await expectClipboard('Select and copy this paragraph.', `${mode}: native editor host Copy`);
+      report.runs.push({ surface: mode, gesture: 'native editor selection / host Copy', exact: true });
     }
     assert.equal(fs.readFileSync(file, 'utf8'), text, 'Host shortcuts must not change the document');
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));

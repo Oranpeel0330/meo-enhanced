@@ -7,11 +7,14 @@ const selectedText = 'Select this text.';
 let primaryError: unknown;
 try {
   const manifest = await Bun.file('package.json').json();
-  // The built-in action resolves the menu's borrowed Webview focus before it
-  // closes. An extension-host round trip must not intervene in this menu item.
+  // Extension menu references need declared metadata; a bare native command
+  // can execute through the API yet disappear from a contributed menu.
   assert.deepEqual(manifest.contributes.menus['webview/context'].map((entry: any) => entry.command), [
-    'meoEnhanced.preview.cut', 'editor.action.clipboardCopyAction', 'meoEnhanced.preview.paste'
+    'meoEnhanced.preview.cut', 'meoEnhanced.preview.copy', 'meoEnhanced.preview.paste'
   ]);
+  for (const entry of manifest.contributes.menus['webview/context']) {
+    assert.ok(manifest.contributes.commands.some((command: any) => command.command === entry.command));
+  }
   for (const action of ['copy', 'cut', 'paste']) {
     const command = `meoEnhanced.preview.${action}`;
     const descriptor = manifest.contributes.commands.find((entry: any) => entry.command === command);

@@ -246,7 +246,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<Docume
   context.subscriptions.push(vscode.commands.registerCommand('meoEnhanced.managePreviewPresets', () => provider.managePreviewPresets()));
   // Disabled readonly menu entries must also stay inert when called directly.
   context.subscriptions.push(
-    vscode.commands.registerCommand('meoEnhanced.preview.copy', () => vscode.commands.executeCommand('editor.action.clipboardCopyAction')),
+    vscode.commands.registerCommand('meoEnhanced.preview.copy', async (context: unknown) => {
+      // The native menu borrows focus before invoking this extension-host command.
+      // Let the host restore its remembered Preview frame before resolving Copy.
+      if (context !== null && typeof context === 'object'
+        && 'webview' in context && context.webview === VIEW_TYPE
+        && 'webviewSection' in context && context.webviewSection === 'preview-readonly') {
+        await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+      }
+      return vscode.commands.executeCommand('editor.action.clipboardCopyAction');
+    }),
     vscode.commands.registerCommand('meoEnhanced.preview.cut', () => undefined),
     vscode.commands.registerCommand('meoEnhanced.preview.paste', () => undefined)
   );
