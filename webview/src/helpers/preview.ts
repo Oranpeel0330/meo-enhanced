@@ -1095,6 +1095,10 @@ export function createPreviewController({
     isViewportInteracting,
     {
       isPointerActive: () => activePreviewPointers.size > 0,
+      afterGesture(document, operation) {
+        readingWork.prepare(readingKeys.mermaid, () => { operation(); }, () => !isViewportInteracting());
+        armViewportHighlight(document, true);
+      },
       async readWarmupSources(document, isCurrent) {
         const chunks = await previewViewport?.prepareReadingCache(isCurrent) ?? [];
         return isCurrent() ? readPreviewMermaidWarmupSources(document, chunks) : [];
@@ -1165,8 +1169,26 @@ export function createPreviewController({
     return ready;
   };
   const commitMermaidReading = (frameDocument: Document, mutate: () => void, elements?: readonly HTMLElement[]) =>
-    enqueueReadingCommit(frameDocument, mutate, undefined, () => activePreviewPointers.size === 0
-      && (!isViewportInteracting() || !!elements?.length && elements.every(element => canCommitReadingElement(element))));
+    enqueueReadingCommit(frameDocument, () => {
+      const held: HTMLElement[] = [];
+      if (isViewportInteracting()) for (const element of elements ?? []) {
+        if (canCommitReadingElement(element) || !element.classList.contains('meo-export-mermaid')
+          || element.classList.contains('meo-reading-size-held')) continue;
+        // Publish the complete SVG inside its existing reading box. The same
+        // queue releases that box after native motion; no scrollTop correction.
+        element.style.setProperty('--meo-reading-height', `${element.getBoundingClientRect().height}px`);
+        element.classList.add('meo-reading-size-held');
+        held.push(element);
+      }
+      const release = () => { for (const element of held) {
+        element.classList.remove('meo-reading-size-held'); element.style.removeProperty('--meo-reading-height');
+      } };
+      try { mutate(); }
+      catch (error) { release(); throw error; }
+      if (held.length) void enqueueReadingCommit(frameDocument, release, release, () => !isViewportInteracting());
+    }, undefined, () => activePreviewPointers.size === 0
+      && (!isViewportInteracting() || !!elements?.length && elements.every(element => canCommitReadingElement(element)
+        || element.classList.contains('meo-export-mermaid') && element.getBoundingClientRect().height > 0)));
   const prepareReadingContent = async (frameDocument: Document) => {
     if (preparingReadingDocument === frameDocument || !previewViewport) return;
     preparingReadingDocument = frameDocument;
@@ -1233,7 +1255,7 @@ export function createPreviewController({
     if (disposed || activeFrameDocument !== frameDocument || host.hidden) return;
     if (hasBoundedPreviewResources(frameDocument)) {
       for (const step of kind ? [kind] : Object.keys(readingKeys) as ReadingKind[]) requestReadingWork(frameDocument, step, ready);
-    }
+    } else if (!kind || kind === 'mermaid') requestReadingWork(frameDocument, 'mermaid', ready);
     armViewportHighlight(frameDocument, true);
   };
   const armViewportHighlight = (frameDocument: Document, wake = false) => {
@@ -1242,13 +1264,13 @@ export function createPreviewController({
     highlightFrame = window.requestAnimationFrame(() => {
       highlightFrame = null;
       if (!disposed && activeFrameDocument === frameDocument && !host.hidden) {
-        if (hasBoundedPreviewResources(frameDocument) && activePreviewPointers.size > 0) {
+        if ((hasBoundedPreviewResources(frameDocument) || readingWork.hasPending()) && activePreviewPointers.size > 0) {
           // Held pointers own selection and scrollbar geometry. Ordinary wheels
           // retain native motion through the viewport transaction while nearby
           // enrichment continues in the existing bounded reading budget.
           return;
         }
-        if (hasBoundedPreviewResources(frameDocument)) {
+        if (hasBoundedPreviewResources(frameDocument) || readingWork.hasPending()) {
           if (readingWork.drain()) armViewportHighlight(frameDocument);
           else if (readingWork.hasPending()) {
             // New scroll/resource events wake immediately. Otherwise use the
@@ -1258,7 +1280,7 @@ export function createPreviewController({
               highlightTimer = null; armViewportHighlight(frameDocument);
             }, Math.ceil(remaining) + 1);
           }
-          return;
+          if (hasBoundedPreviewResources(frameDocument)) return;
         }
         const moreMath = previewMathWork?.run() ?? false;
         addPreviewCodeCopyControls(frameDocument, uiLanguage);
@@ -2227,7 +2249,7 @@ export function createPreviewController({
               sourceMapDirty = true;
             };
             if (host.hidden) commit();
-            else if (hasBoundedPreviewResources(frameDocument)) return commitMermaidReading(frameDocument, commit, elements);
+            else if (hasBoundedPreviewResources(frameDocument) || isViewportInteracting()) return commitMermaidReading(frameDocument, commit, elements);
             else withViewportTransaction(() => commit());
           }
         );
@@ -2515,7 +2537,7 @@ export function createPreviewController({
             sourceMapDirty = true;
           };
           if (host.hidden) commit();
-          else if (hasBoundedPreviewResources(frameDocument)) return commitMermaidReading(frameDocument, commit, elements);
+          else if (hasBoundedPreviewResources(frameDocument) || isViewportInteracting()) return commitMermaidReading(frameDocument, commit, elements);
           else withViewportTransaction(() => commit());
         }
       );

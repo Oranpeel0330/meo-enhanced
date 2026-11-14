@@ -1,23 +1,26 @@
 import { cpSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { cooperativeMermaidPlugin } from './mermaid-cooperative-runtime.mjs';
 
 /** One lazy module graph works in Webviews and in directly opened HTML files. */
 export async function buildMermaidRuntime(root, dist) {
   const directory = path.join(dist, 'mermaid');
+  const cooperative = cooperativeMermaidPlugin(path.join(root, 'webview/src/adapters/mermaidRenderTask.ts'));
   const build = await Bun.build({
     entrypoints: [path.join(root, 'webview/src/mermaidRuntime.ts')],
     target: 'browser', format: 'esm', splitting: true, minify: true,
     // The browser's native module prefetch would fetch the same dependencies
     // again when SystemJS requests them as classic scripts.
     modulePreload: false, outdir: directory,
-    plugins: [{ name: 'mermaid-off-thread-elk', setup(builder) {
+    plugins: [cooperative.plugin, { name: 'mermaid-off-thread-elk', setup(builder) {
       builder.onResolve({ filter: /^elkjs\/lib\/elk\.bundled\.js$/ }, () => ({
         path: path.join(root, 'webview/src/adapters/mermaidElkLayout.ts')
       }));
     } }]
   });
   if (!build.success) throw new AggregateError(build.logs, 'Mermaid build failed');
+  cooperative.verify();
   const minifier = new Bun.Transpiler({ loader: 'js', minifyWhitespace: true, minifySyntax: true, minifyIdentifiers: true });
   const imports = new Map();
   for (const output of build.outputs) {

@@ -297,7 +297,7 @@ async function assertPreviewRuntime() {
     'cold diagram results must not accumulate into one large DOM commit');
   if (!process.argv.includes('--preview-only')) {
     const coldLiveText = Array.from({ length: 240 }, (_, index) => `Paragraph ${index}.\n\n`).join('')
-      + '```mermaid\nflowchart LR; A[ColdLiveGesture]-->B\n```\n\n'
+      + '```mermaid\nsequenceDiagram\nA->>B: ColdLiveGesture\n```\n\n'
       + '```typescript\nconst value = 1;\n```\n\n'.repeat(55);
     assert.ok(assessLargeDocument(coldLiveText).boundedEditorWork && !assessLargeDocument(coldLiveText).windowedPreview,
       'cold Live fixture must use the actual earlier work budget');
@@ -331,7 +331,7 @@ async function assertPreviewRuntime() {
         await page.mouse.wheel({ deltaY: 1 });
         await new Promise(resolve => setTimeout(resolve, 80));
         assert.equal(await page.evaluate(() => (window as any).__coldLiveRequests), 0,
-          'a cold Live diagram must not invoke Mermaid during continuing trusted scrolling');
+          'an indivisible cold Live engine must not invoke Mermaid during continuing trusted scrolling');
       }
       await page.waitForFunction(() => (window as any).__coldLiveRequests === 1
         && !!(window as any).__coldLive.host.querySelector('.meo-mermaid-svg-wrapper svg'));

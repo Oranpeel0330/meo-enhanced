@@ -75,6 +75,11 @@ type MermaidFullscreenSession = {
 };
 
 export const MERMAID_EDITOR_CONFIG_KEY = 'editor-v1';
+/** These use the pinned common DOM renderer and its off-thread default layout.
+ * Explicit configuration and other engines keep their original gesture gate. */
+export function canPrepareMermaidWhileScrolling(source: string): boolean {
+  return source.length <= 32_768 && /^\s*(?:flowchart|graph)\b/i.test(source) && !/%%\{/.test(source);
+}
 const MERMAID_MATH_CLASS = 'meoMath';
 const MERMAID_LABEL_WRAP_THEME_CSS =
   '.nodeLabel p{white-space:normal!important;overflow-wrap:anywhere!important;word-break:break-word!important;}';
@@ -693,6 +698,7 @@ export class MermaidDiagramWidget extends WidgetType {
   private visibilityObserver: ReadingViewportObserver | null = null;
   private requestCurrentPresentation: (refresh?: boolean) => void = () => {};
   private cancelScrollWait: (() => void) | null = null;
+  private cancelSizeHold: (() => void) | null = null;
 
   constructor(
     diagramText: string,
@@ -812,6 +818,8 @@ export class MermaidDiagramWidget extends WidgetType {
   }
 
   toDOM(view?: EditorView) {
+    this.cancelSizeHold?.();
+    this.cancelSizeHold = null;
     this.cancelScrollWait?.();
     this.cancelScrollWait = null;
     const container = document.createElement('div');
@@ -919,6 +927,33 @@ export class MermaidDiagramWidget extends WidgetType {
       },
       showDiagram: (svg) => {
         releaseBusyAfterLayout = true;
+        const viewport = view && getViewportController(view);
+        if (!this.isDisplayMath && this.startLine > 0 && this.endLine > 0 && viewport?.isUserScrolling() && !this.cancelSizeHold
+          && container.getBoundingClientRect().top < view!.scrollDOM.getBoundingClientRect().bottom) {
+          const height = container.getBoundingClientRect().height;
+          if (height > 0) {
+            container.style.setProperty('--meo-reading-height', `${height}px`);
+            container.classList.add('meo-reading-size-held');
+            const release = () => {
+              container.classList.remove('meo-reading-size-held');
+              container.style.removeProperty('--meo-reading-height');
+            };
+            let cancel: () => void;
+            const finish = () => {
+              if (this.container !== container || !container.isConnected) { release(); return; }
+              const from = view!.state.doc.line(Math.min(this.startLine, view!.state.doc.lines)).from;
+              const to = view!.state.doc.line(Math.min(this.endLine, view!.state.doc.lines)).to;
+              viewport.preserveLayoutChange({ element: container, from, to }, () => {
+                if (this.container !== container || !container.isConnected) { release(); return; }
+                if (viewport.isUserScrolling()) { cancel = viewport.afterUserScroll(finish); return; }
+                if (this.container === container) this.cancelSizeHold = null;
+                release();
+              });
+            };
+            cancel = viewport.afterUserScroll(finish);
+            this.cancelSizeHold = () => { cancel(); release(); };
+          }
+        }
         const contentWidth = currentMermaidContentWidth(container);
         const estimatedHeight = estimateCachedMermaidHeight(svg, contentWidth);
         this.intrinsicSvg = svg;
@@ -1025,6 +1060,7 @@ export class MermaidDiagramWidget extends WidgetType {
           || this.container !== container || (gated && !container.isConnected) || !this.presentationHandle) return;
         const identity = getMermaidEditorPresentationIdentity();
         if (!refresh && gated && !this.fullscreenSession && viewport?.isUserScrolling()
+          && !canPrepareMermaidWhileScrolling(this.diagramText)
           && !this.presentationFactory.getCached(mermaidRenderRequest(this.diagramText, identity.themeKey))) {
           // A frame checkpoint does not authorize expensive cold generation.
           // The viewport owns the shared gesture deadline, including momentum.
@@ -1480,6 +1516,8 @@ export class MermaidDiagramWidget extends WidgetType {
 
   destroy() {
     this.finishPendingPresentation();
+    this.cancelSizeHold?.();
+    this.cancelSizeHold = null;
     this.cancelScrollWait?.();
     this.cancelScrollWait = null;
     this.container = null;

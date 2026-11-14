@@ -93,18 +93,20 @@ await preloadMermaidDocumentBatch({
   }
 }, requests.slice(0, 2), () => true, () => {});
 
-// The viewport owns the idle deadline; warm-up must sleep on that notification
-// rather than repeatedly attempting generation while a gesture is active.
+// Engines without cooperative DOM preparation retain the viewport's idle gate.
 let scrolling = true, resume!: () => void, paused!: () => void, scrollPreloads = 0;
 const waiting = new Promise<void>(resolve => { paused = resolve; });
 const duringScroll = preloadMermaidDocumentBatch({ async preload() { scrollPreloads++; } },
-  requests.slice(0, 1), () => true, () => {}, undefined, () => scrolling,
+  [{ ...request(0), rawSource: 'sequenceDiagram\nA->>B: hello' }], () => true, () => {}, undefined, () => scrolling,
   () => new Promise<void>(resolve => { resume = () => { scrolling = false; resolve(); }; paused(); }));
 await waiting;
-assert.equal(scrollPreloads, 0, 'cold warming must not start before the viewport releases scrolling');
+assert.equal(scrollPreloads, 0, 'an indivisible cold engine must wait for the viewport to release scrolling');
 resume();
 await duringScroll;
 assert.equal(scrollPreloads, 1, 'one viewport notification resumes the pending batch');
+await preloadMermaidDocumentBatch({ async preload() { scrollPreloads++; } },
+  requests.slice(0, 1), () => true, () => {}, undefined, () => true);
+assert.equal(scrollPreloads, 2, 'cooperative graphs can prepare without waiting for wheel quiet');
 
 const source = Array.from({ length: 4 }, (_, index) => `![Near ${index}](near-${index}.png)\n\n`).join('')
   + 'Distant section\n\n![Far](far.png)';

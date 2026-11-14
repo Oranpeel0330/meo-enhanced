@@ -37,6 +37,7 @@ const mermaidResources = createMermaidDiagramRenderPool({
   runtime.render = (async (id: string) => { renders++; return { svg: `<svg id="${id}" viewBox="0 0 100 30"><rect width="100" height="30"/></svg>` }; }) as typeof runtime.render;
   const renderer = createPreviewMermaidRenderer(mermaidResources, (error: unknown) => { throw error; }, () => interacting, {
     isPointerActive: () => false,
+    afterGesture() { throw new Error('Cooperative/cached preparation must not await wheel quiet'); },
     readWarmupSources: async () => [{ documentIndex: 0, source }]
   });
   let approach: Promise<void> | undefined;

@@ -652,6 +652,7 @@
       "scripts/test-mermaid-editing.ts",
       "scripts/test-mermaid-layout-export.ts",
       "scripts/test-mermaid-module-runtime.ts",
+      "scripts/test-mermaid-reading-generation-production.ts",
       "scripts/test-mermaid-partial-line-input-viewport.ts",
       "scripts/test-mermaid-split-refresh.ts",
       "scripts/test-mermaid-viewport-persistence.ts",

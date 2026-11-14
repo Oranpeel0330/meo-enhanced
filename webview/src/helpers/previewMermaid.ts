@@ -16,7 +16,8 @@ import {
   renderMermaidSvgInDocument,
   isDisplayMathDiagram,
   normalizeMermaidDiagramText,
-  restoreMermaidEditorTheme
+  restoreMermaidEditorTheme,
+  canPrepareMermaidWhileScrolling
 } from './mermaidDiagram';
 
 const PREVIEW_MERMAID_CACHE_LIMIT = 100;
@@ -41,6 +42,7 @@ type PreviewMermaidCommit = (mutate: () => void, elements?: readonly HTMLElement
 export type PreviewMermaidWarmupSource = { readonly documentIndex: number; readonly source: string };
 type PreviewMermaidReading = {
   isPointerActive(): boolean;
+  afterGesture(document: Document, operation: () => void): void;
   readWarmupSources(document: Document, isCurrent: () => boolean): Promise<readonly PreviewMermaidWarmupSource[]>;
 };
 
@@ -158,6 +160,8 @@ export function createPreviewMermaidRenderer(
   let activeGroup: ReturnType<MermaidDiagramRenderResources['acquireGroup']> | null = null;
   let latestRenderGeneration = 0;
   let renderTail: Promise<void> = Promise.resolve();
+  let active: { document: Document; key: string; styles: ChildNode | null; current(): boolean;
+    promise: Promise<void>; followup?: () => Promise<void> } | null = null;
 
   const render = (
     frameDocument: Document,
@@ -166,11 +170,17 @@ export function createPreviewMermaidRenderer(
     isCurrent: () => boolean = () => true,
     commit: PreviewMermaidCommit = (mutate) => mutate()
   ): Promise<void> => {
+    const preset = frameDocument.documentElement.dataset.meoPreviewPreset ?? 'default';
+    const revision = frameDocument.documentElement.dataset.meoPreviewPresetRevision ?? '';
+    const contextKey = JSON.stringify([appearance, preset, revision]);
+    const styles = frameDocument.querySelector?.('style[data-meo-preview-styles]')?.firstChild ?? null;
+    if (active?.document === frameDocument && active.key === contextKey && active.styles === styles && active.current()) {
+      active.followup = () => render(frameDocument, appearance, onDiagramRendered, isCurrent, commit);
+      return active.promise;
+    }
     const renderGeneration = latestRenderGeneration + 1;
     latestRenderGeneration = renderGeneration;
     activeGroup?.end();
-    const preset = frameDocument.documentElement.dataset.meoPreviewPreset ?? 'default';
-    const revision = frameDocument.documentElement.dataset.meoPreviewPresetRevision ?? '';
     // Keep this preflight lazy: a cold block needs no palette/style probes.
     // A preserved SVG can outlive a theme change with the same appearance.
     let themeKey: string | undefined;
@@ -192,9 +202,9 @@ export function createPreviewMermaidRenderer(
       const cachedOnly = !hasPendingBlocks || previewMermaidSvgCache.size > 0 && await tryRenderCachedMermaidBlocks(
         frameDocument, appearance, onDiagramRendered, requestIsCurrent, commit, cachedBlocked
       );
-      if (cachedOnly && (!reading || isInteracting())) return;
+      if (cachedOnly && !reading) return;
       // Recheck the request and gesture before acquiring the cold engine.
-      if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
+      if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, cachedBlocked)) return;
       const withThemeLease = async (operation: () => Promise<void>, priority: 'high' | 'normal') => {
         const group = resources.acquireGroup();
         activeGroup = group;
@@ -212,20 +222,22 @@ export function createPreviewMermaidRenderer(
       // Visible demand finishes before speculative chunk reads, and never
       // holds the shared Mermaid engine while waiting for the data window.
       if (!cachedOnly) await withThemeLease(() => renderMermaidBlocks(frameDocument, appearance,
-        onDiagramRendered, requestIsCurrent, commit, isInteracting), 'high');
-      if (!reading || !hasBoundedPreviewResources(frameDocument) || !requestIsCurrent() || isInteracting()) return;
+        onDiagramRendered, requestIsCurrent, commit, isInteracting, cachedBlocked), 'high');
+      if (!reading || !hasBoundedPreviewResources(frameDocument) || !requestIsCurrent() || cachedBlocked()) return;
       const context = previewMermaidContext(frameDocument, appearance);
-      const warmup = (await reading.readWarmupSources(frameDocument, () => requestIsCurrent() && !isInteracting()))
+      const warmup = (await reading.readWarmupSources(frameDocument, () => requestIsCurrent() && !cachedBlocked()))
         .filter(({ documentIndex, source }) => source.length <= 32_768
+          && (!isInteracting() || canPrepareMermaidWhileScrolling(source))
           && !previewMermaidSvgCache.has(previewMermaidCacheKey(context, documentIndex, source))).slice(0, 2);
-      if (!warmup.length || !requestIsCurrent() || isInteracting()) return;
+      if (!warmup.length || !requestIsCurrent() || cachedBlocked()) return;
       await withThemeLease(async () => {
         const mermaid = await loadMermaidRuntime();
-        if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
+        if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, cachedBlocked)) return;
         initializePreviewMermaid(mermaid, frameDocument, context);
         for (const { documentIndex, source } of warmup) {
           await new Promise<void>(resolve => setTimeout(resolve, 0));
-          if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, isInteracting)) return;
+          if (!await waitForPreviewGesture(frameDocument, requestIsCurrent, cachedBlocked)) return;
+          if (isInteracting() && !canPrepareMermaidWhileScrolling(source)) continue;
           const key = previewMermaidCacheKey(context, documentIndex, source);
           if (previewMermaidSvgCache.has(key)) continue;
           try {
@@ -237,8 +249,26 @@ export function createPreviewMermaidRenderer(
         }
       }, 'normal');
     }).catch(report);
+    const request: NonNullable<typeof active> = { document: frameDocument, key: contextKey, styles, current: requestIsCurrent, promise: scheduled };
+    active = request;
+    const settled = scheduled.finally(() => {
+      if (active !== request) return;
+      active = null;
+      if (!requestIsCurrent()) return;
+      // Unsupported engines remain pending without occupying the engine lease
+      // or a scroll polling loop. New nearby safe work may still join.
+      if (isInteracting() && reading && pendingNearbyMermaidBlocks(frameDocument,
+        previewMermaidContext(frameDocument, appearance)).some(({ block }) =>
+        !canPrepareMermaidWhileScrolling(decodeBase64Utf8(block.dataset.sourceB64 ?? '')))) {
+        reading.afterGesture(frameDocument, () => {
+          if (requestIsCurrent()) void render(frameDocument, appearance, onDiagramRendered, isCurrent, commit);
+        });
+      }
+      return request.followup?.();
+    });
+    request.promise = settled;
     renderTail = scheduled;
-    return scheduled;
+    return settled;
   };
 
   return {
@@ -247,6 +277,7 @@ export function createPreviewMermaidRenderer(
       latestRenderGeneration += 1;
       activeGroup?.end();
       activeGroup = null;
+      active = null;
     }
   };
 }
@@ -265,16 +296,18 @@ async function renderMermaidBlocks(
   onDiagramRendered: (() => void) | undefined,
   isCurrent: () => boolean,
   commit: PreviewMermaidCommit,
-  isInteracting: () => boolean
+  isInteracting: () => boolean,
+  isPointerActive: () => boolean
 ): Promise<void> {
   if (!isCurrent()) return;
   syncPreviewRenderedActions(frameDocument);
   const context = previewMermaidContext(frameDocument, appearance), { preset, palette } = context;
-  const blocks = pendingNearbyMermaidBlocks(frameDocument, context);
+  const blocks = pendingNearbyMermaidBlocks(frameDocument, context).filter(({ block }) => !isInteracting()
+    || canPrepareMermaidWhileScrolling(decodeBase64Utf8(block.dataset.sourceB64 ?? '')));
   if (blocks.length === 0) return;
 
   const mermaid = await loadMermaidRuntime();
-  if (!await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) return;
+  if (!await waitForPreviewGesture(frameDocument, isCurrent, isPointerActive)) return;
   initializePreviewMermaid(mermaid, frameDocument, context);
 
   let renderIndex = 0;
@@ -291,10 +324,11 @@ async function renderMermaidBlocks(
     // Mermaid's promises can resolve in one task. Let input and paint run
     // between diagrams while retaining the exclusive theme lease.
     await new Promise<void>(resolve => setTimeout(resolve, 0));
-    if (!await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) return;
+    if (!await waitForPreviewGesture(frameDocument, isCurrent, isPointerActive)) return;
     if (!isNearPreviewViewport(block, frameDocument)) continue;
     const source = decodeBase64Utf8(block.dataset.sourceB64 ?? '');
     if (!source) continue;
+    if (isInteracting() && !canPrepareMermaidWhileScrolling(source)) continue;
 
     const cacheKey = previewMermaidCacheKey(context, documentIndex, source);
 
@@ -318,11 +352,11 @@ async function renderMermaidBlocks(
       failed.push(block);
     }
     if (hasBoundedPreviewResources(frameDocument) && prepared.length + failed.length >= PREVIEW_MERMAID_BATCH_SIZE) {
-      if (!await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) return;
+      if (!await waitForPreviewGesture(frameDocument, isCurrent, isPointerActive)) return;
       await commitPrepared();
     }
   }
-  if (await waitForPreviewGesture(frameDocument, isCurrent, isInteracting)) await commitPrepared();
+  if (await waitForPreviewGesture(frameDocument, isCurrent, isPointerActive)) await commitPrepared();
 }
 
 function initializePreviewMermaid(mermaid: Awaited<ReturnType<typeof loadMermaidRuntime>>, document: Document,

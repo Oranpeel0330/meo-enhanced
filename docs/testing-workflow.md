@@ -1740,8 +1740,8 @@ contract belongs to the rendered/viewport targeted plans and release browser
 suite. Its idle approach lies inside the bounded SVG cache window: the first
 Mermaid pass now retains the same in-gesture content/blank bounds as warm and
 reverse reading. The existing 800ms stopped-gesture observation remains.
-The separate distant cold jump in `test-preview-mermaid-runtime.ts` still requires
-generation to yield until the actual native gesture ends. Offscreen presentation
+The separate indivisible cold-engine jump in `test-preview-mermaid-runtime.ts`
+still requires generation to yield until the actual native gesture ends. Offscreen presentation
 continues to use the existing window and resource budgets.
 
 `test-mermaid-diagram-presentation-production.ts` pairs ordinary and optimized
@@ -1754,6 +1754,15 @@ cancelled/hidden and deferred commit cases remain in that same owning suite.
 `test-preview-reading-work.ts` bounds both presentation and idle-cache ranges.
 These additions retain their current release registrations; native smooth-scroll
 continuity is checked separately by the existing production scroll contracts.
+
+`test-mermaid-reading-generation-production.ts` starts trusted wheels immediately
+with the real cold engine, a 40-node nested flowchart, and ordinary/windowed Live,
+Preview and Source split. Graph nodes must be visible during continuous motion within 500ms of
+entry; display preserves following text geometry and performs no scrollTop writes
+after the first wheel. Temporary box constraints retire through the existing idle
+owner. Motion and settled screenshots accompany per-frame evidence. The packaged
+module/reference parity test separately checks that cooperative DOM work preserves
+the official renderer's complete geometry under CSP and offline loading.
 
 `test-outline-large-startup.ts` protects bounded in-app outline DOM independently
 of the complete heading model. It pairs Live/Source startup, Preview roundtrips,

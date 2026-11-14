@@ -2,6 +2,7 @@ import type { EditorState } from '@codemirror/state';
 import { resolvedSyntaxTree } from './markdownSyntax';
 import {
   getFencedCodeContent,
+  canPrepareMermaidWhileScrolling,
   getMermaidEditorPresentationIdentity,
   normalizeMermaidDiagramText
 } from './mermaidDiagram';
@@ -102,7 +103,7 @@ export async function preloadMermaidDocumentBatch(
     if (consumer.getCached?.(request)) continue;
     // Background graphs share the Webview thread with native scrolling. Yield
     // between jobs; visible graph requests still use the high-priority path.
-    while (isUserScrolling()) {
+    while (isUserScrolling() && !canPrepareMermaidWhileScrolling(request.rawSource)) {
       if (waitForScroll) await waitForScroll();
       else await new Promise<void>(resolve => setTimeout(resolve, 50));
       if (!isActive() || signal?.aborted) return;
@@ -118,7 +119,7 @@ export async function preloadMermaidDocumentBatch(
   if (completed) onBatchAvailable();
 }
 
-/** One document/window lifetime for cheap async resources and idle-only graphs.
+/** One document/window lifetime for async resources and bounded graph preparation.
  * The renderers retain their own caches, concurrency and DOM admission. */
 export function createDocumentReadingPreparation(
   consumer: Pick<MermaidDiagramPresentationConsumer, 'preload' | 'getCached' | 'subscribeThemeRefresh'>,
@@ -205,21 +206,27 @@ export function createDocumentReadingPreparation(
     const contentWindow = reading?.readContentWindow();
     if (contentWindow) prepareContent(latestState, contentWindow);
     if (pendingBatch) return;
-    if (reading && isUserScrolling()) {
-      cancelScrollWait = reading.afterUserScroll(() => { cancelScrollWait = null; run(); });
-      return;
-    }
-    const window = reading?.readWindow();
+    const documentWindow = reading?.readWindow();
+    if (documentWindow === null) return;
+    if (!documentWindow && ordinaryWarmDocument === latestState.doc) return;
+    // Continuous reading uses the same bounded source window in both document
+    // sizes. Whole ordinary-document warming resumes through the idle owner.
+    const scrolling = isUserScrolling();
+    const window = scrolling && reading ? contentWindow : documentWindow;
     if (window === null) return;
-    if (!window && ordinaryWarmDocument === latestState.doc) return;
     const runGeneration = generation;
     const batch = pendingBatch = new AbortController();
     const identity = getMermaidEditorPresentationIdentity();
     const sources = collectDocumentMermaidSources(latestState, window);
     const ordinaryDocument = !window && markdownStructureAvailable(latestState) ? latestState.doc : null;
-    const ordered = window ? sources.filter(({ source }) => !consumer.getCached({
+    const eligible = sources.filter(({ source }) => !isUserScrolling() || canPrepareMermaidWhileScrolling(source));
+    const ordered = window ? eligible.filter(({ source }) => !consumer.getCached({
       rawSource: source, normalizedSource: normalizeMermaidDiagramText(source), ...identity
-    })).slice(0, 2) : orderMermaidPreloads(sources);
+    })).slice(0, 2) : orderMermaidPreloads(eligible);
+    if (reading && scrolling && (!documentWindow || sources.length !== eligible.length)) {
+      cancelScrollWait?.();
+      cancelScrollWait = reading.afterUserScroll(() => { cancelScrollWait = null; run(); });
+    }
     const requests = ordered.map(({ source }) => ({
       rawSource: source,
       normalizedSource: normalizeMermaidDiagramText(source),
@@ -242,7 +249,7 @@ export function createDocumentReadingPreparation(
     ).finally(() => {
       if (pendingBatch !== batch) return;
       pendingBatch = null;
-      if (ordinaryDocument && !rescheduleAfterBatch && !disposed && generation === runGeneration
+      if (ordinaryDocument && eligible.length === sources.length && !rescheduleAfterBatch && !disposed && generation === runGeneration
         && (reading?.isActive() ?? true)) ordinaryWarmDocument = ordinaryDocument;
       if (rescheduleAfterBatch && !disposed && latestState) {
         rescheduleAfterBatch = false;

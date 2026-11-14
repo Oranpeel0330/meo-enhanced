@@ -5098,6 +5098,22 @@ html[data-editor-appearance='light'] .cm-tooltip.meo-hex-color-adjustment {
   min-width: 0;
   transform-origin: center center;
 }
+.cm-editor .meo-mermaid-block.meo-reading-size-held {
+  box-sizing: border-box;
+  height: var(--meo-reading-height) !important;
+  min-height: var(--meo-reading-height) !important;
+  max-height: var(--meo-reading-height) !important;
+  overflow: hidden;
+}
+.cm-editor .meo-mermaid-block.meo-reading-size-held > .meo-mermaid-svg-wrapper {
+  height: 100%;
+  align-items: flex-start;
+}
+.cm-editor .meo-mermaid-block.meo-reading-size-held > .meo-mermaid-svg-wrapper > svg {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+}
 
 .meo-mermaid-fullscreen .meo-mermaid-svg-wrapper {
   width: 100%;

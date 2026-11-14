@@ -1173,6 +1173,23 @@ th:empty::before {
   height: auto;
   display: block;
 }
+.meo-export-mermaid.meo-reading-size-held {
+  box-sizing: border-box;
+  height: var(--meo-reading-height) !important;
+  min-height: var(--meo-reading-height) !important;
+  max-height: var(--meo-reading-height) !important;
+  overflow: hidden;
+}
+.meo-export-mermaid.meo-reading-size-held .meo-export-mermaid-svg {
+  box-sizing: border-box;
+  height: 100%;
+  align-items: flex-start;
+}
+.meo-export-mermaid.meo-reading-size-held .meo-export-mermaid-svg svg {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+}
 .meo-export-mermaid > pre.meo-export-code-block {
   margin: 0;
   border: 0;
