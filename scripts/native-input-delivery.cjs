@@ -49,7 +49,7 @@ async function findActiveWebview(browser, heading) {
   return matches[0];
 }
 
-async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs = 2000 }) {
+async function readWebviewPoint({ frame, page }, position) {
   let owner = frame;
   let id;
   while (owner && !id) {
@@ -57,6 +57,27 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
     owner = owner.parentFrame();
   }
   assert.ok(id, 'A Webview owner id is required');
+  const contentFrame = await inspectContentFrameOwner(frame);
+  if (contentFrame.id !== 'active-frame' || !contentFrame.visible || contentFrame.inert) {
+    throw Error('The content frame is not active');
+  }
+  const point = { ...position, innerX: contentFrame.x, innerY: contentFrame.y };
+  const origin = await page.evaluate(({ id, point }) => {
+    const owners = [...document.querySelectorAll('iframe')].filter(node => {
+      try { return new URL(node.src).searchParams.get('id') === id; } catch { return false; }
+    });
+    if (owners.length !== 1) throw Error('The outer Webview is not unique');
+    const owner = owners[0], rect = owner.getBoundingClientRect();
+    const x = rect.x + point.innerX + point.x, y = rect.y + point.innerY + point.y;
+    if (getComputedStyle(owner).visibility !== 'visible' || document.elementFromPoint(x, y) !== owner) {
+      throw Error('The outer Webview is hidden or covered');
+    }
+    return { x, y, owner: id };
+  }, { id, point });
+  return { local: point, root: origin };
+}
+
+async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs = 2000 }) {
 
   const pointFor = async selector => {
     const point = await frame.$eval(selector, node => {
@@ -69,29 +90,12 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
       if (!node.contains(document.elementFromPoint(x, y))) throw Error('The target is covered');
       return { x, y };
     });
-    const contentFrame = await inspectContentFrameOwner(frame);
-    if (contentFrame.id !== 'active-frame' || !contentFrame.visible || contentFrame.inert) {
-      throw Error('The content frame is not active');
-    }
-    point.innerX = contentFrame.x;
-    point.innerY = contentFrame.y;
-    const origin = await page.evaluate(({ id, point }) => {
-      const owners = [...document.querySelectorAll('iframe')].filter(node => {
-        try { return new URL(node.src).searchParams.get('id') === id; } catch { return false; }
-      });
-      if (owners.length !== 1) throw Error('The outer Webview is not unique');
-      const owner = owners[0], rect = owner.getBoundingClientRect();
-      const x = rect.x + point.innerX + point.x, y = rect.y + point.innerY + point.y;
-      if (getComputedStyle(owner).visibility !== 'visible' || document.elementFromPoint(x, y) !== owner) {
-        throw Error('The outer Webview is hidden or covered');
-      }
-      return { x, y, owner: id };
-    }, { id, point });
-    return { local: point, root: origin };
+    return readWebviewPoint({ frame, page }, point);
   };
 
   const gesture = async (selector, delta = { x: 0, y: 0 }) => {
-    const evidence = { selector, delta, commands: [], events: [], releaseAttempted: false };
+    const evidence = { selector, delta, commands: [], events: [], bindingReceipts: [],
+      timeline: { startedAt: Date.now() }, releaseAttempted: false };
     const binding = '__meoInputReceipt_' + Math.random().toString(36).slice(2);
     let stage = 'target', armed = false, held = false, bound = false, notify;
     // Receiving an input is independent of the render task it starts. Observe
@@ -109,27 +113,34 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
     try {
       let point = await pointFor(selector);
       evidence.point = point;
-      await page.exposeFunction(binding, event => { evidence.events.push(event); notify?.(); });
+      await page.exposeFunction(binding, event => {
+        evidence.bindingReceipts.push({ type: event.type, observedAt: event.observedAt, receivedAt: Date.now() });
+        evidence.events.push(event); notify?.();
+      });
       bound = true;
-      await frame.evaluate(({ selector, binding }) => {
+      evidence.observer = await frame.evaluate(({ selector, binding }) => {
         if (window.__meoInputDelivery) throw Error('Another pointer probe is active');
-        const events = [];
+        const events = [], bindingErrors = [];
         const expectedTarget = document.querySelector(selector);
         const record = event => {
-          const receipt = { type: event.type, trusted: event.isTrusted, pointerId: event.pointerId,
+          const receipt = { type: event.type, observedAt: Date.now(), trusted: event.isTrusted, pointerId: event.pointerId,
             button: event.button, buttons: event.buttons, x: event.clientX, y: event.clientY,
             target: event.target?.tagName, className: String(event.target?.className ?? ''),
             targetMatches: Boolean(expectedTarget?.isConnected && expectedTarget.contains(event.target)) };
           events.push(receipt);
-          void window[binding](receipt).catch(() => {});
+          try { void window[binding](receipt).catch(error => bindingErrors.push(String(error))); }
+          catch (error) { bindingErrors.push(String(error)); }
         };
         for (const type of ['pointerdown', 'pointermove', 'pointerup']) window.addEventListener(type, record, true);
-        window.__meoInputDelivery = { events, stop() {
+        window.__meoInputDelivery = { events, bindingErrors, stop() {
           for (const type of ['pointerdown', 'pointermove', 'pointerup']) window.removeEventListener(type, record, true);
         } };
+        return { bindingType: typeof window[binding], armedAt: Date.now() };
       }, { selector, binding });
       armed = true;
+      evidence.timeline.moveRequestedAt = Date.now();
       await mouse.move(point.root.x, point.root.y);
+      evidence.timeline.moveAcknowledgedAt = Date.now();
       evidence.commands.push('move');
       stage = 'pointermove';
       await waitForReceipt(event => event.type === 'pointermove' && event.trusted);
@@ -167,6 +178,8 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
       await waitForReceipt(event => event.type === 'pointerup' && event.trusted && event.pointerId === down.pointerId);
       return evidence;
     } catch (cause) {
+      evidence.cause = String(cause.stack || cause);
+      evidence.timeline.failedAt = Date.now();
       throw new NativeInputCapabilityError(stage, evidence, cause);
     } finally {
       if (held) {
@@ -175,11 +188,13 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
       }
       if (armed) {
         try {
-          evidence.events = await frame.evaluate(() => {
+          const observation = await frame.evaluate(() => {
             const probe = window.__meoInputDelivery;
             probe.stop(); delete window.__meoInputDelivery;
-            return probe.events;
+            return { events: probe.events, bindingErrors: probe.bindingErrors };
           });
+          evidence.events = observation.events;
+          evidence.bindingErrors = observation.bindingErrors;
         } catch (error) { evidence.observationError = String(error); }
       }
       if (bound) {
@@ -196,4 +211,4 @@ async function createPointerDriver({ frame, page, mouse = page.mouse, timeoutMs 
   return { click: selector => gesture(selector), drag: (selector, x, y = 0) => gesture(selector, { x, y }) };
 }
 
-module.exports = { NativeInputCapabilityError, findActiveWebview, createPointerDriver };
+module.exports = { NativeInputCapabilityError, findActiveWebview, readWebviewPoint, createPointerDriver };

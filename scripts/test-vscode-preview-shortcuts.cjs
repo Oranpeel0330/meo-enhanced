@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const puppeteer = require('puppeteer-core');
+const { findActiveWebview, readWebviewPoint } = require('./native-input-delivery.cjs');
 
 exports.run = async () => {
   const output = process.env.MEO_SHORTCUT_OUTPUT;
@@ -24,26 +25,19 @@ exports.run = async () => {
     report.phase = 'open';
     await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), 'meoEnhanced.editor');
     report.phase = 'find-webview';
-    let frame;
+    let target;
     const deadline = Date.now() + 30000;
-    while (!frame && Date.now() < deadline) {
-      const pages = await browser.pages();
-      for (const page of pages) for (const candidate of page.frames()) {
-        if (!candidate.url().includes('/fake.html')) continue;
-        try {
-          if (await candidate.evaluate(() => !!document.querySelector('.editor-host .cm-content'))) frame = candidate;
-        } catch (error) {
-          if (!/detached|Execution context was destroyed|Cannot find context/i.test(String(error))) throw error;
-        }
-      }
-      if (!frame) await new Promise(resolve => setTimeout(resolve, 50));
+    while (!target && Date.now() < deadline) {
+      try { target = await findActiveWebview(browser, 'Select and copy this paragraph.'); }
+      catch { /* The new disposable document has not been presented yet. */ }
+      if (!target) await new Promise(resolve => setTimeout(resolve, 50));
     }
-    assert.ok(frame, 'MEO webview did not open');
-    await frame.waitForFunction(() => !document.querySelector('.editor-wrapper')?.classList.contains('meo-preload-editor-shell'));
-    // Wait for VS Code's active content frame before exercising host shortcuts.
-    await frame.waitForFunction(() => window.frameElement?.id === 'active-frame');
+    assert.ok(target, 'MEO webview did not open');
+    const { frame, page } = target;
+    await frame.waitForFunction(() => document.querySelector('.editor-host')?.inert === false
+      && document.querySelector('.editor-loading')?.hidden === true);
+    await page.bringToFront();
     report.phase = 'baseline';
-    const page = frame.page();
     const chord = async (key, alt = false) => {
       await page.keyboard.down('Control');
       if (alt) await page.keyboard.down('Alt');
@@ -99,6 +93,9 @@ exports.run = async () => {
       await frame.$eval(`[data-mode="${surface === 'preview' ? 'preview' : 'source'}"]`, button => button.click());
       if (surface === 'side') await frame.$eval('.source-preview-button', button => button.click());
       await frame.waitForFunction(() => document.querySelector('.preview-status')?.hidden === true
+        && document.querySelector('.preview-loading')?.hidden === true
+        && document.querySelector('.preview-host')?.hidden === false
+        && document.querySelector('.preview-frame')?.contentDocument?.documentElement.inert === false
         && !!document.querySelector('.preview-frame')?.contentDocument?.getElementById('reading'));
       const preview = await (await frame.$('.preview-frame')).contentFrame();
       assert.ok(preview);
@@ -117,20 +114,22 @@ exports.run = async () => {
         const rect = range.getBoundingClientRect();
         return { left: rect.left + 1, right: rect.right - 1, y: rect.top + rect.height / 2 };
       });
-      // Electron Webviews cross CDP targets, so frameElement()/boundingBox()
-      // cannot resolve their owners reliably. Use the visible workbench mount.
-      const mounts = await page.evaluate(() => [...document.querySelectorAll('iframe')].map(element => {
-        const rect = element.getBoundingClientRect();
-        return { x: rect.left + element.clientLeft, y: rect.top + element.clientTop, width: rect.width, height: rect.height };
-      }).filter(rect => rect.width > 0 && rect.height > 0));
-      assert.equal(mounts.length, 1);
-      const local = await frame.$eval('.preview-frame', element => {
-        const rect = element.getBoundingClientRect(); return { x: rect.left, y: rect.top };
-      });
-      const bounds = { x: mounts[0].x + local.x, y: mounts[0].y + local.y };
-      await page.mouse.move(bounds.x + points.left, bounds.y + points.y);
+      // Retained editor tabs and other workbench views can all have iframe
+      // rectangles. Resolve this document's owner, then verify its hit target.
+      const previewPoint = async point => {
+        const local = await frame.$eval('.preview-frame', element => {
+          const rect = element.getBoundingClientRect(); return { x: rect.left, y: rect.top };
+        });
+        return (await readWebviewPoint({ frame, page }, { x: local.x + point.x, y: local.y + point.y })).root;
+      };
+      const start = await previewPoint({ x: points.left, y: points.y });
+      const end = await previewPoint({ x: points.right, y: points.y });
+      report.webviewOwners ??= [];
+      report.webviewOwners.push({ surface, owner: start.owner, nonzeroWorkbenchFrames: await page.evaluate(() =>
+        [...document.querySelectorAll('iframe')].filter(node => { const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }).length) });
+      await page.mouse.move(start.x, start.y);
       await page.mouse.down();
-      await page.mouse.move(bounds.x + points.right, bounds.y + points.y, { steps: 8 });
+      await page.mouse.move(end.x, end.y, { steps: 8 });
       await page.mouse.up();
       const selected = 'Select and copy this paragraph.';
       assert.equal(await preview.evaluate(() => getSelection().toString()), selected);
@@ -139,7 +138,8 @@ exports.run = async () => {
       await chord('c');
       await expectClipboard(selected, `${surface}: native Ctrl+C`);
       await vscode.env.clipboard.writeText(sentinel);
-      await page.mouse.click(bounds.x + points.left + 10, bounds.y + points.y, { button: 'right' });
+      const menuPoint = await previewPoint({ x: points.left + 10, y: points.y });
+      await page.mouse.click(menuPoint.x, menuPoint.y, { button: 'right' });
       await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
         .some(label => /^(Copy|复制)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0), { timeout: 5000 });
       const menuItems = await readMenuItems();
@@ -184,7 +184,8 @@ exports.run = async () => {
       const inputPoint = await preview.$eval('textarea', input => {
         const rect = input.getBoundingClientRect(); return { x: rect.left + 8, y: rect.top + rect.height / 2 };
       });
-      await page.mouse.click(bounds.x + inputPoint.x, bounds.y + inputPoint.y, { button: 'right' });
+      const inputRoot = await previewPoint(inputPoint);
+      await page.mouse.click(inputRoot.x, inputRoot.y, { button: 'right' });
       await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
         .some(label => /^(Paste|粘贴)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0), { timeout: 5000 });
       const inputMenuItems = await readMenuItems();
@@ -208,14 +209,14 @@ exports.run = async () => {
       report.phase = `${mode}-context-menu`;
       await frame.$eval(`[data-mode="${mode}"]`, button => button.click());
       await frame.waitForFunction(mode => document.querySelector('#app')?.dataset.mode === mode
+        && document.querySelector('.editor-host')?.inert === false
+        && document.querySelector('.editor-loading')?.hidden === true
         && !document.querySelector('.mode-group [aria-busy="true"]'), {}, mode);
-      const mount = await page.$eval('iframe', element => {
-        const rect = element.getBoundingClientRect(); return { x: rect.left, y: rect.top };
-      });
       const point = await frame.$eval('.editor-host .cm-content', element => {
         const rect = element.getBoundingClientRect(); return { x: rect.left + 10, y: rect.top + 10 };
       });
-      await page.mouse.click(mount.x + point.x, mount.y + point.y, { button: 'right' });
+      const editorRoot = (await readWebviewPoint({ frame, page }, point)).root;
+      await page.mouse.click(editorRoot.x, editorRoot.y, { button: 'right' });
       await page.waitForFunction(() => [...document.querySelectorAll('.context-view .action-label')]
         .some(label => /^(Copy|复制)$/.test(label.textContent.trim()) && label.getBoundingClientRect().height > 0));
       const items = await readMenuItems();

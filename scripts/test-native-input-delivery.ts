@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
-const { createPointerDriver, findActiveWebview, NativeInputCapabilityError } = require('./native-input-delivery.cjs');
+const { createPointerDriver, findActiveWebview, readWebviewPoint, NativeInputCapabilityError } = require('./native-input-delivery.cjs');
 
 const allowed = new Set(['--browser-url', '--heading', '--selector', '--output', '--dx']);
 const args = new Map(process.argv.slice(2).map(value => {
@@ -46,7 +46,9 @@ if (args.has('--browser-url')) {
     if (url.pathname === '/webview') return new Response(`<style>body{margin:0}iframe{position:absolute;inset:0;border:0;width:100%;height:100%}</style>
       <iframe id="active-frame" srcdoc="${content.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"></iframe>`, { headers: { 'Content-Type': 'text/html' } });
     return new Response(`<style>body{margin:0}iframe{position:absolute;left:100px;top:60px;width:500px;height:350px;border:0}</style>
-      <iframe src="/webview?id=contract"></iframe>`, { headers: { 'Content-Type': 'text/html' } });
+      <iframe src="/webview?id=contract"></iframe>
+      <iframe srcdoc="Unrelated workbench view" style="left:640px;top:10px;width:100px;height:30px"></iframe>
+      <iframe srcdoc="Retained view" style="left:10px;top:10px;width:80px;height:30px;visibility:hidden"></iframe>`, { headers: { 'Content-Type': 'text/html' } });
   } });
   const browser = await launchTestBrowser();
   let primaryError: unknown;
@@ -55,6 +57,13 @@ if (args.has('--browser-url')) {
     await page.goto(server.url.href);
     await page.waitForFunction(() => document.querySelector('iframe')?.contentDocument?.querySelector('iframe')?.contentDocument?.querySelector('#drag'));
     const { frame } = await findActiveWebview(browser, 'Input token');
+    assert.equal(await page.$$eval('iframe', nodes => nodes.filter(node => {
+      const rect = node.getBoundingClientRect(); return rect.width > 0 && rect.height > 0;
+    }).length), 3, 'Unrelated and retained workbench iframe rectangles are not this document owner');
+    const mapped = await readWebviewPoint({ frame, page }, { x: 10, y: 20 });
+    assert.equal(mapped.root.owner, 'contract');
+    assert.equal(mapped.root.x, 110);
+    assert.equal(mapped.root.y, 80);
     const driver = await createPointerDriver({ frame, page });
     const clicked = await driver.click('#click');
     assert.equal(await frame.evaluate(() => (window as any).clicks), 1);

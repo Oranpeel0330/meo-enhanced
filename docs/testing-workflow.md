@@ -988,6 +988,14 @@ check its actual ID, CSS visibility and nonzero size. Older supported VS Code
 versions can omit `window.frameElement` inside an otherwise interactive Webview. A missing
 content-world accessor does not establish that the editor failed to load.
 
+Workbench tabs and unrelated views may retain several iframe rectangles. Native
+clipboard/menu probes use the shared `readWebviewPoint` owner-id mapping and hit
+test; they must not require one iframe in the whole Workbench or choose the first
+one. The pointer driver keeps that same mapping. Receipt diagnostics distinguish
+the DOM observation time, Node binding arrival, acknowledgment and underlying
+failure; they do not extend the input deadline or authorize a press after a
+missing timely move receipt.
+
 Before using browser-protocol pointer input in an installed Workbench, run
 `bun scripts/test-native-input-delivery.ts`. This bounded driver contract verifies
 actual press/move/release receipts, rejects an acknowledged but undelivered press,
