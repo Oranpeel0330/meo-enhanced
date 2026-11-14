@@ -295,7 +295,6 @@ let gitBaselineState: GitBaselinePayload | null = null;
 let changesReviewMode: 'live' | 'source' | 'preview' = 'live';
 let contentMaxWidthEnabled = false;
 let contentMaxWidth = DEFAULT_EDITOR_CONTENT_WIDTH;
-let liveStrongColoring = false;
 let boldHeadingsEnabled = true;
 let largeDocumentOptimizationEnabled = false;
 let tableStickyHeaderEnabled = true;
@@ -386,14 +385,6 @@ contentMaxWidthRow.setAttribute('role', 'group');
 contentMaxWidthRow.setAttribute('aria-labelledby', contentMaxWidthLabel.id);
 contentMaxWidthRow.append(contentMaxWidthLabel, contentMaxWidthControl.element);
 contentMaxWidthRow.hidden = true;
-
-const liveStrongColoringBtn = document.createElement('button');
-liveStrongColoringBtn.type = 'button';
-liveStrongColoringBtn.className = 'more-tools-option more-tools-toggle-option';
-liveStrongColoringBtn.dataset.action = 'liveStrongColoring';
-liveStrongColoringBtn.setAttribute('role', 'menuitemcheckbox');
-liveStrongColoringBtn.setAttribute('aria-checked', 'false');
-appendMoreToolsOptionContent(liveStrongColoringBtn, Bold, activeUiStrings.strongColoring);
 
 const latexDelimitersBtn = document.createElement('button');
 latexDelimitersBtn.type = 'button';
@@ -544,16 +535,6 @@ const setGitDiffDetailsVisibleState = (
   syncGitDiffLineHighlights();
   presentChangesReview();
   if (post) vscode.postMessage({ type: 'setGitDiffDetailsVisible', visible: gitDiffDetailsVisible });
-};
-
-const setLiveStrongColoring = (enabled: boolean, { post = true }: PostUpdateOptions = {}) => {
-  const nextEnabled = enabled === true;
-  const changed = nextEnabled !== liveStrongColoring;
-  liveStrongColoring = nextEnabled;
-  document.documentElement.classList.toggle('meo-live-strong-coloring', liveStrongColoring);
-  liveStrongColoringBtn.classList.toggle('is-active', liveStrongColoring);
-  liveStrongColoringBtn.setAttribute('aria-checked', liveStrongColoring ? 'true' : 'false');
-  if (post && changed) vscode.postMessage({ type: 'setLiveStrongColoring', enabled: liveStrongColoring });
 };
 
 const setBoldHeadingsEnabled = (enabled: boolean, { post = true }: PostUpdateOptions = {}) => {
@@ -1335,7 +1316,6 @@ const applyUiLanguage = (language: UiLanguage): void => {
   contentMaxWidthLabel.textContent = strings.contentMaxWidthLabel;
   contentMaxWidthControl.present(language);
   sourceLineNumbersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.showLineNumbers;
-  liveStrongColoringBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.strongColoring;
   latexDelimitersBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.latexMathDelimitersShort;
   latexDelimitersTooltip?.setContent({ text: strings.latexMathDelimitersDescription, kind: 'description' });
   longCodeBlockFoldingBtn.querySelector<HTMLElement>('.more-tools-option-label')!.textContent = strings.foldLongCodeBlocks;
@@ -1469,7 +1449,6 @@ moreToolsPanel.append(
   longCodeBlockFoldingBtn,
   contentMaxWidthBtn,
   contentMaxWidthRow,
-  liveStrongColoringBtn,
   latexDelimitersBtn,
   editorAppearanceRow,
   uiLanguageRow,
@@ -3668,7 +3647,6 @@ const handleInit = (message: InitMessage) => {
   longCodeBlockFoldingBtn.setAttribute('aria-checked', longCodeBlockFoldingEnabled ? 'true' : 'false');
   setTableStickyHeaderEnabled(message.tableStickyHeaderEnabled, { post: false });
   setLatexDelimiters(message.latexDelimiters === true, { post: false });
-  setLiveStrongColoring(message.liveStrongColoring, { post: false });
   setBoldHeadingsEnabled(message.boldHeadingsEnabled, { post: false });
   setLargeDocumentOptimizationEnabled(message.largeDocumentOptimizationEnabled, { post: false });
   setRestoreReadingPositionOnOpen(message.restoreReadingPositionOnOpen, { post: false });
@@ -3875,7 +3853,6 @@ function getSettingsWindow(): ReturnType<typeof createSettingsWindow> {
         switchItem('width', 'display', strings.constrainWidth, () => contentMaxWidthEnabled, setContentMaxWidthEnabled),
         { id: 'widthValue', parent: 'width', section: 'display', title: strings.contentMaxWidthLabel, description: strings.contentMaxWidthDescription,
           control: { kind: 'contentWidth', get: () => contentMaxWidth, set: setContentMaxWidthValue, enabled: () => contentMaxWidthEnabled } },
-        switchItem('strongColor', 'display', strings.strongColoring, () => liveStrongColoring, setLiveStrongColoring),
         switchItem('boldHeadings', 'display', strings.boldHeadings, () => boldHeadingsEnabled, setBoldHeadingsEnabled),
         switchItem('stickyHeader', 'display', strings.stickyTableHeader, () => tableStickyHeaderEnabled, setTableStickyHeaderEnabled),
         switchItem('latexDelimiters', 'math', strings.latexMathDelimiters, () => latexDelimiters, setLatexDelimiters, strings.latexMathDelimitersDescription),
@@ -4645,9 +4622,6 @@ previewOutlineLeftBtn.addEventListener('click', () => showOutlineAt('left'));
 outlineBtn.addEventListener('click', () => showOutlineAt('right'));
 contentMaxWidthBtn.addEventListener('click', () => {
   setContentMaxWidthEnabled(!contentMaxWidthEnabled);
-});
-liveStrongColoringBtn.addEventListener('click', () => {
-  setLiveStrongColoring(!liveStrongColoring);
 });
 latexDelimitersBtn.addEventListener('click', () => {
   setLatexDelimiters(!latexDelimiters);

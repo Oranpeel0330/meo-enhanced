@@ -44,7 +44,6 @@ export type UiStrings = Readonly<{
   previewWidthReference: string;
   previewAppearance: string;
   previewSourceColoring: string;
-  strongColoring: string;
   latexMathDelimiters: string;
   latexMathDelimitersShort: string;
   latexMathDelimitersDescription: string;
@@ -427,9 +426,9 @@ export type UiStrings = Readonly<{
 const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
   en: Object.freeze({
     auto: 'Auto', light: 'Light', dark: 'Dark', previewTitle: 'Markdown Preview',
-    previewAppearance: 'Preview theme', previewSourceColoring: 'Preview source coloring', strongColoring: 'Color bold text', boldHeadings: 'Bold headings', showComments: 'HTML comments', previewCommentsShow: 'Show', previewCommentsHide: 'Hide',
+    previewAppearance: 'Preview theme', previewSourceColoring: 'Preview source coloring', boldHeadings: 'Bold headings', showComments: 'HTML comments', previewCommentsShow: 'Show', previewCommentsHide: 'Hide',
     latexMathDelimiters: 'LaTeX math delimiters',
-    latexMathDelimitersShort: 'LaTeX math',
+    latexMathDelimitersShort: 'LaTeX math delimiters',
     latexMathDelimitersDescription: String.raw`When enabled, recognize \(...\) as inline math and \[...\] as display math.`,
     previewCodeColors: 'Code color', previewCodeColorsOn: 'On', previewCodeColorsOff: 'Off',
     previewPreset: 'Preview preset', previewPresetInfo: 'Preset info', previewWidth: 'Width', previewWidthResponsive: 'Fit panel', previewWidthReference: 'Reference width',
@@ -682,7 +681,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
   }),
   'zh-CN': Object.freeze({
     auto: '自动', light: '浅色', dark: '深色', previewTitle: 'Markdown 预览',
-    previewAppearance: '预览主题', previewSourceColoring: '预览源码着色', strongColoring: '粗体文字着色', boldHeadings: '标题加粗', showComments: 'HTML 注释', previewCommentsShow: '显示', previewCommentsHide: '隐藏',
+    previewAppearance: '预览主题', previewSourceColoring: '预览源码着色', boldHeadings: '标题加粗', showComments: 'HTML 注释', previewCommentsShow: '显示', previewCommentsHide: '隐藏',
     latexMathDelimiters: 'LaTeX 风格公式定界符',
     latexMathDelimitersShort: 'LaTeX 风格公式',
     latexMathDelimitersDescription: '开启后，将 \\(...\\) 识别为行内公式，将 \\[...\\] 识别为块级公式。',

@@ -87,7 +87,6 @@ const legacyValues = {
       [PREVIEW_APPEARANCE_SETTING_KEY]: properties[`meoEnhanced.${PREVIEW_APPEARANCE_SETTING_KEY}`]?.default,
       [PREVIEW_FONT_FAMILY_SETTING_KEY]: properties[`meoEnhanced.${PREVIEW_FONT_FAMILY_SETTING_KEY}`]?.default,
       [PREVIEW_SOURCE_COLORING_SETTING_KEY]: properties[`meoEnhanced.${PREVIEW_SOURCE_COLORING_SETTING_KEY}`]?.default,
-      [LIVE_STRONG_COLORING_SETTING_KEY]: properties[`meoEnhanced.${LIVE_STRONG_COLORING_SETTING_KEY}`]?.default,
       [EDITOR_FONT_SIZE_MODE_SETTING_KEY]: properties[`meoEnhanced.${EDITOR_FONT_SIZE_MODE_SETTING_KEY}`]?.default,
       [EDITOR_FONT_SIZE_SETTING_KEY]: properties[`meoEnhanced.${EDITOR_FONT_SIZE_SETTING_KEY}`]?.default
     },
@@ -96,12 +95,21 @@ const legacyValues = {
       [PREVIEW_APPEARANCE_SETTING_KEY]: 'auto',
       [PREVIEW_FONT_FAMILY_SETTING_KEY]: '',
       [PREVIEW_SOURCE_COLORING_SETTING_KEY]: true,
-      [LIVE_STRONG_COLORING_SETTING_KEY]: false,
       [EDITOR_FONT_SIZE_MODE_SETTING_KEY]: 'auto',
       [EDITOR_FONT_SIZE_SETTING_KEY]: 14
     },
     'settings schema defaults must match the runtime owner defaults'
   );
+  assert.equal(properties[`meoEnhanced.${LIVE_STRONG_COLORING_SETTING_KEY}`], undefined,
+    'retired bold coloring is not a public setting');
+}
+
+{
+  const { store } = createStore({ configuration: { [LIVE_STRONG_COLORING_SETTING_KEY]: true } });
+  const owner = await createAppearanceSettingsOwner(store);
+  assert.equal(owner.getLiveStrongColoring(), false, 'a saved enabled preference cannot restore retired coloring');
+  await owner.setLiveStrongColoring(true);
+  assert.equal(owner.getLiveStrongColoring(), false, 'old enable commands cannot restore retired coloring');
 }
 
 {
@@ -143,7 +151,7 @@ const legacyValues = {
       owner.getLiveStrongColoring(),
       owner.getEditorFontSizePreference()
     ],
-    ['light', 'dark', 'Inter', true, true, { mode: 'custom', value: 18 }]
+    ['light', 'dark', 'Inter', true, false, { mode: 'custom', value: 18 }]
   );
 }
 

@@ -636,8 +636,8 @@ async function main() {
         labels: labels.map((label) => label.textContent),
         headerText: header.textContent,
         settingsHeading: document.querySelector<HTMLElement>('.more-tools-section-label')?.textContent,
-        strongColorLabel: document.querySelector<HTMLElement>(
-          '[data-action="liveStrongColoring"] .more-tools-option-label'
+        latexMathLabel: document.querySelector<HTMLElement>(
+          '[data-action="latexDelimiters"] .more-tools-option-label'
         )?.textContent,
         clipped: labels.some((label) => label.scrollWidth > label.clientWidth)
           || header.scrollWidth > header.clientWidth
@@ -654,8 +654,8 @@ async function main() {
         'Show Original · Source Only'
       ],
       headerText: 'No Changes·vs. Last Saved Version',
-      settingsHeading: 'Document settings',
-      strongColorLabel: 'Color bold text',
+      settingsHeading: 'Quick settings',
+      latexMathLabel: 'LaTeX math delimiters',
       clipped: false
     })) {
       throw new Error(`English change review labels did not fit the shared menu width: ${JSON.stringify(englishReviewMenu)}`);
@@ -916,7 +916,7 @@ async function main() {
     });
     if (
       JSON.stringify(moreToolsLayout.labels) !== JSON.stringify([
-        '显示行号', '折叠长代码块', '限制宽度', '粗体文字着色', 'LaTeX 风格公式',
+        '显示行号', '折叠长代码块', '限制文档宽度', 'LaTeX 风格公式',
         '外观 · 输入 · 快捷键 · 其他', '遇到问题或有建议？', '支持项目'
       ]) ||
       moreToolsLayout.topHeading !== '快速设置' ||

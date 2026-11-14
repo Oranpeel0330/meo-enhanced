@@ -528,8 +528,8 @@ async function main(): Promise<void> {
       assert.ok(switches.length > 0 && switches.every(color => color === 'rgba(0, 0, 0, 0)'), `${appearance}: Settings switches have no persistent row backgrounds`);
       await page.hover('.more-tools-option[data-action="sourceLineNumbers"]');
       const enabledSwitchHover = await readMenuState('.more-tools-option[data-action="sourceLineNumbers"]');
-      await page.hover('.more-tools-option[data-action="liveStrongColoring"]');
-      const settingsHover = await readMenuState('.more-tools-option[data-action="liveStrongColoring"]');
+      await page.hover('.more-tools-option[data-action="latexDelimiters"]');
+      const settingsHover = await readMenuState('.more-tools-option[data-action="latexDelimiters"]');
       assert.deepEqual(enabledSwitchHover, settingsHover, `${appearance}: on/off switches share the same hover style`);
       assert.notEqual(selectedState.background, settingsHover.background, `${appearance}: radio selection and hover states are distinct`);
       assert.ok(contrast(selectedState.background, idle.backgrounds[1]!) > contrast(settingsHover.background, idle.backgrounds[1]!), `${appearance}: selected radio background is stronger than hover`);
@@ -537,7 +537,7 @@ async function main(): Promise<void> {
         assert.deepEqual(state, selected ? selectedState : settingsHover, `${appearance}: ${selector} preserves its radio-selection/hover state`);
       }
       const headings = await page.$$eval('.more-tools-panel .more-tools-section-label, .changes-review-panel .changes-review-section-label', elements => elements.map(element => getComputedStyle(element).color));
-      assert.equal(headings.length, 6, 'Both menus expose all six group headings');
+      assert.equal(headings.length, 5, 'Settings and changes expose three and two group headings');
       assert.equal(new Set(headings).size, 1, 'Both menus share the same weaker heading color');
       for (const color of headings) {
         assert.ok(contrast(color, idle.backgrounds[1]!) < contrast(settingsHover.color, idle.backgrounds[1]!), `${appearance}: group headings are weaker than ordinary options`);

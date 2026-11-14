@@ -11,6 +11,7 @@ import { assessLargeDocument } from '../src/foundation/largeDocument';
 import { version as productVersion } from '../package.json';
 import { renderPreviewDocument } from '../src/export/runtime';
 import type { PreviewPresetId } from '../src/foundation/previewPresets';
+import { darkDefaultLiveStrongForeground } from '../src/shared/markdownContentStyles';
 const logoDataUrl = 'data:image/png;base64,' + (await fs.readFile('logo.png')).toString('base64');
 const build = await Bun.build({ entrypoints: ['scripts/test-settings-window-production-entry.ts'], target: 'browser', format: 'iife' });
 if (!build.success) throw new Error(build.logs.map(String).join('\n'));
@@ -60,7 +61,7 @@ try {
   });
   const imagePages = new WeakSet<object>();
   const chord = async (key: string) => { await page.keyboard.down('Control'); await page.keyboard.press(key); await page.keyboard.up('Control'); };
-  const openFixture = async (text = 'hello\n\n# Heading\n\ntext', mode: 'source' | 'live' = 'source', stubMermaid = false, outline: 'left' | 'right' | 'hidden' = 'hidden') => {
+  const openFixture = async (text = 'hello\n\n# Heading\n\ntext', mode: 'source' | 'live' = 'source', stubMermaid = false, outline: 'left' | 'right' | 'hidden' = 'hidden', legacyStrongColoring = false) => {
     if (!imagePages.has(page)) {
       await page.exposeFunction('__imageLocationHost', (request: ImageLocationRequest) => imageHost.handle(request, 'settings-document'));
       await page.exposeFunction('__imageSaveHost', async (request: {requestId: string; imageData: string; extension: string}) => {
@@ -155,13 +156,14 @@ try {
     if (stubMermaid) await page.evaluate(() => { (window as any).mermaid = { initialize() {}, async render() { return { svg: '<svg viewBox="0 0 120 60"><text x="4" y="20">diagram</text></svg>' }; } }; });
     await page.addScriptTag({ content: await build.outputs[0].text() });
     assert.equal(await page.$('.settings-window'), null, 'The production shell must defer the closed settings window');
-    await page.evaluate(({ text, mode, outline }) => {
+    await page.evaluate(({ text, mode, outline, legacyStrongColoring }) => {
       const global = window as any; global.__preferences = { input: { ...global.EditingSettingsHarness.defaultInputAssistance }, shortcuts: {} };
       global.__initMessage = { type: 'init', documentId: 'file:///settings.md', text, version: 1, savedRevision: { version: 1, text }, diagnostics: [], mode, uiLanguage: 'zh-CN', uiLanguagePreference: 'zh-CN', automaticUiLanguage: 'zh-CN', sourceLineNumbers: 'on', previewAppearance: 'light', previewFontFamily: '', previewSourceColoring: true, previewShowComments: false, editorAppearance: 'dark', gitChangesGutter: false, gitDiffLineHighlights: false, gitDiffDetailsVisible: false, diffBaselineMode: 'current-edit', fixedBaselinePinned: false, fixedBaselineActive: false, contentMaxWidthEnabled: false, findOptions: { wholeWord: false, caseSensitive: false }, outlinePosition: 'right', outlineVisible: false, outlineWidth: 260, vscodeTheme: null, editingPreferences: global.__preferences, editingPreferencesRevision: 0 };
       global.__initMessage.outlinePosition = outline === 'left' ? 'left' : 'right';
       global.__initMessage.outlineVisible = outline !== 'hidden';
+      global.__initMessage.liveStrongColoring = legacyStrongColoring;
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
-    }, { text, mode, outline });
+    }, { text, mode, outline, legacyStrongColoring });
   };
   if (process.argv.includes('--content-width-only') || process.argv.length === 2) {
     const folder = path.join('.local', 'test-runs', 'content-width');
@@ -448,7 +450,7 @@ try {
   if (process.argv.includes('--latex-only')) {
     await page.exposeFunction('__renderLatexPreview', (request: { text: string; latexDelimiters?: boolean; uiLanguage: 'en' | 'zh-CN'; preset?: PreviewPresetId }) =>
       renderPreviewDocument({ markdownText: request.text, latexDelimiters: request.latexDelimiters, uiLanguage: request.uiLanguage, preset: request.preset, sourceDocumentPath: '' }));
-    const sample = '# Math\n\nInline: \\( a+b \\)\n\n\\[\nx^2\n\\]\n\n| Formula | Note |\n| --- | --- |\n| \\(c+d\\) | plain |\n\n`\\(code\\)`\n\nOutside';
+    const sample = '# Math\n\n**Bold text**\n\nInline: \\( a+b \\)\n\n\\[\nx^2\n\\]\n\n| Formula | Note |\n| --- | --- |\n| \\(c+d\\) | plain |\n\n`\\(code\\)`\n\nOutside';
     const open = async () => { await page.click('.more-tools-wrapper > .format-button'); await page.click('.more-tools-settings-button'); };
     const switchSelector = '[data-setting="latexDelimiters"] [role="switch"]';
     const quickSwitchSelector = '.more-tools-panel [data-action="latexDelimiters"]';
@@ -471,7 +473,7 @@ try {
         'clicking the information icon does not toggle math syntax');
       assert.equal(await page.$eval('.more-tools-panel', node => (node as HTMLElement).hidden), false);
       await page.mouse.move(0, 700);
-      await page.focus('.more-tools-panel [data-action="liveStrongColoring"]');
+      await page.focus('.more-tools-panel [data-action="contentMaxWidth"]');
       await page.keyboard.press('Tab');
       await page.waitForFunction(text => document.querySelector('#latex-delimiters-tooltip.is-visible .meo-tooltip-text')?.textContent === text, {}, expected);
       assert.equal(await page.$eval(quickSwitchSelector, node => node === document.activeElement), true,
@@ -484,7 +486,7 @@ try {
     });
     for (const large of [false, true]) {
       const text = sample + (large ? '\n\nPlain paragraph.\n\n'.repeat(7000) : '');
-      await openFixture(text, 'source');
+      await openFixture(text, 'source', false, 'hidden', true);
       await page.waitForSelector('.editor-wrapper:not(.meo-preload-editor-shell) .cm-content');
       await page.waitForFunction(() => !(window as any).EditingSettingsHarness.syntaxParserRunning((window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.cm-editor'))));
       await page.evaluate(() => {
@@ -493,14 +495,18 @@ try {
         (window as any).__latexBefore = view.state.doc.toString();
       });
       assert.equal(await mathCount(), 0, 'new and reopened sessions default off');
+      assert.equal(await page.$eval('html', node => node.classList.contains('meo-live-strong-coloring')), false,
+        'a legacy enabled init preference cannot restore retired bold coloring');
+      assert.equal(await page.$('[data-action="liveStrongColoring"]'), null);
       await page.click('.more-tools-wrapper > .format-button');
       assert.deepEqual(await page.$$eval('.more-tools-panel [role="menuitemcheckbox"]', nodes => nodes.map(node => (node as HTMLElement).dataset.action)),
-        ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'liveStrongColoring', 'latexDelimiters']);
+        ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'latexDelimiters']);
       assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), '快速设置');
       assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), 'false');
       await showQuickMathHint('开启后，将 \\(...\\) 识别为行内公式，将 \\[...\\] 识别为块级公式。');
       await page.click('.more-tools-wrapper > .format-button');
       await open();
+      assert.equal(await page.$('[data-setting="strongColor"]'), null, 'full settings omit retired bold coloring');
       assert.equal(await page.$eval(switchSelector, e => e.getAttribute('aria-checked')), 'false');
       assert.equal(await page.$eval('[data-setting="latexDelimiters"] .settings-description', e => e.textContent),
         '开启后，将 \\(...\\) 识别为行内公式，将 \\[...\\] 识别为块级公式。');
@@ -533,7 +539,7 @@ try {
         await page.click('.settings-close');
         await page.click('.more-tools-wrapper > .format-button');
         assert.equal(await page.$eval('.more-tools-section-label', node => node.textContent), language === 'zh-CN' ? '快速设置' : 'Quick settings');
-        assert.equal(await page.$eval(`${quickSwitchSelector} .more-tools-option-label`, node => node.textContent), language === 'zh-CN' ? 'LaTeX 风格公式' : 'LaTeX math');
+        assert.equal(await page.$eval(`${quickSwitchSelector} .more-tools-option-label`, node => node.textContent), language === 'zh-CN' ? 'LaTeX 风格公式' : 'LaTeX math delimiters');
         assert.equal(await page.$eval(quickSwitchSelector, node => node.getAttribute('aria-checked')), 'true');
         assert(await page.$eval(`${quickSwitchSelector} .more-tools-option-label`, node => node.scrollWidth <= node.clientWidth), 'quick switch label fits');
         await page.screenshot({ path: `.local/latex-delimiters/quick-settings-${language}-${appearance}.png` });
@@ -554,6 +560,14 @@ try {
       await page.click('.settings-close');
       await page.click('button[data-mode="live"]');
       await page.waitForSelector('.cm-editor.meo-mode-live .meo-md-math-inline');
+      assert.equal(await page.$eval('.cm-editor.meo-mode-live .meo-md-strong', (node, darkForeground) => {
+        const expected = document.createElement('span');
+        expected.style.color = document.documentElement.dataset.editorAppearance === 'dark' ? darkForeground : 'inherit';
+        node.parentElement!.append(expected);
+        const matchesDefault = getComputedStyle(node).color === getComputedStyle(expected).color;
+        expected.remove();
+        return matchesDefault;
+      }, darkDefaultLiveStrongForeground), true, 'a legacy preference retains the default uncolored bold appearance');
       assert.equal(await page.$$eval('tbody .meo-md-math-inline', nodes => nodes.length), 1, 'table formulas use the same syntax preference');
       await page.click('.more-tools-wrapper > .format-button'); await page.click(quickSwitchSelector);
       assert.equal(await page.$eval('.more-tools-panel', node => (node as HTMLElement).hidden), false, 'quick switch keeps the popover open');
@@ -773,8 +787,8 @@ try {
   await page.waitForSelector('.cm-editor.meo-mode-source');
   await page.click('.more-tools-wrapper > .format-button');
   assert.equal(await page.$eval('.more-tools-panel', element => element.getBoundingClientRect().width), 288);
-  assert.equal(await page.$$eval('.more-tools-panel .more-tools-option', elements => elements.length), 8);
-  assert.deepEqual(await page.$$eval('.more-tools-panel [role="menuitemcheckbox"]', elements => elements.map(element => (element as HTMLElement).dataset.action)), ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'liveStrongColoring', 'latexDelimiters']);
+  assert.equal(await page.$$eval('.more-tools-panel .more-tools-option', elements => elements.length), 7);
+  assert.deepEqual(await page.$$eval('.more-tools-panel [role="menuitemcheckbox"]', elements => elements.map(element => (element as HTMLElement).dataset.action)), ['sourceLineNumbers', 'longCodeBlockFolding', 'contentMaxWidth', 'latexDelimiters']);
   assert.deepEqual(await page.$$eval('.more-tools-panel .more-tools-section-label', elements => elements.map(element => element.textContent)), ['快速设置', '全部设置', '反馈与支持']);
   assert.equal(await page.$eval('.more-tools-sponsor-button', element => element.previousElementSibling?.classList.contains('more-tools-feedback-link')), true);
   await page.evaluate(() => { (window as any).__failNextEnvironment = true; });
@@ -840,7 +854,7 @@ try {
   assert.equal(await page.$eval('.settings-about-copy', element => element.getAttribute('aria-label')), '复制版本信息', 'Reopening retires prior clipboard feedback');
   await page.click('.settings-tab[data-tab="general"]');
   assert.equal(await page.$eval('.settings-window', element => (element as HTMLDialogElement).open), true);
-  assert.equal(await page.$$eval('.settings-item', elements => elements.length), 11);
+  assert.equal(await page.$$eval('.settings-item', elements => elements.length), 10);
   for (const [setting, type] of [['boldHeadings', 'setBoldHeadings'], ['stickyHeader', 'setTableStickyHeader']]) {
     const toggle = `[data-setting="${setting}"] .settings-switch`;
     assert.equal(await page.$eval(toggle, element => element.getAttribute('aria-checked')), 'true');
@@ -1466,14 +1480,14 @@ try {
         query: element.querySelector('.settings-item-title')!.textContent!,
         values: [...element.querySelectorAll('.settings-key, .image-location-mode-title, .image-naming-title, .image-location-field-label, .image-location-picker, .image-location-token')].map(control => control.getAttribute('aria-label') ?? control.textContent!)
       })));
-      assert.equal(items.length, tab === 'general' ? 11 : tab === 'appearance' ? 13 : tab === 'typing' ? 16 : editorCommandIds.length, 'search inventory includes every setting and command');
+      assert.equal(items.length, tab === 'general' ? 10 : tab === 'appearance' ? 13 : tab === 'typing' ? 16 : editorCommandIds.length, 'search inventory includes every setting and command');
       searchCases.push(...items.flatMap(item => [item.query, ...item.values].map(query => ({tab, id: item.id, query}))));
     }
     await page.click('.settings-close');
   }
   const synonymCases: readonly [SearchTab, string, string, string][] = [
     ['general', 'lineNumbers', '边栏', 'gutter'], ['general', 'foldCode', '收起代码', 'collapse'],
-    ['general', 'width', '版心', 'reading width'], ['general', 'widthValue', '像素', 'pixels'], ['general', 'strongColor', '加粗颜色', 'bold color'],
+    ['general', 'width', '版心', 'reading width'], ['general', 'widthValue', '像素', 'pixels'],
     ['general', 'boldHeadings', '标题字重', 'heading weight'], ['general', 'stickyHeader', '冻结表头', 'freeze header'],
     ['general', 'restorePosition', '上次位置', 'remember position'], ['general', 'largeDocument', '启动速度', 'large file'],
     ['appearance', 'mode', '夜间', 'night'], ['appearance', 'surface', '底色', 'surface'], ['appearance', 'documentBackground', '画布', 'canvas'], ['appearance', 'textEmphasis', '圆点', 'bullet'], ['appearance', 'link', '脚注', 'footnote'], ['general', 'language', '本地化', 'locale'], ['appearance', 'fontSize', '文字大小', 'zoom'], ['appearance', 'lineHeight', '行高', 'leading'], ['appearance', 'lineHeight', '未完善', 'Beta'], ['appearance', 'mouseWheelZoom', '鼠标 滚轮', 'mouse wheel'],

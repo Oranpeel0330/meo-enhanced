@@ -529,12 +529,6 @@
           "default": false,
           "description": "%config.preview.showComments%"
         },
-        "meoEnhanced.appearance.strongColoring": {
-          "type": "boolean",
-          "default": false,
-          "order": 6,
-          "description": "%config.appearance.strongColoring%"
-        },
         "meoEnhanced.appearance.boldHeadings": {
           "type": "boolean",
           "default": true,

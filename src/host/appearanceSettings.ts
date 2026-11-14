@@ -160,7 +160,8 @@ const resolveSettings = (store: AppearanceSettingsStore, preferLegacy: boolean):
     previewFontFamily: normalizeStoredPreviewFontFamily(resolve(PREVIEW_FONT_FAMILY_SETTING_KEY, PREVIEW_FONT_FAMILY_STATE_KEY)),
     previewCodeFontFamily: normalizeStoredPreviewFontFamily(resolve(PREVIEW_CODE_FONT_FAMILY_SETTING_KEY, PREVIEW_CODE_FONT_FAMILY_STATE_KEY)),
     previewSourceColoring: normalizeSourceColoring(resolve(PREVIEW_SOURCE_COLORING_SETTING_KEY, PREVIEW_SOURCE_COLORING_STATE_KEY)),
-    liveStrongColoring: store.readConfiguration(LIVE_STRONG_COLORING_SETTING_KEY).value === true,
+    // Retired option: saved values and older enable requests must stay inactive.
+    liveStrongColoring: false,
     editorFontSizeMode: normalizeEditorFontSizeMode(resolve(EDITOR_FONT_SIZE_MODE_SETTING_KEY, EDITOR_FONT_SIZE_MODE_STATE_KEY)),
     editorFontSize: normalizeEditorFontSize(resolve(EDITOR_FONT_SIZE_SETTING_KEY, EDITOR_FONT_SIZE_STATE_KEY))
   };
@@ -391,10 +392,10 @@ export async function createAppearanceSettingsOwner(
       enabled === true
     ),
     getLiveStrongColoring: () => readSettings().liveStrongColoring,
-    setLiveStrongColoring: (enabled) => write(
+    setLiveStrongColoring: () => write(
       'liveStrongColoring',
       LIVE_STRONG_COLORING_SETTING_KEY,
-      enabled === true
+      false
     ),
     getEditorFontSizePreference: () => ({
       mode: readSettings().editorFontSizeMode,
