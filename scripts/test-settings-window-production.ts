@@ -179,10 +179,10 @@ try {
       const style = getComputedStyle(cap), parent = getComputedStyle(cap.closest(carrier)!);
       const roles = document.documentElement.style;
       return { background: style.backgroundColor, color: style.color, shadow: style.boxShadow, border: style.borderColor,
-        parent: parent.backgroundColor, outline: style.outlineColor, outlineWidth: style.outlineWidth,
-        roleSurface: roles.getPropertyValue('--meo-ui-keycap-surface'), roleBorder: roles.getPropertyValue('--meo-ui-keycap-border'),
-        roleHighlight: roles.getPropertyValue('--meo-ui-keycap-highlight'), roleShadow: roles.getPropertyValue('--meo-ui-keycap-shadow'),
-        hover: roles.getPropertyValue('--meo-ui-surface-hover'), field: roles.getPropertyValue('--meo-ui-surface-field') };
+        borderWidth: style.borderWidth, parent: parent.backgroundColor, outline: style.outlineStyle,
+        roleSurface: roles.getPropertyValue('--meo-ui-keycap-surface'), controlBorder: roles.getPropertyValue('--meo-ui-border-control'),
+        hover: roles.getPropertyValue('--meo-ui-surface-hover'), pressed: roles.getPropertyValue('--meo-ui-surface-pressed'),
+        field: roles.getPropertyValue('--meo-ui-surface-field') };
     }, carrier);
     for (const appearance of ['light', 'dark'] as const) for (const language of ['zh-CN', 'en'] as const) {
       await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
@@ -215,17 +215,22 @@ try {
       await page.screenshot({ path: path.join(folder, `binding-${language}-${appearance}.png`), clip: {
         x: Math.floor(keys.x) - 6, y: Math.floor(keys.y) - 6, width: Math.ceil(keys.right) - Math.floor(keys.x) + 12, height: Math.ceil(keys.bottom) - Math.floor(keys.y) + 12
       } });
-      for (const [kind, cap] of Object.entries({ menu, tooltip, settings })) {
+      assert.equal(tooltip.background, appearance === 'dark' ? 'rgba(255, 255, 255, 0.18)' : 'rgb(85, 85, 85)', 'tooltip shortcut keeps its original fill');
+      assert.equal(tooltip.shadow, 'none', 'tooltip shortcut has no added shadow');
+      assert.equal(tooltip.outline, 'none', 'tooltip shortcut has no added outline');
+      for (const [kind, cap] of Object.entries({ menu, settings })) {
+        assert.equal(cap.shadow, 'none', kind + ': no decorative shadow');
+        assert.equal(cap.outline, 'none', kind + ': no added outline');
+        assert.equal(cap.borderWidth, kind === 'settings' ? '1px' : '0px', kind + ': original border width is preserved');
+        if (kind === 'settings') assert.deepEqual(channels(cap.border), channels(cap.controlBorder), 'settings: original border color is preserved');
         if (appearance === 'dark') {
           assert.deepEqual(channels(cap.background), channels(cap.roleSurface), kind + ': one shared dark keycap surface');
-          assert.notEqual(cap.shadow, 'none', kind + ': visible keycap relief');
           assert.ok(contrast(cap.color, cap.background) >= 4.5, kind + ': key text stays readable');
-          assert.ok(contrast(cap.roleBorder, cap.background) >= 1.4, kind + ': key contour remains distinguishable');
           assert.ok(contrast(cap.background, cap.parent) >= 1.12, kind + ': key fill separates from its actual carrier');
-          assert.ok(luminance(cap.roleShadow) < luminance(cap.background) && luminance(cap.roleHighlight) > luminance(cap.background), kind + ': raised top and recessed lower rim');
+          assert.ok(contrast(cap.background, cap.parent) > contrast(cap.hover, cap.parent)
+            && contrast(cap.background, cap.parent) < contrast(cap.pressed, cap.parent), kind + ': fill is stronger than hover and gentler than pressed');
         } else {
-          assert.deepEqual(channels(cap.background), channels(kind === 'menu' ? cap.hover : kind === 'settings' ? cap.field : 'rgb(85, 85, 85)'), kind + ': existing light fill is preserved');
-          assert.equal(cap.shadow, 'none', kind + ': existing light relief is preserved');
+          assert.deepEqual(channels(cap.background), channels(kind === 'menu' ? cap.hover : cap.field), kind + ': existing light fill is preserved');
         }
       }
       await page.keyboard.press('Escape');
@@ -242,10 +247,9 @@ try {
           await page.evaluate(surface => window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiColorsChanged', colors: { light: {}, dark: { surface } } } })), surface);
           const roles = await page.evaluate(() => {
             const style = document.documentElement.style;
-            return ['surface', 'border', 'text'].map(name => style.getPropertyValue('--meo-ui-keycap-' + name));
+            return ['keycap-surface', 'text', 'text-muted'].map(name => style.getPropertyValue('--meo-ui-' + name));
           });
-          assert.ok(contrast(roles[2], roles[0]) >= 4.5, 'custom ' + surface + ': readable key text');
-          assert.ok(contrast(roles[1], roles[0]) >= 1.4, 'custom ' + surface + ': distinguishable contour');
+          assert.ok(contrast(roles[1], roles[0]) >= 4.5 && contrast(roles[2], roles[0]) >= 4.5, 'custom ' + surface + ': inherited key text stays readable');
           assert.deepEqual(await documentKey(), documentKeyBefore, 'UI keycap colors cannot change document KBD');
         }
         await page.evaluate(() => {
@@ -254,12 +258,12 @@ try {
         });
         await page.keyboard.type(' /'); await page.waitForSelector('.meo-input-suggestions:not([hidden])');
         const cap = await sample('.meo-suggestion-key kbd[data-key="Enter"]', '.meo-input-suggestions');
-        assert.equal(cap.shadow, 'none', 'high contrast keeps native outlines instead of decorative shadows');
-        assert.equal(cap.outlineWidth, '1px'); assert.equal(cap.outline, 'rgb(255, 255, 255)');
+        assert.equal(cap.shadow, 'none', 'high contrast has no added shadow');
+        assert.equal(cap.outline, 'none', 'high contrast has no added keycap outline');
         await page.keyboard.press('Escape');
       }
     }
-    assert.deepEqual(errors, []); console.log('UI keycaps: three real UI owners, bilingual light/dark, readable shared dark relief, unchanged light fills and native high-contrast outlines passed; screenshots: ' + folder);
+    assert.deepEqual(errors, []); console.log('UI keycaps: candidate/settings subtle dark fills, bilingual light/dark, no added effects, unchanged tooltips/light fills, custom colors and document KBD isolation passed; screenshots: ' + folder);
     if (process.argv.includes('--keycaps-only')) { await closeTestBrowser(browser); process.exit(0); }
   }
   if (process.argv.includes('--suggestions-only') || process.argv.length === 2) {

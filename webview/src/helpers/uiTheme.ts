@@ -180,13 +180,8 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       const separator = nativeBorder ?? mix(raised, tint, appearance === 'light' ? 0.13 : 0.12);
       const floatBorder = nativeBorder ?? fit(mix(raised, tint, appearance === 'light' ? 0.20 : 0.19), [surface, raised], 1.3);
       const controlBorder = nativeBorder ?? fit(mix(raised, tint, appearance === 'light' ? 0.35 : 0.30), [surface, raised, field], 3.05);
-      // UI keycaps need their own carrier: a hover fill loses its edges in dark
-      // menus. These roles do not participate in document KBD or export colors.
-      const keycapSurface = highContrast ? raised : appearance === 'dark' ? mix(raised, tint, 0.17) : hover;
-      const keycapBorder = nativeBorder ?? fit(mix(keycapSurface, tint, 0.18), [keycapSurface], 1.45);
-      const keycapHighlight = highContrast ? keycapBorder : mix(keycapSurface, white, 0.12);
-      const keycapShadow = highContrast ? keycapBorder : mix(keycapSurface, black, 0.45);
-      const keycapText = fit(text, [keycapSurface], 4.55);
+      // Static key labels use a slightly stronger fill than hover in dark UI.
+      const keycapSurface = appearance === 'dark' && !highContrast ? compatibleSurface(mix(raised, tint, 0.13)) : hover;
       const accentHover = fit(mix(accent, endpoint([accent]), appearance === 'light' ? 0.08 : 0.06), [endpoint([accent])], 4.55);
       const onAccent = fit(endpoint([accent, accentHover]), [accent, accentHover], 4.55);
       const accentText = fit(accent, surfaces, 4.55);
@@ -220,8 +215,7 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
         text, 'text-strong': strongText, 'text-muted': muted, 'text-disabled': mix(text, neutral(raised), 0.55),
         'text-selected': selectedText, separator, 'border-float': floatBorder, 'border-control': controlBorder,
         focus: nativeFocus ?? fit(accent, [surface, raised, field], 3.05),
-        'keycap-surface': keycapSurface, 'keycap-border': keycapBorder, 'keycap-highlight': keycapHighlight,
-        'keycap-shadow': keycapShadow, 'keycap-text': keycapText,
+        'keycap-surface': keycapSurface,
         'selection-border': nativeActiveBorder ?? selected,
         accent, 'accent-hover': accentHover, 'on-accent': onAccent, 'accent-text': accentText,
         'feedback-action': feedbackAction,

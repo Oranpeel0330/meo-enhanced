@@ -70,7 +70,7 @@
 
 ## 公开设置
 
-UI 按键标签在输入候选、工具栏悬停提示和快捷键设置中共用深色键帽配色及立体层次，浅色保留既有样式，原生高对比使用宿主边框。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--keycaps-only` 场景，覆盖三处真实控件、中英文深浅色、自定义表面、文字对比、焦点恢复及文档 `<kbd>` 隔离。
+输入候选与快捷键设置的按键标签仅适度增强深色底色，保留原有文字和边框，不新增轮廓、高光或阴影；浅色及工具栏悬停提示保持原样。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--keycaps-only` 场景，覆盖真实控件、中英文深浅色、自定义表面、文字对比、焦点恢复、高对比及文档 `<kbd>` 隔离。
 
 七类候选共用单行按键说明和对应设置入口：中文至少 288px、英文至少 304px，按实际上下展开方向把说明放在远离输入行的一端；入口仅定位并短暂强调整行，开关由用户操作，关闭设置恢复输入焦点。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--suggestions-only` 场景，覆盖中英文、深浅色、HTML 三种候选和两个编辑模式；菜单锚定及大文档更新另见[候选定位回归](../scripts/test-input-suggestion-position-production.ts)。
 
