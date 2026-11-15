@@ -23,7 +23,6 @@ export function getWebviewPreloadShellCss(): string {
       ${loadingPresentationStyles}
       .meo-startup-loading {
         inset: 40px 0 0; font-family: var(--vscode-font-family, system-ui);
-        --meo-ui-focus: var(--vscode-focusBorder, currentColor);
       }
     `;
 }

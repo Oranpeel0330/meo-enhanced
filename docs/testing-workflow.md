@@ -2391,7 +2391,10 @@ uncovered sampled frame. Preview remains covered past the former initial-paint
 fallback. These cases cover Chinese/dark and English/light, keep the final
 outline width, verify that the first Live/Source keystroke retains the complete
 document and reaches the Host, and bound pre-init canvas color sampling to zero:
-actual Host settings own the first palette. Screenshots and frame evidence are written to
+actual Host settings own the first document palette. Custom document colors must
+not recolor the startup background, label or spinner in any sampled loading frame;
+the accepted document must already use its configured background. Screenshots
+and frame evidence are written to
 `.local/test-artifacts/startup-presentation/`. Native installed timing remains a
 separate boundary; held-resource timings are not startup performance claims.
 

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import sharp from 'sharp';
 import type { Browser } from 'puppeteer-core';
 import exportRuntime from '../src/export/runtime';
 import { createPreviewDocument } from '../src/export/previewDocument';
@@ -22,6 +23,9 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     const relative = decodeURIComponent(new URL(request.url).pathname).slice(1);
     if (!relative) return new Response(`<!doctype html><style>${getWebviewPreloadShellCss()}</style>`
+      + (new URL(request.url).searchParams.get('appearance') === 'light'
+        ? '<style>:root{--vscode-editor-background:#f1f3f5;--vscode-editor-foreground:#24292f;--vscode-focusBorder:#0069cc}</style>'
+        : '<style>:root{--vscode-editor-background:#20262e;--vscode-editor-foreground:#e5e5e5;--vscode-focusBorder:#55aaff}</style>')
       + '<link rel="stylesheet" href="/index.css"><link rel="stylesheet" href="/katex/katex-embedded.css">'
       + webviewPreloadModules(false).map(module => `<link rel="modulepreload" href="/${module}">`).join('')
       + `<body class="vscode-${new URL(request.url).searchParams.get('appearance')}" data-meo-statistics-worker-src="/document-statistics-worker.js" data-meo-katex-src="/katex/katex-embedded.css" `
@@ -61,6 +65,8 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
             type: 'init', pageId: message.pageId, documentId: 'file:///startup-presentation.md', text, version: 1,
             savedRevision: { version: 1, text }, diagnostics: [], mode, uiLanguage: language,
             sourceLineNumbers: 'on', editorAppearance: appearance, editorFontSizeMode: 'auto', editorFontSize: 14,
+            uiColors: { light: { documentBackground: '#F5EDDF', text: '#172431', accent: '#7C3AED' },
+              dark: { documentBackground: '#18232F', text: '#F1E4D3', accent: '#B66A20' } },
             previewAppearance: appearance, previewFontFamily: '', previewSourceColoring: false,
             gitChangesGutter: false, gitDiffLineHighlights: false, gitDiffDetailsVisible: false,
             diffBaselineMode: 'current-edit', fixedBaselinePinned: false, fixedBaselineActive: false,
@@ -113,6 +119,11 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
           probe.cover = document.querySelector('.meo-startup-loading');
           probe.spinner = probe.cover.querySelector('.surface-loading-spinner');
           probe.animation = probe.spinner.getAnimations()[0];
+          probe.readColors = () => {
+            const cover = getComputedStyle(probe.cover), spinner = getComputedStyle(probe.spinner);
+            return JSON.stringify([cover.backgroundColor, cover.color, spinner.borderTopColor, spinner.borderRightColor]);
+          };
+          probe.initialColors = probe.readColors();
           const observe = () => {
             const cover = document.querySelector<HTMLElement>('.meo-startup-loading');
             const rect = cover?.getBoundingClientRect();
@@ -120,6 +131,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
             const ready = probe.mode && scope.__modeLoadingReadiness(probe.mode, 'Startup content').interactive;
             probe.frames.push({ at: performance.now(), cover: !!cover, same: cover === probe.cover,
               x: rect?.x, y: rect?.y, width: rect?.width, height: rect?.height,
+              colors: cover ? probe.readColors() : null,
               coversEditor: covers(innerWidth / 4), coversOutline: covers(innerWidth - 12), ready: !!ready });
             if (ready) probe.done = true;
             else requestAnimationFrame(observe);
@@ -141,10 +153,12 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
           const cover = document.querySelector('.meo-startup-loading');
           return { same: cover === probe.cover, spinner: cover?.querySelector('.surface-loading-spinner') === probe.spinner,
             animation: probe.animation === probe.spinner.getAnimations()[0],
-            frames: probe.frames, beforeInitReads: probe.beforeInitReads };
+            frames: probe.frames, initialColors: probe.initialColors, beforeInitReads: probe.beforeInitReads };
         });
         assert.equal(pending.same && pending.spinner && pending.animation, true, `${size}/${mode}: retain the original loading element and animation through module and document preparation`);
         assert.equal(pending.beforeInitReads, 0, 'Do not derive a default color palette before the actual Host settings arrive');
+        assert.ok(pending.frames.every((frame: any) => frame.colors === pending.initialColors),
+          `${size}/${mode}: startup background, label and spinner must retain their first-frame colors while document settings initialize: ${JSON.stringify(pending.frames)}`);
         assert.ok(pending.frames.length > 0 && pending.frames.every((frame: any) => frame.cover && frame.same
           && frame.coversEditor && frame.coversOutline && frame.width === 1100),
         `${size}/${mode}: one stationary cover must conceal the unfinished document and outline: ${JSON.stringify(pending.frames)}`);
@@ -152,14 +166,22 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
         await navigation;
         await page.waitForFunction(() => (window as any).__startupPresentation.done, { timeout: 15000 });
         const report = await page.evaluate(() => {
-          const { frames, paletteReads, beforeInitReads } = (window as any).__startupPresentation;
-          return { frames, paletteReads, beforeInitReads };
+          const { frames, paletteReads, beforeInitReads, initialColors } = (window as any).__startupPresentation;
+          return { frames, paletteReads, beforeInitReads, initialColors,
+            documentBackground: getComputedStyle(document.querySelector('.editor-host')!).backgroundColor };
         });
         assert.ok(report.frames.every((frame: any) => frame.cover || frame.ready), 'The first uncovered frame must already be interactive');
+        assert.ok(report.frames.every((frame: any) => !frame.cover || frame.colors === report.initialColors),
+          'Document and Preview palette preparation must never recolor the startup feedback');
+        assert.equal(report.documentBackground, appearance === 'dark' ? 'rgb(24, 35, 47)' : 'rgb(245, 237, 223)',
+          'The accepted document must use the actual custom background after the stable startup cover retires');
         assert.equal(await page.$eval('.outline-sidebar', e => e.getBoundingClientRect().width), 280,
           'The accepted outline must already occupy its final width');
         assert.deepEqual(errors, []);
-        await page.screenshot({ path: `${directory}/${size}-${mode}-ready.png` });
+        const readyImage = await page.screenshot({ path: `${directory}/${size}-${mode}-ready.png` });
+        const pixel = await sharp(readyImage).extract({ left: 8, top: 360, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+        assert.deepEqual([...pixel], appearance === 'dark' ? [24, 35, 47] : [245, 237, 223],
+          'The first accepted reading surface must actually paint its configured background');
         if (mode !== 'preview') {
           assert.equal(await page.$eval('.editor-host .cm-content', e => e === document.activeElement), true,
             'The first accepted editable surface must own keyboard focus');
