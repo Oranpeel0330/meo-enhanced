@@ -390,8 +390,8 @@ export function createInputSuggestions(options: {
         group.append(cap, document.createTextNode(label)); keys.append(group);
       }
       const settings = document.createElement('button'); settings.type = 'button'; settings.className = 'meo-suggestion-settings';
-      settings.textContent = zh ? '不再显示' : 'Disable…'; settings.disabled = !options.openSettings;
-      settings.dataset.tooltip = zh ? '前往设置关闭此类候选' : 'Open settings to disable these suggestions';
+      settings.textContent = zh ? '不再显示' : 'Settings…'; settings.disabled = !options.openSettings;
+      settings.dataset.tooltip = zh ? '前往设置关闭此类候选' : 'Turn off these suggestions in settings';
       settings.addEventListener('click', () => {
         if (!this.context) return;
         const setting = inputSuggestionSetting(this.context.type);
