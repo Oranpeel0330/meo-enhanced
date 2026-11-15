@@ -3354,6 +3354,16 @@ release acceptance session.
 
 ## Settings, typing assistance and shortcuts
 
+`scripts/test-input-suggestion-position-production.ts` covers the shared candidate
+positioning owner in `test:browser` and the rendered/viewport targeted plans.
+It reproduces natural lazy-list indentation in ordinary and actually optimized
+Live editors, sampling glyph/menu coordinates through the deferred update before
+any candidate navigation. All seven candidate kinds also retain their query-start
+anchor while filtering and selecting, follow effect-only horizontal presentation
+changes without text/selection changes, and stay dismissed after Esc. Live/Source,
+light/dark and above/below placement are paired; `MEO_TEST_SCREENSHOTS` optionally
+saves the natural-list appearances for visual inspection.
+
 The regression and release gates include `test-editing-preferences.ts`,
 `test-editor-services.ts`, `test-link-candidates.ts`, `test-input-assistance-production.ts`,
 `test-editing-features-production.ts`, `test-link-candidates-production.ts`, `test-slash-commands-production.ts` and

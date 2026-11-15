@@ -134,6 +134,7 @@ function targetedCommands(
       ];
     case 'rendered':
       return [
+        script('scripts/test-input-suggestion-position-production.ts'),
         packageScript('test:rendered-source'),
         script('scripts/test-live-viewport-content-production.ts'),
         script('scripts/test-live-reading-paint-production.ts'),
@@ -215,6 +216,7 @@ function targetedCommands(
       ];
     case 'viewport':
       return [
+        script('scripts/test-input-suggestion-position-production.ts'),
         script('scripts/test-navigation-reveal-production.ts'),
         packageScript('test:toolbar-viewport'),
         script('scripts/test-source-syntax-stability.ts'),
@@ -391,6 +393,7 @@ export function createTestWorkflowPlan(request: TestWorkflowRequest): TestWorkfl
           script('scripts/test-link-candidates-production.ts'),
           script('scripts/test-mixed-html-paste-production.ts'),
           script('scripts/test-slash-commands-production.ts'),
+          script('scripts/test-input-suggestion-position-production.ts'),
           script('scripts/test-settings-window-production.ts'),
           script('scripts/test-editor-font-wheel.ts'),
           script('scripts/test-ui-colors.ts'),

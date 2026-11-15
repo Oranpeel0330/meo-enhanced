@@ -64,7 +64,7 @@ export function createInputSuggestions(options: {
     cellFrom: number | null = null; cellInput: HTMLTextAreaElement | null = null;
     fieldInput: HTMLTextAreaElement | null = null; fieldValue = '';
     selectedCommand = ''; resolvedQuery = '';
-    positionFrame: number | null = null; above: boolean | null = null;
+    positionQueued = false; above: boolean | null = null;
     tooltipFrame: number | null = null;
     selectedTooltip: ReturnType<typeof createTooltip> | null = null;
     dismissed = false;
@@ -103,10 +103,12 @@ export function createInputSuggestions(options: {
       this.schedule();
     };
     readonly reposition = () => {
-      const window = this.view.dom.ownerDocument.defaultView;
-      if (!window || this.popup.hidden || this.positionFrame !== null) return;
-      this.positionFrame = window.requestAnimationFrame(() => {
-        this.positionFrame = null;
+      if (this.popup.hidden || this.positionQueued) return;
+      this.positionQueued = true;
+      // Run after the current editor DOM writes and before paint. Waiting for
+      // another animation frame leaves a visible gap after deferred indentation.
+      queueMicrotask(() => {
+        this.positionQueued = false;
         if (!this.disposed && !this.popup.hidden) this.position();
       });
     };
@@ -156,7 +158,10 @@ export function createInputSuggestions(options: {
         if (!field || selection.from < field.from || selection.to > field.to || update.state.selection.ranges.length !== 1) this.resetFields();
       }
       if (update.docChanged || update.selectionSet || update.focusChanged || update.transactions.some(transaction => transaction.reconfigured || transaction.effects.some(effect => effect.is(refreshInputSuggestions)))) this.schedule();
-      else if (update.geometryChanged || update.viewportChanged) this.reposition();
+      // Deferred presentation can move text horizontally without changing the
+      // document, viewport or block heights (for example a lazy list continuation).
+      // Measure visible menus after every editor update, once DOM writes finish.
+      else this.reposition();
     }
     getContext() {
       if (this.disposed || this.dismissed) return null;
@@ -236,8 +241,6 @@ export function createInputSuggestions(options: {
     }
     clear() {
       this.generation++; if (this.timer !== null) clearTimeout(this.timer); this.timer = null;
-      if (this.positionFrame !== null) this.view.dom.ownerDocument.defaultView?.cancelAnimationFrame(this.positionFrame);
-      this.positionFrame = null;
       if (this.tooltipFrame !== null) this.view.dom.ownerDocument.defaultView?.cancelAnimationFrame(this.tooltipFrame);
       this.tooltipFrame = null; this.selectedTooltip?.dispose(); this.selectedTooltip = null;
       this.popup.hidden = true; this.items = []; this.context = null;
@@ -423,13 +426,16 @@ export function createInputSuggestions(options: {
         if (slash) { this.slashFrom = null; this.cellFrom = null; this.cellInput = null; }
         this.clear();
       };
-      const native = this.cellInput ? options.cellCoords?.(this.cellInput, slash ? this.cellFrom! : this.head) : null;
+      const anchor = slash ? this.cellInput ? this.cellFrom! : this.slashFrom!
+        : this.context?.type === 'math' || this.context?.type === 'html' ? this.context.from
+        : this.head - (this.context?.length ?? 0);
+      const native = this.cellInput ? options.cellCoords?.(this.cellInput, anchor) : null;
       const coords = native ? {
         left: native.left - this.cellInput!.scrollLeft,
         right: native.left - this.cellInput!.scrollLeft + this.view.defaultCharacterWidth,
         top: native.top - this.cellInput!.scrollTop,
         bottom: native.top - this.cellInput!.scrollTop + (parseFloat(getComputedStyle(this.cellInput!).lineHeight) || this.view.defaultLineHeight)
-      } : this.view.coordsAtPos(slash ? this.slashFrom! : this.context?.type === 'math' ? this.context.from : this.head);
+      } : this.view.coordsAtPos(anchor);
       if (!coords) { close(); return; }
       const viewport = document.documentElement;
       const scroller = this.view.scrollDOM, scroll = scroller.getBoundingClientRect();

@@ -739,6 +739,7 @@
       "scripts/test-about-settings-copy.ts",
       "scripts/test-shiki-worker.ts",
       "scripts/test-slash-commands-production.ts",
+      "scripts/test-input-suggestion-position-production.ts",
       "scripts/test-source-active-line.ts",
       "scripts/test-source-code-window.ts",
       "scripts/test-source-diff-caret.ts",
