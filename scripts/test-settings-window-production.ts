@@ -210,12 +210,18 @@ try {
           const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
           return { kind: popup.dataset.suggestionKind, placement: popup.dataset.placement, width: popup.getBoundingClientRect().width,
             footer: footer.getBoundingClientRect().toJSON(), list: list.getBoundingClientRect().toJSON(), fits: footer.scrollWidth <= footer.clientWidth + 1, footerScrollWidth: footer.scrollWidth, footerClientWidth: footer.clientWidth, footerFont: getComputedStyle(footer).font,
-            singleLine: groups.every(group => group.top === groups[0].top), keys: [...footer.querySelectorAll('kbd')].map(key => key.textContent),
+            singleLine: groups.every(group => group.top === groups[0].top), keys: [...footer.querySelectorAll<HTMLElement>('kbd')].map(key => key.dataset.key),
+            centeredKeys: [...footer.querySelectorAll('kbd')].every(key => {
+              const cap = key.getBoundingClientRect(), ink = key.firstElementChild!.getBoundingClientRect();
+              return cap.height === 20 && Math.abs(cap.top + cap.height / 2 - ink.top - ink.height / 2) < 0.5 && Math.abs(cap.left + cap.width / 2 - ink.left - ink.width / 2) < 0.5;
+            }), arrowIcon: !!footer.querySelector('kbd[aria-label] svg'),
+            distinctGuidance: getComputedStyle(footer).backgroundColor !== getComputedStyle(popup).backgroundColor,
             text: view.state.doc.toString(), selection: view.state.selection.main.toJSON(), updates: (window as any).__messages.filter((m: any) => m.type === 'updateEditingPreferences').length };
         });
         assert.equal(layout.kind, item.kind, label); assert.equal(layout.placement, above ? 'above' : 'below', label + ': actual placement');
         assert.equal(layout.fits && layout.singleLine, true, label + ': complete guidance fits one line: ' + JSON.stringify(layout));
         assert.deepEqual(layout.keys, ['↑↓', 'Enter', 'Esc']); assert.ok(layout.width >= (language === 'en' ? 304 : 288), label + ': widened fixed minimum');
+        assert.equal(layout.centeredKeys && layout.arrowIcon && layout.distinctGuidance, true, label + ': centered key contents, vector arrows and a subtle separate guidance surface');
         assert.ok(above ? layout.footer.bottom <= layout.list.top + 1 : layout.footer.top >= layout.list.bottom - 1, label + ': guidance stays away from input');
         if (mode === 'source') await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `${language}-${item.name ?? item.kind}.png`) });
         await page.locator('.meo-suggestion-settings').click();

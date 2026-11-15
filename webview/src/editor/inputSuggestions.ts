@@ -1,4 +1,5 @@
 import { createRequestPrefix } from '../adapters/requestIdentity';
+import { ArrowUpDown, createElement } from 'lucide';
 import { EditorSelection, EditorState, Transaction, StateEffect, type Extension, type TransactionSpec } from '@codemirror/state';
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
@@ -386,7 +387,13 @@ export function createInputSuggestions(options: {
       const keys = document.createElement('span'); keys.className = 'meo-suggestion-keys';
       for (const [key, label] of [['↑↓', zh ? '移动' : 'Move'], ['Enter', zh ? '选择' : 'Select'], ['Esc', zh ? '关闭' : 'Close']]) {
         const group = document.createElement('span'), cap = document.createElement('kbd');
-        group.className = 'meo-suggestion-key'; cap.textContent = key;
+        group.className = 'meo-suggestion-key'; cap.dataset.key = key;
+        if (key === '↑↓') {
+          cap.setAttribute('aria-label', zh ? '上、下方向键' : 'Up and down arrow keys');
+          cap.append(createElement(ArrowUpDown, { width: 14, height: 14, 'aria-hidden': 'true' }));
+        } else {
+          const text = document.createElement('span'); text.className = 'meo-suggestion-key-text'; text.textContent = key; cap.append(text);
+        }
         group.append(cap, document.createTextNode(label)); keys.append(group);
       }
       const settings = document.createElement('button'); settings.type = 'button'; settings.className = 'meo-suggestion-settings';
