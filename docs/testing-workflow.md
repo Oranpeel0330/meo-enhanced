@@ -2385,7 +2385,7 @@ copy checks remain part of the same contract and the targeted rendered gate.
 `scripts/startup-presentation-checks.ts`, called by the startup contract, serves
 the real static shell and emitted modules with held shell/editor responses and
 delayed Preview rendering. Ordinary and production-large Live/Source/Preview
-cases retain the original loading element and spinner, cover the document and
+cases with opaque and alpha Host backgrounds retain the original loading element and spinner, cover the document and
 outline at one stationary width, and expose an interactive surface in the first
 uncovered sampled frame. Preview remains covered past the former initial-paint
 fallback. These cases cover Chinese/dark and English/light, keep the final
@@ -2393,10 +2393,26 @@ outline width, verify that the first Live/Source keystroke retains the complete
 document and reaches the Host, and bound pre-init canvas color sampling to zero:
 actual Host settings own the first document palette. Custom document colors must
 not recolor the startup background, label or spinner in any sampled loading frame;
+loading screenshots must retain the initial composited background pixel even
+when the native Host background is translucent;
 the accepted document must already use its configured background. Screenshots
 and frame evidence are written to
 `.local/test-artifacts/startup-presentation/`. Native installed timing remains a
 separate boundary; held-resource timings are not startup performance claims.
+
+`scripts/startup-failure-checks.ts`, also called by the startup contract, uses
+dense windowed documents whose first viewport needs blocks beyond the initial
+manifest. Persistent and single block failures must reveal the terminal error,
+retire startup feedback, and stop automatic requests and repeated logs. It checks
+fresh mode retry, an in-place line-height refresh that retains its iframe and
+reactivates block mounting, and failure during trusted reading after a successful
+retry. Canceled block success/failure must leave Source interactive and converge
+without late covers or logs. Artifacts are written to
+`.local/test-artifacts/startup-failure/`.
+
+The loading-presentation sampler treats a temporarily missing iframe root as
+unready and continues sampling; its original visible-content and four-frame
+handoff assertions remain required.
 
 The regression and release gates run `scripts/test-panel-session-ready-init.ts` and
 `scripts/test-editor-startup-load.ts`. The first checks that concurrent Webview

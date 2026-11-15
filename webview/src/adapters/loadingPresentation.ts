@@ -1,4 +1,4 @@
-import { loadingPresentationStyles } from '../../../src/foundation/loadingPresentationStyles';
+import { loadingPresentationStyles } from './loadingPresentationStyles';
 export { loadingPresentationStyles };
 
 /** Callers choose immediate feedback for empty regions and own readiness and cancellation. */

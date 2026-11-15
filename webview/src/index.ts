@@ -1375,7 +1375,6 @@ const applyUiLanguage = (language: UiLanguage): void => {
   findPanelController.setUiLanguage(language);
   outlineController.setUiLanguage(language);
   previewController.setUiLanguage(language);
-  startupLoadingPresentation.setLabel(strings.loading);
   refreshEditorLoadingLabel();
   toolbarOverflowLayoutKey = '';
   syncToolbarOverflow();

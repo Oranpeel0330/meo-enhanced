@@ -1,4 +1,4 @@
-import { loadingPresentationStyles } from '../foundation/loadingPresentationStyles';
+import { loadingPresentationStyles } from '../../webview/src/adapters/loadingPresentationStyles';
 
 /** Keep viewport and feedback stable before external styles and modules load. */
 export function getWebviewPreloadShellCss(): string {

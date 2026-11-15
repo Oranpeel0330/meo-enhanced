@@ -1339,7 +1339,9 @@ export function createPreviewController({
             onPaintReady?.();
             if (!hasPendingRequest) pendingExternalViewportRestore = null;
           };
-          if (previewViewport) void previewViewport.whenReady().then(finish,
+          // The error status is its own accepted surface; waiting on its failed
+          // viewport would restart the same request/readiness cycle.
+          if (previewViewport && status.hidden) void previewViewport.whenReady().then(finish,
             error => { if (!disposed && generation === paintGeneration) { handleWindowError(error); finish(); } });
           else finish();
         }
@@ -1950,7 +1952,11 @@ export function createPreviewController({
   };
 
   const setStatus = (message: string | null) => {
-    if (message) finishLoadingPresentation();
+    if (message) {
+      finishLoadingPresentation();
+      // Keep resize and reading preparation from restarting failed block work.
+      previewViewport?.refresh({ active: false });
+    }
     status.hidden = !message;
     status.textContent = message ?? '';
   };
@@ -2636,6 +2642,7 @@ export function createPreviewController({
       && text === frameRenderedText
       && frame.contentDocument?.querySelector('.meo-export-doc')) {
       setStatus(null);
+      previewViewport?.refresh({ active: !host.hidden });
       onRendered?.();
       schedulePaintReady();
       return Promise.resolve();
@@ -2735,7 +2742,7 @@ export function createPreviewController({
           connectDocumentSearch();
         }
         applyAppearanceToFrame(preserveViewport);
-        previewViewport?.refresh({ invalidateGeometry: true });
+        previewViewport?.refresh({ active: !host.hidden, invalidateGeometry: true });
       } else {
         renderFrame(requestText, preserveViewport);
       }
@@ -3733,7 +3740,7 @@ export function createPreviewController({
       host.hidden = !visible;
       host.inert = !visible;
       previewViewportResources?.setActive(visible);
-      previewViewport?.refresh({ active: visible });
+      previewViewport?.refresh({ active: visible && status.hidden });
       updateViewportAlignment();
       if (!visible) {
         finishLoadingPresentation();

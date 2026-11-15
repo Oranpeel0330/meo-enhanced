@@ -170,7 +170,7 @@ async function delayedFramePaint() {
             frameVisible: getComputedStyle(frame).visibility === 'visible',
             loadingVisible: !!loading && !loading.hidden,
             hostBusy: frame.closest<HTMLElement>('.preview-host')?.getAttribute('aria-busy') === 'true',
-            frameInert: previewDocument?.documentElement.inert ?? null
+            frameInert: previewDocument?.documentElement?.inert ?? null
           });
           if (scope.__loadingPaintTimeline.length < 32) requestAnimationFrame(sample);
         };

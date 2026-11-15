@@ -24,8 +24,8 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
     const relative = decodeURIComponent(new URL(request.url).pathname).slice(1);
     if (!relative) return new Response(`<!doctype html><style>${getWebviewPreloadShellCss()}</style>`
       + (new URL(request.url).searchParams.get('appearance') === 'light'
-        ? '<style>:root{--vscode-editor-background:#f1f3f5;--vscode-editor-foreground:#24292f;--vscode-focusBorder:#0069cc}</style>'
-        : '<style>:root{--vscode-editor-background:#20262e;--vscode-editor-foreground:#e5e5e5;--vscode-focusBorder:#55aaff}</style>')
+        ? `<style>:root{--vscode-editor-background:${new URL(request.url).searchParams.has('alpha') ? 'rgba(241,243,245,.5)' : '#f1f3f5'};--vscode-editor-foreground:#24292f;--vscode-focusBorder:#0069cc}</style>`
+        : `<style>:root{--vscode-editor-background:${new URL(request.url).searchParams.has('alpha') ? 'rgba(32,38,46,.5)' : '#20262e'};--vscode-editor-foreground:#e5e5e5;--vscode-focusBorder:#55aaff}</style>`)
       + '<link rel="stylesheet" href="/index.css"><link rel="stylesheet" href="/katex/katex-embedded.css">'
       + webviewPreloadModules(false).map(module => `<link rel="modulepreload" href="/${module}">`).join('')
       + `<body class="vscode-${new URL(request.url).searchParams.get('appearance')}" data-meo-statistics-worker-src="/document-statistics-worker.js" data-meo-katex-src="/katex/katex-embedded.css" `
@@ -39,7 +39,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
   } });
   const reports: unknown[] = [];
   try {
-    for (const size of ['small', 'large'] as const) for (const mode of ['live', 'source', 'preview'] as const) {
+    for (const alpha of [true, false]) for (const size of ['small', 'large'] as const) for (const mode of ['live', 'source', 'preview'] as const) {
       const context = await browser.createBrowserContext();
       const documents = new Map<string, ReturnType<typeof createPreviewDocument>>();
       let releaseShell!: () => void, releaseEditor!: () => void, releasePreview!: () => void;
@@ -48,6 +48,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
       const previewGate = new Promise<void>(resolve => { releasePreview = resolve; });
       const appearance = size === 'small' ? 'dark' : 'light';
       const language = size === 'small' ? 'zh-CN' : 'en';
+      const name = `${size}-${mode}${alpha ? '-alpha' : ''}`;
       const text = size === 'small'
         ? '# Startup content\n\n' + Array.from({ length: 12 }, (_, i) => `Plain text line ${i + 1}.`).join('\n')
         : '# Startup content\n\n' + large;
@@ -111,7 +112,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
             });
           } });
         });
-        const navigation = page.goto(`${server.url.href}?appearance=${appearance}`, { waitUntil: 'domcontentloaded' });
+        const navigation = page.goto(`${server.url.href}?appearance=${appearance}${alpha ? '&alpha' : ''}`, { waitUntil: 'domcontentloaded' });
         void navigation.catch(() => {});
         await page.waitForSelector('.meo-startup-loading');
         await page.evaluate(() => {
@@ -121,7 +122,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
           probe.animation = probe.spinner.getAnimations()[0];
           probe.readColors = () => {
             const cover = getComputedStyle(probe.cover), spinner = getComputedStyle(probe.spinner);
-            return JSON.stringify([cover.backgroundColor, cover.color, spinner.borderTopColor, spinner.borderRightColor]);
+            return JSON.stringify([cover.backgroundColor, cover.backgroundImage, cover.color, spinner.borderTopColor, spinner.borderRightColor]);
           };
           probe.initialColors = probe.readColors();
           const observe = () => {
@@ -138,6 +139,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
           };
           requestAnimationFrame(observe);
         });
+        const initialPixel = await sharp(await page.screenshot()).extract({ left: 8, top: 360, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
         releaseShell();
         await page.waitForFunction(mode => document.getElementById('app')?.dataset.mode === mode
           && document.querySelector('.mode-toolbar')?.classList.contains('meo-preload-toolbar') === false, {}, mode);
@@ -147,7 +149,9 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
           await page.waitForSelector('.editor-host > .cm-editor');
           await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 700)));
         }
-        await page.screenshot({ path: `${directory}/${size}-${mode}-pending.png` });
+        const pendingImage = await page.screenshot({ path: `${directory}/${name}-pending.png` });
+        const pendingPixel = await sharp(pendingImage).extract({ left: 8, top: 360, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+        assert.deepEqual([...pendingPixel], [...initialPixel], `${name}: an opaque startup presentation must not expose document palette changes`);
         const pending = await page.evaluate(() => {
           const scope = window as any, probe = scope.__startupPresentation;
           const cover = document.querySelector('.meo-startup-loading');
@@ -178,7 +182,7 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
         assert.equal(await page.$eval('.outline-sidebar', e => e.getBoundingClientRect().width), 280,
           'The accepted outline must already occupy its final width');
         assert.deepEqual(errors, []);
-        const readyImage = await page.screenshot({ path: `${directory}/${size}-${mode}-ready.png` });
+        const readyImage = await page.screenshot({ path: `${directory}/${name}-ready.png` });
         const pixel = await sharp(readyImage).extract({ left: 8, top: 360, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
         assert.deepEqual([...pixel], appearance === 'dark' ? [24, 35, 47] : [245, 237, 223],
           'The first accepted reading surface must actually paint its configured background');
@@ -204,8 +208,8 @@ export async function checkStartupPresentation(browser: Browser): Promise<void> 
           } finally { clearTimeout(inputTimer); }
           assert.equal(hostText, edited, 'First input must reach the Host without losing document text');
         }
-        reports.push({ size, mode, ...report });
-        console.log(`Unified startup presentation passed: ${size}/${mode}; pre-init color samples ${report.beforeInitReads}`);
+        reports.push({ size, mode, alpha, ...report });
+        console.log(`Unified startup presentation passed: ${name}; pre-init color samples ${report.beforeInitReads}`);
       } finally {
         releaseShell(); releaseEditor(); releasePreview();
         await context.close();
