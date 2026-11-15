@@ -155,10 +155,8 @@ that affect those behaviors.
   or double-write paths, and delete the superseded Legacy owner and obsolete
   tests once the replacement is proven.
 
-`.codegraph` is an optional local navigation aid for ownership and impact
-analysis. It is derived data, is not required for contributors, and must not
-become a CI, build, or release dependency. Dynamic Protocol, DOM, and lifecycle
-behavior still requires source inspection and observable contracts.
+Use source inspection to trace ownership, call paths, and dependencies. Verify
+dynamic Protocol, DOM, and lifecycle behavior against observable contracts.
 
 ## Change hygiene
 
