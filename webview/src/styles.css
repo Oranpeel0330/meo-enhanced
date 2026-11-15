@@ -7170,7 +7170,9 @@ html[data-meo-ui-contrast='high'] .meo-preview-viewport-alignment {
   width: 100%;
   height: 100%;
   border: 0;
-  background: var(--meo-background);
+  /* Chromium can expose the iframe surface through a reserved native gutter
+     when there is no scrollbar. Keep it paired with the rendered document. */
+  background: var(--meo-preview-background, var(--meo-background));
 }
 
 .preview-status {

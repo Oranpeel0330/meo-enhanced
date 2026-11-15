@@ -924,6 +924,13 @@ Behavior changes and accumulated interaction risk still require quick/targeted
 checks. Release coverage, long-run authorization, privacy and commit Hook checks
 retain their existing requirements.
 
+`scripts/test-outline-colors-production.ts` also samples compositor pixels in
+reserved native scrollbar gutters. Short and overflowing documents cover Live,
+Source, split/full Preview, left/right fixed/floating outlines, built-in presets
+and opposite Preview appearances. The empty gutter must match its own content
+surface; computed track colors alone cannot detect an iframe carrier mismatch.
+Floating outline shadows are excluded from adjacent document-edge samples.
+
 ## Long-run recommendation and authorization
 
 The agent owns the decision to recommend a long run; the user does not need to

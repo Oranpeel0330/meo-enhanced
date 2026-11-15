@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 import exportRuntime from '../src/export/runtime';
+import { checkScrollbarSurfaces } from './scrollbar-surface-test-helpers';
 
 const build = await Bun.build({ entrypoints: ['scripts/test-preview-reading-surface-production-entry.ts'], target: 'browser', format: 'iife',
   plugins: [{ name: 'outline-transition-fixture', setup(builder) {
@@ -24,6 +25,7 @@ const errors: string[] = [];
 let cases = 0;
 let transitions = 0;
 try {
+  await checkScrollbarSurfaces(browser, bundle);
   for (const editorAppearance of ['dark', 'light'] as const) {
     const page = await browser.newPage();
     page.on('pageerror', error => errors.push(String(error)));
