@@ -8590,8 +8590,8 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
 .meo-suggestion-key kbd[data-key='↑↓'] { width: 20px; padding: 0; }
 .meo-suggestion-key kbd svg { display: block; flex: none; }
 .meo-suggestion-key-text { display: block; text-box-trim: trim-both; text-box-edge: cap alphabetic; }
-html[data-editor-appearance='dark'] :is(.meo-suggestion-key kbd, .settings-key) {
-  background: var(--meo-ui-keycap-surface);
+html[data-editor-appearance='dark'][data-meo-ui-contrast='normal'] .meo-suggestion-key kbd {
+  border-color: var(--meo-ui-border-control);
 }
 .meo-suggestion-settings { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .meo-suggestion-settings:hover, .meo-suggestion-settings:focus-visible { color: var(--meo-ui-text); text-decoration: underline; }

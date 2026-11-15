@@ -3357,12 +3357,21 @@ release acceptance session.
 `bun scripts/test-settings-window-production.ts --keycaps-only` checks candidate
 and settings key labels through the full Webview. It belongs to the default
 settings release invocation and the appearance targeted plan. Chinese/English
-light/dark cases preserve light fills and toolbar tooltip styling, verify subtle
-shared dark fills with readable inherited text and no added outline/shadow, and
-exercise real opening, dismissal and focus return. Custom black, middle-gray,
+light/dark cases include VS Code's injected KBD styles with a dark host for both
+editor appearances. They preserve the same geometry, original fills and host
+inset, recolor the existing dark candidate frame, retain light/tooltip styling,
+and exercise real opening, dismissal and focus return. Custom black, middle-gray,
 blue and pale UI surfaces retain readable text without changing document KBD;
-high contrast retains the existing styling. Screenshots are saved under
+high contrast retains native keybinding borders. Screenshots are saved under
 `.local/test-artifacts/ui-keycaps/`.
+
+`bun scripts/test-kbd-appearance.ts` is the focused document KBD appearance
+contract. It checks Chinese/Latin text across three fonts and three sizes, plain
+prose, quotes, lists, tables and nested HTML. Transparent fills, 1px/2px borders,
+line heights and baselines remain unchanged; dark frames retain modest contrast.
+Default Preview/export consume the captured document key border color. Their
+screenshots are saved under `.local/test-artifacts/document-keycaps/`; the full
+Webview keycap contract above also captures actual Live document labels.
 
 `bun scripts/test-settings-window-production.ts --suggestions-only` runs the
 shared guidance and settings-entry cases from the owning production settings

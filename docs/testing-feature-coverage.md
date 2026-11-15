@@ -12,6 +12,8 @@
 
 ## 编辑、阅读与内容操作
 
+正文 `<kbd>` 保留透明底、原有按键外形和行高，仅适度增强深色线色；Live、默认预览和导出共享文档配色，独立预设保持自身样式。[按键外观专项](../scripts/test-kbd-appearance.ts)覆盖中英文字体、字号、列表/引用/表格/HTML、基线及预览导出；[正式窗口](../scripts/test-settings-window-production.ts)的 `--keycaps-only` 场景保留实际 Live 截图并验证 UI 配色不会串入正文。
+
 | 功能 | 必须检查的结果 | 门禁证据与边界 |
 | --- | --- | --- |
 | MEO 侧栏大纲 | 最近聚焦文档的标题树；侧栏借用焦点时保持；三种模式滚动和编辑后的跳转正确，标题身份变化时刷新旧树项，迟到点击不跳向同名项；标题无图标，视图标题统一为 MEO Outline，只高亮当前标题；`meoEnhanced.outline.expandAll` 展开全部六级标题，原生全部折叠继续可用；只订阅当前面板，隐藏、关闭和重载正确释放或恢复；中英文及深浅色切换保持状态 | [协议、投影与生命周期](../scripts/test-sidebar-outline.ts)、[生产编辑器与文档规模](../scripts/test-sidebar-outline-browser.ts)、[隔离原生工作台](../scripts/test-vscode-sidebar-outline.ps1)（真实按钮、两万标题、中英文、明暗截图及重新启动）；最低支持版本另验 |
@@ -70,7 +72,7 @@
 
 ## 公开设置
 
-输入候选与快捷键设置的按键标签仅适度增强深色底色，保留原有文字和边框，不新增轮廓、高光或阴影；浅色及工具栏悬停提示保持原样。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--keycaps-only` 场景，覆盖真实控件、中英文深浅色、自定义表面、文字对比、焦点恢复、高对比及文档 `<kbd>` 隔离。
+输入候选的深浅色按键标签保留同一外形和原有底色，仅校正普通深色界面已有边框的颜色；快捷键设置、浅色及工具栏悬停提示保持原样，不新增装饰效果。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--keycaps-only` 场景，包含 VS Code 注入的按键样式，覆盖中英文深浅色、原有外形与下沿、自定义表面、文字对比、焦点恢复、高对比宿主边框及文档 `<kbd>` 隔离。
 
 七类候选共用单行按键说明和对应设置入口：中文至少 288px、英文至少 304px，按实际上下展开方向把说明放在远离输入行的一端；入口仅定位并短暂强调整行，开关由用户操作，关闭设置恢复输入焦点。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--suggestions-only` 场景，覆盖中英文、深浅色、HTML 三种候选和两个编辑模式；菜单锚定及大文档更新另见[候选定位回归](../scripts/test-input-suggestion-position-production.ts)。
 

@@ -178,16 +178,28 @@ try {
     const sample = (selector: string, carrier: string) => page.$eval(selector, (cap, carrier) => {
       const style = getComputedStyle(cap), parent = getComputedStyle(cap.closest(carrier)!);
       const roles = document.documentElement.style;
-      return { background: style.backgroundColor, color: style.color, shadow: style.boxShadow, border: style.borderColor,
-        borderWidth: style.borderWidth, parent: parent.backgroundColor, outline: style.outlineStyle,
-        roleSurface: roles.getPropertyValue('--meo-ui-keycap-surface'), controlBorder: roles.getPropertyValue('--meo-ui-border-control'),
-        hover: roles.getPropertyValue('--meo-ui-surface-hover'), pressed: roles.getPropertyValue('--meo-ui-surface-pressed'),
+      return { background: style.backgroundColor, color: style.color, shadow: style.boxShadow, border: style.borderTopColor,
+        borderWidth: style.borderWidth, bottom: style.borderBottomColor, parent: parent.backgroundColor, outline: style.outlineStyle,
+        height: style.height, radius: style.borderRadius, align: style.alignItems,
+        controlBorder: roles.getPropertyValue('--meo-ui-border-control'),
+        hover: roles.getPropertyValue('--meo-ui-surface-hover'),
         field: roles.getPropertyValue('--meo-ui-surface-field') };
     }, carrier);
     for (const appearance of ['light', 'dark'] as const) for (const language of ['zh-CN', 'en'] as const) {
       await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
-      const text = '# Keyboard labels\n\n<kbd>Enter</kbd>\n\n';
+      const text = '# Keyboard labels\n\n按 <kbd>Enter</kbd> 继续 / Press to continue\n\n';
       await openFixture(text, 'live');
+      // VS Code injects this KBD carrier before extension CSS. Keep a dark host
+      // for both editor appearances to cover the reported light/dark mismatch.
+      await page.addStyleTag({ content: `
+        :root { --vscode-keybindingLabel-background: rgba(128,128,128,.17); --vscode-keybindingLabel-foreground: #CCC;
+          --vscode-keybindingLabel-border: rgba(51,51,51,.6); --vscode-keybindingLabel-bottomBorder: rgba(68,68,68,.6);
+          --vscode-widget-shadow: rgba(0,0,0,.36); }
+        kbd { background-color: var(--vscode-keybindingLabel-background); color: var(--vscode-keybindingLabel-foreground);
+          border-style: solid; border-width: 1px; border-radius: 3px; border-color: var(--vscode-keybindingLabel-border);
+          border-bottom-color: var(--vscode-keybindingLabel-bottomBorder); box-shadow: inset 0 -1px 0 var(--vscode-widget-shadow);
+          vertical-align: middle; padding: 1px 3px; }
+      ` });
       await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden') && !document.querySelector('.editor-host')?.hasAttribute('inert'));
       await page.evaluate(language => window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiLanguageChanged', uiLanguagePreference: language, uiLanguage: language, automaticUiLanguage: language } })), language);
       await page.locator('.more-tools-wrapper > .format-button').click();
@@ -201,6 +213,11 @@ try {
       const menu = await sample('.meo-suggestion-key kbd[data-key="Enter"]', '.meo-input-suggestions');
       await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `menu-${language}-${appearance}.png`) });
       await (await page.$('.meo-suggestion-guidance'))!.screenshot({ path: path.join(folder, `guidance-${language}-${appearance}.png`) });
+      const documentLine = await page.$eval('.meo-md-kbd', key => key.closest('.cm-line')!.getBoundingClientRect().toJSON());
+      await page.screenshot({ path: path.join(folder, `document-${language}-${appearance}.png`), clip: {
+        x: Math.floor(documentLine.x) - 6, y: Math.floor(documentLine.y) - 4,
+        width: Math.min(420, Math.ceil(documentLine.width) + 12), height: Math.ceil(documentLine.height) + 8
+      } });
       await page.keyboard.press('Escape'); await page.hover('[data-action="find"]');
       await page.waitForSelector('.meo-tooltip.is-visible .meo-tooltip-shortcut:not([hidden])');
       const tooltip = await sample('.meo-tooltip.is-visible .meo-tooltip-shortcut', '.meo-tooltip');
@@ -219,18 +236,22 @@ try {
       assert.equal(tooltip.shadow, 'none', 'tooltip shortcut has no added shadow');
       assert.equal(tooltip.outline, 'none', 'tooltip shortcut has no added outline');
       for (const [kind, cap] of Object.entries({ menu, settings })) {
-        assert.equal(cap.shadow, 'none', kind + ': no decorative shadow');
+        assert.equal(cap.shadow, 'rgba(0, 0, 0, 0.36) 0px -1px 0px 0px inset', kind + ': original VS Code inset is preserved');
         assert.equal(cap.outline, 'none', kind + ': no added outline');
-        assert.equal(cap.borderWidth, kind === 'settings' ? '1px' : '0px', kind + ': original border width is preserved');
+        assert.equal(cap.borderWidth, '1px', kind + ': original host border width is preserved');
+        assert.equal(cap.radius, '4px', kind + ': original corner radius is preserved');
+        assert.deepEqual(channels(cap.background), channels(kind === 'menu' ? cap.hover : cap.field), kind + ': original fill rule is preserved in both appearances');
         if (kind === 'settings') assert.deepEqual(channels(cap.border), channels(cap.controlBorder), 'settings: original border color is preserved');
-        if (appearance === 'dark') {
-          assert.deepEqual(channels(cap.background), channels(cap.roleSurface), kind + ': one shared dark keycap surface');
-          assert.ok(contrast(cap.color, cap.background) >= 4.5, kind + ': key text stays readable');
-          assert.ok(contrast(cap.background, cap.parent) >= 1.12, kind + ': key fill separates from its actual carrier');
-          assert.ok(contrast(cap.background, cap.parent) > contrast(cap.hover, cap.parent)
-            && contrast(cap.background, cap.parent) < contrast(cap.pressed, cap.parent), kind + ': fill is stronger than hover and gentler than pressed');
-        } else {
-          assert.deepEqual(channels(cap.background), channels(kind === 'menu' ? cap.hover : cap.field), kind + ': existing light fill is preserved');
+        assert.ok(contrast(cap.color, cap.background) >= 4.5, kind + ': key text stays readable');
+        if (kind === 'menu') {
+          assert.equal(cap.height, '20px'); assert.equal(cap.align, 'center');
+          if (appearance === 'dark') {
+            assert.deepEqual(channels(cap.border), channels(cap.controlBorder), 'dark menu: existing frame uses the editor UI border color');
+            assert.ok(contrast(cap.border, cap.background) >= 2, 'dark menu: existing frame remains visible against the light fill');
+          } else {
+            assert.equal(cap.border, 'rgba(51, 51, 51, 0.6)', 'light menu: host frame color is unchanged');
+            assert.equal(cap.bottom, 'rgba(68, 68, 68, 0.6)', 'light menu: host lower edge color is unchanged');
+          }
         }
       }
       await page.keyboard.press('Escape');
@@ -247,23 +268,26 @@ try {
           await page.evaluate(surface => window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiColorsChanged', colors: { light: {}, dark: { surface } } } })), surface);
           const roles = await page.evaluate(() => {
             const style = document.documentElement.style;
-            return ['keycap-surface', 'text', 'text-muted'].map(name => style.getPropertyValue('--meo-ui-' + name));
+            return ['surface-hover', 'text', 'text-muted'].map(name => style.getPropertyValue('--meo-ui-' + name));
           });
           assert.ok(contrast(roles[1], roles[0]) >= 4.5 && contrast(roles[2], roles[0]) >= 4.5, 'custom ' + surface + ': inherited key text stays readable');
           assert.deepEqual(await documentKey(), documentKeyBefore, 'UI keycap colors cannot change document KBD');
         }
         await page.evaluate(() => {
           document.body.className = 'vscode-high-contrast'; document.documentElement.style.setProperty('--vscode-contrastBorder', '#FFFFFF');
+          document.documentElement.style.setProperty('--vscode-keybindingLabel-border', '#6FC3DF');
+          document.documentElement.style.setProperty('--vscode-keybindingLabel-bottomBorder', '#6FC3DF');
           window.dispatchEvent(new MessageEvent('message', { data: { type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: { name: 'Keycap HC fixture', type: 'dark', colors: {}, tokenColors: [] } } }));
         });
         await page.keyboard.type(' /'); await page.waitForSelector('.meo-input-suggestions:not([hidden])');
         const cap = await sample('.meo-suggestion-key kbd[data-key="Enter"]', '.meo-input-suggestions');
-        assert.equal(cap.shadow, 'none', 'high contrast has no added shadow');
+        assert.equal(cap.shadow, 'rgba(0, 0, 0, 0.36) 0px -1px 0px 0px inset', 'high contrast retains the host inset');
+        assert.equal(cap.border, 'rgb(111, 195, 223)', 'high contrast retains the native keybinding border');
         assert.equal(cap.outline, 'none', 'high contrast has no added keycap outline');
         await page.keyboard.press('Escape');
       }
     }
-    assert.deepEqual(errors, []); console.log('UI keycaps: candidate/settings subtle dark fills, bilingual light/dark, no added effects, unchanged tooltips/light fills, custom colors and document KBD isolation passed; screenshots: ' + folder);
+    assert.deepEqual(errors, []); console.log('UI keycaps: real VS Code KBD carrier, matching light/dark geometry, existing frame recolored in dark UI, original fills/insets/tooltips, custom colors and document KBD isolation passed; screenshots: ' + folder);
     if (process.argv.includes('--keycaps-only')) { await closeTestBrowser(browser); process.exit(0); }
   }
   if (process.argv.includes('--suggestions-only') || process.argv.length === 2) {

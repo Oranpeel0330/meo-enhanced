@@ -180,8 +180,6 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       const separator = nativeBorder ?? mix(raised, tint, appearance === 'light' ? 0.13 : 0.12);
       const floatBorder = nativeBorder ?? fit(mix(raised, tint, appearance === 'light' ? 0.20 : 0.19), [surface, raised], 1.3);
       const controlBorder = nativeBorder ?? fit(mix(raised, tint, appearance === 'light' ? 0.35 : 0.30), [surface, raised, field], 3.05);
-      // Static key labels use a slightly stronger fill than hover in dark UI.
-      const keycapSurface = appearance === 'dark' && !highContrast ? compatibleSurface(mix(raised, tint, 0.13)) : hover;
       const accentHover = fit(mix(accent, endpoint([accent]), appearance === 'light' ? 0.08 : 0.06), [endpoint([accent])], 4.55);
       const onAccent = fit(endpoint([accent, accentHover]), [accent, accentHover], 4.55);
       const accentText = fit(accent, surfaces, 4.55);
@@ -215,7 +213,6 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
         text, 'text-strong': strongText, 'text-muted': muted, 'text-disabled': mix(text, neutral(raised), 0.55),
         'text-selected': selectedText, separator, 'border-float': floatBorder, 'border-control': controlBorder,
         focus: nativeFocus ?? fit(accent, [surface, raised, field], 3.05),
-        'keycap-surface': keycapSurface,
         'selection-border': nativeActiveBorder ?? selected,
         accent, 'accent-hover': accentHover, 'on-accent': onAccent, 'accent-text': accentText,
         'feedback-action': feedbackAction,
@@ -236,6 +233,7 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       roles['scrollbar-active'] = `color-mix(in srgb, ${rgb(text)} 62%, transparent)`;
       const documentSurfaces = [contentSurface, inlineSurface, blockSurface, tableSurface];
       const documentLine = nativeBorder ?? fit(mix(contentSurface, documentTint, 0.06), [contentSurface, blockSurface, tableSurface], 1.4);
+      const blockBorder = nativeBorder ?? fit(documentLine, [blockSurface, contentSurface], documentDark ? 1.75 : 1.65);
       const blockHover = highContrast ? blockSurface : mix(blockSurface, documentTint, documentDark ? 0.07 : 0.04);
       const blockPressed = highContrast ? blockSurface : mix(blockSurface, documentTint, documentDark ? 0.11 : 0.07);
       const actionSurfaces = [blockSurface, blockHover, blockPressed];
@@ -248,7 +246,8 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       const documentRoles = Object.fromEntries(Object.entries({
         inline: inlineSurface, block: blockSurface, table: tableSurface, separator: documentLine,
         'inline-border': nativeBorder ?? mix(documentLine, inlineSurface, 0.65),
-        'block-border': nativeBorder ?? fit(documentLine, [blockSurface, contentSurface], documentDark ? 1.75 : 1.65),
+        'block-border': blockBorder,
+        'kbd-border': documentDark ? blockBorder : documentLine,
         'border-control': nativeBorder ?? fit(documentLine, documentSurfaces, 3.05),
         focus: nativeFocus ?? fit(accent, [...documentSurfaces, blockHover, blockPressed], 3.05),
         'block-hover': blockHover, 'block-pressed': blockPressed,
@@ -270,7 +269,7 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       'semantic-imageBackground': 'block', 'semantic-imageBorder': 'separator',
       'semantic-frontmatterPillBackground': 'inline', 'semantic-tableHeaderBackground': 'table',
       'semantic-tableBorder': 'separator', 'semantic-horizontalRule': 'separator',
-      'semantic-blockquoteBorder': 'separator', 'semantic-listGuide': 'separator', 'semantic-kbdBorder': 'separator',
+      'semantic-blockquoteBorder': 'separator', 'semantic-listGuide': 'separator', 'semantic-kbdBorder': 'kbd-border',
       'semantic-codeCopyForeground': 'action-text', 'semantic-codeCopyHoverForeground': 'action-hover-text',
       'semantic-codeLanguageLabelForeground': 'action-text',
       'semantic-codeCopyHoverBackground': 'block-hover'
