@@ -8590,6 +8590,21 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
 .meo-suggestion-key kbd[data-key='↑↓'] { width: 20px; padding: 0; }
 .meo-suggestion-key kbd svg { display: block; flex: none; }
 .meo-suggestion-key-text { display: block; text-box-trim: trim-both; text-box-edge: cap alphabetic; }
+/* UI keycaps share dark relief; document KBD retains its content preset. */
+html[data-editor-appearance='dark'] :is(.meo-suggestion-key kbd, .settings-key, .meo-tooltip-shortcut) {
+  background: var(--meo-ui-keycap-surface);
+  color: var(--meo-ui-keycap-text);
+  border-color: var(--meo-ui-keycap-border);
+  box-shadow: inset 0 0 0 1px var(--meo-ui-keycap-border), inset 0 2px 0 var(--meo-ui-keycap-highlight), inset 0 -2px 0 var(--meo-ui-keycap-shadow), 0 1px 1px var(--meo-ui-keycap-shadow);
+}
+html[data-editor-appearance='dark'] .settings-key {
+  box-shadow: inset 0 1px 0 var(--meo-ui-keycap-highlight), inset 0 -1px 0 var(--meo-ui-keycap-shadow), 0 1px 1px var(--meo-ui-keycap-shadow);
+}
+html[data-meo-ui-contrast='high'] :is(.meo-suggestion-key kbd, .settings-key, .meo-tooltip-shortcut) {
+  outline: 1px solid var(--meo-ui-keycap-border);
+  outline-offset: -1px;
+  box-shadow: none;
+}
 .meo-suggestion-settings { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .meo-suggestion-settings:hover, .meo-suggestion-settings:focus-visible { color: var(--meo-ui-text); text-decoration: underline; }
 .meo-suggestion-settings:focus-visible { outline: 1px solid var(--meo-ui-focus); outline-offset: 2px; }

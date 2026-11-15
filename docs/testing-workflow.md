@@ -3354,6 +3354,16 @@ release acceptance session.
 
 ## Settings, typing assistance and shortcuts
 
+`bun scripts/test-settings-window-production.ts --keycaps-only` checks the three
+UI keycap owners through the full Webview: input candidates, actual toolbar
+tooltips and the settings shortcut list. It belongs to the default settings
+release invocation and the appearance targeted plan. Chinese/English light/dark
+cases preserve the existing light fills, verify shared dark fill/contour/relief
+and readable key text, and exercise real opening, dismissal and focus return.
+Custom black, middle-gray, blue and pale UI surfaces retain readable key roles
+without changing document KBD; high contrast retains native outlines. Screenshots
+are saved under `.local/test-artifacts/ui-keycaps/`.
+
 `bun scripts/test-settings-window-production.ts --suggestions-only` runs the
 shared guidance and settings-entry cases from the owning production settings
 suite (also included in its default release invocation and rendered/viewport

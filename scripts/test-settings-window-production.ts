@@ -165,6 +165,103 @@ try {
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
     }, { text, mode, outline, legacyStrongColoring });
   };
+  if (process.argv.includes('--keycaps-only') || process.argv.length === 2) {
+    const folder = path.resolve('.local/test-artifacts/ui-keycaps'); await fs.mkdir(folder, { recursive: true });
+    const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+    const luminance = (color: string) => {
+      const values = channels(color).map(value => {
+        const channel = value / 255; return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return values.reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+    };
+    const contrast = (a: string, b: string) => (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
+    const sample = (selector: string, carrier: string) => page.$eval(selector, (cap, carrier) => {
+      const style = getComputedStyle(cap), parent = getComputedStyle(cap.closest(carrier)!);
+      const roles = document.documentElement.style;
+      return { background: style.backgroundColor, color: style.color, shadow: style.boxShadow, border: style.borderColor,
+        parent: parent.backgroundColor, outline: style.outlineColor, outlineWidth: style.outlineWidth,
+        roleSurface: roles.getPropertyValue('--meo-ui-keycap-surface'), roleBorder: roles.getPropertyValue('--meo-ui-keycap-border'),
+        roleHighlight: roles.getPropertyValue('--meo-ui-keycap-highlight'), roleShadow: roles.getPropertyValue('--meo-ui-keycap-shadow'),
+        hover: roles.getPropertyValue('--meo-ui-surface-hover'), field: roles.getPropertyValue('--meo-ui-surface-field') };
+    }, carrier);
+    for (const appearance of ['light', 'dark'] as const) for (const language of ['zh-CN', 'en'] as const) {
+      await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+      const text = '# Keyboard labels\n\n<kbd>Enter</kbd>\n\n';
+      await openFixture(text, 'live');
+      await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden') && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+      await page.evaluate(language => window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiLanguageChanged', uiLanguagePreference: language, uiLanguage: language, automaticUiLanguage: language } })), language);
+      await page.locator('.more-tools-wrapper > .format-button').click();
+      await page.locator(`button.editor-appearance-button[data-editor-appearance="${appearance}"]`).click();
+      await page.locator('.more-tools-wrapper > .format-button').click();
+      await page.evaluate(() => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true }); view.focus();
+      });
+      await page.keyboard.type('/'); await page.waitForSelector('.meo-input-suggestions:not([hidden])');
+      const menu = await sample('.meo-suggestion-key kbd[data-key="Enter"]', '.meo-input-suggestions');
+      await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `menu-${language}-${appearance}.png`) });
+      await (await page.$('.meo-suggestion-guidance'))!.screenshot({ path: path.join(folder, `guidance-${language}-${appearance}.png`) });
+      await page.keyboard.press('Escape'); await page.hover('[data-action="find"]');
+      await page.waitForSelector('.meo-tooltip.is-visible .meo-tooltip-shortcut:not([hidden])');
+      const tooltip = await sample('.meo-tooltip.is-visible .meo-tooltip-shortcut', '.meo-tooltip');
+      await (await page.$('.meo-tooltip.is-visible'))!.screenshot({ path: path.join(folder, `tooltip-${language}-${appearance}.png`) });
+      await page.keyboard.press('Escape'); await page.mouse.move(2, 2);
+      await page.locator('.more-tools-wrapper > .format-button').click(); await page.locator('.more-tools-settings-button').click();
+      await page.locator('.settings-tab[data-tab="shortcuts"]').click();
+      const settings = await sample('.settings-key', '.settings-window');
+      await (await page.$('.settings-key'))!.evaluate(cap => cap.closest('.settings-item')!.setAttribute('data-keycap-sample', ''));
+      await (await page.$('[data-keycap-sample]'))!.screenshot({ path: path.join(folder, `settings-${language}-${appearance}.png`) });
+      const keys = await page.$eval('.settings-shortcut-keys', group => group.getBoundingClientRect().toJSON());
+      await page.screenshot({ path: path.join(folder, `binding-${language}-${appearance}.png`), clip: {
+        x: Math.floor(keys.x) - 6, y: Math.floor(keys.y) - 6, width: Math.ceil(keys.right) - Math.floor(keys.x) + 12, height: Math.ceil(keys.bottom) - Math.floor(keys.y) + 12
+      } });
+      for (const [kind, cap] of Object.entries({ menu, tooltip, settings })) {
+        if (appearance === 'dark') {
+          assert.deepEqual(channels(cap.background), channels(cap.roleSurface), kind + ': one shared dark keycap surface');
+          assert.notEqual(cap.shadow, 'none', kind + ': visible keycap relief');
+          assert.ok(contrast(cap.color, cap.background) >= 4.5, kind + ': key text stays readable');
+          assert.ok(contrast(cap.roleBorder, cap.background) >= 1.4, kind + ': key contour remains distinguishable');
+          assert.ok(contrast(cap.background, cap.parent) >= 1.12, kind + ': key fill separates from its actual carrier');
+          assert.ok(luminance(cap.roleShadow) < luminance(cap.background) && luminance(cap.roleHighlight) > luminance(cap.background), kind + ': raised top and recessed lower rim');
+        } else {
+          assert.deepEqual(channels(cap.background), channels(kind === 'menu' ? cap.hover : kind === 'settings' ? cap.field : 'rgb(85, 85, 85)'), kind + ': existing light fill is preserved');
+          assert.equal(cap.shadow, 'none', kind + ': existing light relief is preserved');
+        }
+      }
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(() => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        return view.hasFocus && view.state.doc.toString().endsWith('/');
+      }), true, 'closing the styled settings restores the unchanged document');
+      if (appearance === 'dark' && language === 'en') {
+        const documentKey = () => page.$eval('.meo-md-kbd', cap => {
+          const style = getComputedStyle(cap); return [style.backgroundColor, style.color, style.borderColor, style.boxShadow];
+        });
+        const documentKeyBefore = await documentKey();
+        for (const surface of ['#000000', '#777777', '#002244', '#EEEEEE']) {
+          await page.evaluate(surface => window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiColorsChanged', colors: { light: {}, dark: { surface } } } })), surface);
+          const roles = await page.evaluate(() => {
+            const style = document.documentElement.style;
+            return ['surface', 'border', 'text'].map(name => style.getPropertyValue('--meo-ui-keycap-' + name));
+          });
+          assert.ok(contrast(roles[2], roles[0]) >= 4.5, 'custom ' + surface + ': readable key text');
+          assert.ok(contrast(roles[1], roles[0]) >= 1.4, 'custom ' + surface + ': distinguishable contour');
+          assert.deepEqual(await documentKey(), documentKeyBefore, 'UI keycap colors cannot change document KBD');
+        }
+        await page.evaluate(() => {
+          document.body.className = 'vscode-high-contrast'; document.documentElement.style.setProperty('--vscode-contrastBorder', '#FFFFFF');
+          window.dispatchEvent(new MessageEvent('message', { data: { type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: { name: 'Keycap HC fixture', type: 'dark', colors: {}, tokenColors: [] } } }));
+        });
+        await page.keyboard.type(' /'); await page.waitForSelector('.meo-input-suggestions:not([hidden])');
+        const cap = await sample('.meo-suggestion-key kbd[data-key="Enter"]', '.meo-input-suggestions');
+        assert.equal(cap.shadow, 'none', 'high contrast keeps native outlines instead of decorative shadows');
+        assert.equal(cap.outlineWidth, '1px'); assert.equal(cap.outline, 'rgb(255, 255, 255)');
+        await page.keyboard.press('Escape');
+      }
+    }
+    assert.deepEqual(errors, []); console.log('UI keycaps: three real UI owners, bilingual light/dark, readable shared dark relief, unchanged light fills and native high-contrast outlines passed; screenshots: ' + folder);
+    if (process.argv.includes('--keycaps-only')) { await closeTestBrowser(browser); process.exit(0); }
+  }
   if (process.argv.includes('--suggestions-only') || process.argv.length === 2) {
     const folder = path.resolve('.local/test-artifacts/suggestion-guidance'); await fs.mkdir(folder, { recursive: true });
     const examples = [

@@ -165,6 +165,7 @@ function targetedCommands(
       ];
     case 'appearance':
       return [
+        { args: ['scripts/test-settings-window-production.ts', '--keycaps-only'] },
         packageScript('test:theme-inheritance'),
         script('scripts/test-ui-colors-production.ts'),
         script('scripts/test-outline-colors-production.ts'),
