@@ -215,13 +215,16 @@ try {
               const cap = key.getBoundingClientRect(), ink = key.firstElementChild!.getBoundingClientRect();
               return cap.height === 20 && Math.abs(cap.top + cap.height / 2 - ink.top - ink.height / 2) < 0.5 && Math.abs(cap.left + cap.width / 2 - ink.left - ink.width / 2) < 0.5;
             }), arrowIcon: !!footer.querySelector('kbd[aria-label] svg'),
-            distinctGuidance: getComputedStyle(footer).backgroundColor !== getComputedStyle(popup).backgroundColor,
+            unifiedGuidance: getComputedStyle(footer).backgroundColor === getComputedStyle(popup).backgroundColor,
+            insetSeparator: (() => { const line = getComputedStyle(footer, '::before'), frame = getComputedStyle(footer);
+              return line.content !== 'none' && parseFloat(line.left) >= 8 && parseFloat(line.right) >= 8 && parseFloat(line.height) === 1
+                && frame.borderTopWidth === '0px' && frame.borderBottomWidth === '0px'; })(),
             text: view.state.doc.toString(), selection: view.state.selection.main.toJSON(), updates: (window as any).__messages.filter((m: any) => m.type === 'updateEditingPreferences').length };
         });
         assert.equal(layout.kind, item.kind, label); assert.equal(layout.placement, above ? 'above' : 'below', label + ': actual placement');
         assert.equal(layout.fits && layout.singleLine, true, label + ': complete guidance fits one line: ' + JSON.stringify(layout));
         assert.deepEqual(layout.keys, ['↑↓', 'Enter', 'Esc']); assert.ok(layout.width >= (language === 'en' ? 304 : 288), label + ': widened fixed minimum');
-        assert.equal(layout.centeredKeys && layout.arrowIcon && layout.distinctGuidance, true, label + ': centered key contents, vector arrows and a subtle separate guidance surface');
+        assert.equal(layout.centeredKeys && layout.arrowIcon && layout.unifiedGuidance && layout.insetSeparator, true, label + ': centered key contents, vector arrows, shared surface and an inset separator');
         assert.ok(above ? layout.footer.bottom <= layout.list.top + 1 : layout.footer.top >= layout.list.bottom - 1, label + ': guidance stays away from input');
         if (mode === 'source') await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `${language}-${item.name ?? item.kind}.png`) });
         await page.locator('.meo-suggestion-settings').click();

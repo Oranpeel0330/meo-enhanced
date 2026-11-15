@@ -8580,8 +8580,10 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
 .meo-html-suggestions[data-html-kind='property'] { --meo-suggestion-width: max(224px, 17.23em); }
 .meo-html-suggestions[data-html-kind='constant'] { --meo-suggestion-width: max(304px, 23.38em); }
 .meo-math-suggestions { --meo-suggestion-width: max(336px, 25.85em); }
-.meo-suggestion-guidance { box-sizing: border-box; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border-top: 1px solid var(--meo-ui-separator); background: var(--meo-ui-surface); color: var(--meo-ui-text-muted); font: 12px/18px var(--vscode-font-family, system-ui, sans-serif); white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
-.meo-input-suggestions[data-placement='above'] .meo-suggestion-guidance { order: -1; border-top: 0; border-bottom: 1px solid var(--meo-ui-separator); }
+.meo-suggestion-guidance { position: relative; box-sizing: border-box; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 8px 6px; background: var(--meo-ui-surface-raised); color: var(--meo-ui-text-muted); font: 12px/18px var(--vscode-font-family, system-ui, sans-serif); white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.meo-suggestion-guidance::before { content: ''; position: absolute; left: 8px; right: 8px; top: 0; height: 1px; background: var(--meo-ui-separator); pointer-events: none; }
+.meo-input-suggestions[data-placement='above'] .meo-suggestion-guidance { order: -1; padding-block: 6px 7px; }
+.meo-input-suggestions[data-placement='above'] .meo-suggestion-guidance::before { top: auto; bottom: 0; }
 .meo-suggestion-keys { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .meo-suggestion-key { display: inline-flex; align-items: center; gap: 4px; }
 .meo-suggestion-key kbd { box-sizing: border-box; display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; height: 20px; min-width: 20px; padding: 0 6px; border-radius: 4px; background: var(--meo-ui-surface-hover); color: inherit; font: inherit; line-height: 1; }
