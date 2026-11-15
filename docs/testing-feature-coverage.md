@@ -70,6 +70,8 @@
 
 ## 公开设置
 
+七类候选共用单行按键说明和对应设置入口：中文至少 288px、英文至少 304px，按实际上下展开方向把说明放在远离输入行的一端；入口仅定位并短暂强调整行，开关由用户操作，关闭设置恢复输入焦点。验证见[正式设置窗口](../scripts/test-settings-window-production.ts)的 `--suggestions-only` 场景，覆盖中英文、深浅色、HTML 三种候选和两个编辑模式；菜单锚定及大文档更新另见[候选定位回归](../scripts/test-input-suggestion-position-production.ts)。
+
 | 设置 | 结果与证据 |
 | --- | --- |
 | `meoEnhanced.disabledExtraFeatures` | Extras 配置与文档视图见[视图合同](../scripts/test-document-views.ts)，配套渲染见 `MEO_EXTRAS_DIR` 浏览器专项。未发布的 Extras 设置 Tab 暂不接入；后台状态变化、搜索、键盘导航和重开均不显示该入口，打开设置不请求 Extras 面板。中英文/明暗/窄屏及普通和大文档检查：[正式设置页](../scripts/test-settings-window-production.ts)（`--extras-only`）。 |

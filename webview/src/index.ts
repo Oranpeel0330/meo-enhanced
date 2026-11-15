@@ -3208,6 +3208,7 @@ const mountEditorForMode = async (mode: 'live' | 'source', signal: AbortSignal):
     initialMode: mode,
     initialInputAssistance: editingPreferences.input,
     requestLinkCandidates: async input => { const result = await editorServicesTransport.request({ action: 'links', ...input }); return result && 'candidates' in result ? result.candidates : []; },
+    openInputSuggestionSettings: setting => getSettingsWindow().openTypingSetting(setting),
     initialGitGutter: gitChangesGutterVisible,
     initialLongCodeBlockFolding: longCodeBlockFoldingEnabled,
     initialTableStickyHeaderEnabled: tableStickyHeaderEnabled,

@@ -134,6 +134,7 @@ function targetedCommands(
       ];
     case 'rendered':
       return [
+        { args: ['scripts/test-settings-window-production.ts', '--suggestions-only'] },
         script('scripts/test-input-suggestion-position-production.ts'),
         packageScript('test:rendered-source'),
         script('scripts/test-live-viewport-content-production.ts'),
@@ -216,6 +217,7 @@ function targetedCommands(
       ];
     case 'viewport':
       return [
+        { args: ['scripts/test-settings-window-production.ts', '--suggestions-only'] },
         script('scripts/test-input-suggestion-position-production.ts'),
         script('scripts/test-navigation-reveal-production.ts'),
         packageScript('test:toolbar-viewport'),

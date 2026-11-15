@@ -30,6 +30,7 @@ export type InputAssistance = {
   readonly math: boolean;
   readonly html: boolean;
 };
+export type InputSuggestionSetting = 'documentSuggestions' | 'slash' | 'emoji' | 'math' | 'html';
 /** Missing commands use platform defaults; an explicit empty array removes a binding. */
 export type ShortcutOverrides = Partial<Record<EditorCommandId, readonly string[]>>;
 export type EditingPreferences = {

@@ -8,7 +8,7 @@ import { createSegmentedControl } from './segmentedControl';
 import { createAppearanceSettings, type AppearanceSettingsOptions } from './appearanceSettings';
 import type { createPreviewPresetSettings } from './previewPresetSettings';
 import { canBindCommand, commandContext, effectiveShortcuts, shortcutConflicts, shortcutFromStroke, type ShortcutPlatform } from '../../../src/application/editingPreferences';
-import type { EditingPreferences, EditingPreferencesChange, EditorCommandId } from '../../../src/foundation/editingPreferences';
+import type { EditingPreferences, EditingPreferencesChange, EditorCommandId, InputSuggestionSetting } from '../../../src/foundation/editingPreferences';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
 import { aboutCatalog, commandTitle, commandTitles, generalSearchKeywords, imageLocationSearchKeywords, modeOptions, nativeShortcutLabels, normalizeSettingsSearch, sectionTitles, settingsSearchMatches, settingsText, shortcutSearchKeywords, shortcutSections, shortcutDescriptions, tablePasteContexts, typingCatalog, typingSearchKeywords, typingSections, type SettingsTab } from '../application/settingsCatalog';
 
@@ -55,6 +55,8 @@ export function createSettingsWindow(options: {
   let recording: { command: EditorCommandId; draft: string } | null = null;
   let resetOpen = false;
   let disposed = false;
+  let revealedSetting: InputSuggestionSetting | null = null;
+  let revealTimer: ReturnType<typeof setTimeout> | null = null;
   let renderedSignature = '';
   let valuePresenters: (() => void)[] = [];
   let controlDisposers: (() => void)[] = [];
@@ -109,6 +111,10 @@ export function createSettingsWindow(options: {
   const dismissReset = () => { resetOpen = false; resetPopover.hidden = true; reset.setAttribute('aria-expanded', 'false'); };
   const focusCommand = (command: EditorCommandId) => (content.querySelector<HTMLButtonElement>(`[data-edit-command='${command}']`) ?? search).focus();
   const finishRecording = () => { const command = recording?.command; recording = null; renderContent(); if (command) focusCommand(command); };
+  function clearRevealedSetting() {
+    if (revealTimer !== null) clearTimeout(revealTimer); revealTimer = null; revealedSetting = null;
+    for (const row of content.querySelectorAll('.settings-item.is-revealed')) row.classList.remove('is-revealed');
+  }
   async function save(change: EditingPreferencesChange, key: string): Promise<boolean> {
     if (pending.has(key) || disposed) return false;
     pending.add(key); status.hidden = true; renderContent();
@@ -151,6 +157,7 @@ export function createSettingsWindow(options: {
   }
   function renderTyping(item: typeof typingCatalog[number]) {
     const row = settingRow(t(...item.title), t(...item.description)); row.dataset.setting = item.key;
+    row.classList.toggle('is-revealed', revealedSetting === item.key);
     const value = options.getPreferences().input[item.key];
     const set = (next: boolean | 'smart' | 'always' | 'off') => { void save({ type: 'input', key: item.key, value: next }, item.key); };
     if (typeof value === 'boolean') row.append(makeSwitch(() => options.getPreferences().input[item.key] as boolean, t(...item.title), set,
@@ -317,6 +324,7 @@ export function createSettingsWindow(options: {
     }
   }
   function selectTab(next: SettingsTab) {
+    if (next !== 'typing') clearRevealedSetting();
     if (tab === 'about' && next !== 'about') about.close();
     scrollPositions[tab] = content.scrollTop; tab = next; recording = null; dismissReset(); renderContent(); content.scrollTop = scrollPositions[next]; updateNavigation();
     if (tab === 'about' && dialog.open) about.open();
@@ -331,11 +339,11 @@ export function createSettingsWindow(options: {
     resetTitle.textContent = t('恢复全部快捷键？', 'Reset all shortcuts?'); resetDescription.textContent = t('自定义绑定将被替换，其他设置保持不变。', 'Custom bindings will be replaced. Other settings stay unchanged.');
     cancelReset.textContent = t('取消', 'Cancel'); confirmReset.textContent = t('恢复默认', 'Reset'); renderContent();
   }
-  function closeWindow() { appearance.close(); about.close(); options.imageLocation?.flush(); recording = null; dismissReset(); if (dialog.open) dialog.close(); options.returnFocus()?.focus(); }
+  function closeWindow() { clearRevealedSetting(); appearance.close(); about.close(); options.imageLocation?.flush(); recording = null; dismissReset(); if (dialog.open) dialog.close(); options.returnFocus()?.focus(); }
   close.addEventListener('click', closeWindow);
   dialog.addEventListener('cancel', event => { event.preventDefault(); if (resetOpen) { dismissReset(); reset.focus(); } else if (recording) finishRecording(); else closeWindow(); });
   dialog.addEventListener('click', event => { if (event.target === dialog) { const bounds = dialog.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeWindow(); } });
-  search.addEventListener('input', () => { recording = null; dismissReset(); renderContent(); content.scrollTop = 0; updateNavigation(); });
+  search.addEventListener('input', () => { clearRevealedSetting(); recording = null; dismissReset(); renderContent(); content.scrollTop = 0; updateNavigation(); });
   clear.addEventListener('click', () => { search.value = ''; search.dispatchEvent(new Event('input')); search.focus(); });
   content.addEventListener('scroll', updateNavigation, { passive: true });
   reset.addEventListener('click', () => { recording = null; renderContent(); resetOpen = true; resetPopover.hidden = false; reset.setAttribute('aria-expanded', 'true'); cancelReset.focus(); });
@@ -345,7 +353,18 @@ export function createSettingsWindow(options: {
   document.addEventListener('focusin', event => { if (resetOpen && event.target instanceof Node && !resetPopover.contains(event.target) && !reset.contains(event.target)) dismissReset(); }, { signal: abort.signal });
   window.addEventListener('blur', dismissReset, { signal: abort.signal });
   present();
-  return { open(next?: SettingsTab) { if (disposed) return; if (next) { search.value = ''; selectTab(next); } if (dialog.open) return; appearance.open(); present(); void options.imageLocation?.refresh(); options.extensionFeatures?.refresh(); dialog.showModal(); if (tab === 'about') about.open(); updateNavigation(); search.focus(); }, close: closeWindow,
+  function openWindow(next?: SettingsTab) { if (disposed) return; if (next) { search.value = ''; selectTab(next); } if (dialog.open) return; appearance.open(); present(); void options.imageLocation?.refresh(); options.extensionFeatures?.refresh(); dialog.showModal(); if (tab === 'about') about.open(); updateNavigation(); search.focus(); }
+  return { open: openWindow, close: closeWindow,
+    openTypingSetting(setting: InputSuggestionSetting) {
+      if (disposed) return;
+      clearRevealedSetting(); openWindow('typing'); revealedSetting = setting;
+      const row = content.querySelector<HTMLElement>(`[data-setting='${setting}']`);
+      if (!row) return;
+      row.classList.add('is-revealed');
+      content.scrollTop += row.getBoundingClientRect().top - content.getBoundingClientRect().top - 20;
+      row.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true }); updateNavigation();
+      revealTimer = setTimeout(clearRevealedSetting, 2000);
+    },
     isOpen: () => dialog.open, present, setLanguage(next: UiLanguage) { language = next; present(); },
-    dispose() { disposed = true; for (const dispose of controlDisposers) dispose(); appearance.dispose(); about.dispose(); abort.abort(); disposeSearchFocus?.(); options.previewPresets?.clear(); if (dialog.open) dialog.close(); dialog.remove(); } };
+    dispose() { disposed = true; clearRevealedSetting(); for (const dispose of controlDisposers) dispose(); appearance.dispose(); about.dispose(); abort.abort(); disposeSearchFocus?.(); options.previewPresets?.clear(); if (dialog.open) dialog.close(); dialog.remove(); } };
 }

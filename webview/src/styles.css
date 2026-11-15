@@ -8330,6 +8330,8 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 }
 .settings-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--meo-ui-separator); }
 .settings-item:last-child { border-bottom: 0; }
+.settings-item[data-setting] { transition: background-color 180ms ease; }
+.settings-item.is-revealed { background-color: var(--meo-ui-surface-selected); }
 .settings-item-dependent { padding-left: 24px; }
 .settings-item-dependent.is-disabled .settings-item-text { color: var(--meo-ui-text-disabled); }
 .settings-item-dependent.is-disabled .settings-description { color: var(--meo-ui-text-disabled); }
@@ -8538,6 +8540,8 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
 html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-conflict, .settings-status) { color: var(--meo-ui-danger, #f48771); }
 
 .meo-input-suggestions {
+  --meo-suggestion-min-width: 288px;
+  --meo-suggestion-width: 360px;
   --meo-suggestion-selected-background: var(--meo-ui-surface-selected);
   --meo-suggestion-match-color: var(--meo-notice-info, #3483ff);
   --meo-suggestion-shadow-color: rgb(31 35 40 / 18%);
@@ -8550,7 +8554,7 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   background-color: var(--meo-ui-surface);
   display: flex;
   flex-direction: column;
-  width: min(360px, calc(100vw - 16px));
+  width: min(max(var(--meo-suggestion-min-width), var(--meo-suggestion-width)), calc(100vw - 16px));
   max-height: var(--meo-suggestion-max-height);
   padding: 0;
   border-radius: 10px;
@@ -8564,17 +8568,26 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   font-family: var(--meo-suggestion-font, var(--meo-active-editor-font));
   font-size: var(--meo-suggestion-font-size, 13px);
 }
-.meo-link-suggestions { width: min(max(320px, calc(24em + 8px)), calc(100vw - 16px)); }
-.meo-path-suggestions { width: min(clamp(248px, calc(19em + 1px), 300px), calc(100vw - 16px)); }
-.meo-input-suggestions[data-suggestion-kind='slash'] { width: min(max(288px, 22.15em), calc(100vw - 16px)); }
-.meo-input-suggestions[data-suggestion-kind='slash']:lang(en) { width: min(max(336px, 25.85em), calc(100vw - 16px)); }
-.meo-input-suggestions[data-suggestion-kind='headings'] { width: min(max(272px, 20.92em), calc(100vw - 16px)); }
-.meo-input-suggestions[data-suggestion-kind='headings']:lang(en) { width: min(max(360px, 27.69em), calc(100vw - 16px)); }
-.meo-narrow-suggestions { width: min(max(184px, 14.15em), calc(100vw - 16px)); }
-.meo-html-suggestions { width: min(max(208px, 16em), calc(100vw - 16px)); }
-.meo-html-suggestions[data-html-kind='property'] { width: min(max(224px, 17.23em), calc(100vw - 16px)); }
-.meo-html-suggestions[data-html-kind='constant'] { width: min(max(304px, 23.38em), calc(100vw - 16px)); }
-.meo-math-suggestions { width: min(max(336px, 25.85em), calc(100vw - 16px)); }
+.meo-input-suggestions:lang(en) { --meo-suggestion-min-width: 304px; }
+.meo-link-suggestions { --meo-suggestion-width: max(320px, calc(24em + 8px)); }
+.meo-path-suggestions { --meo-suggestion-width: clamp(248px, calc(19em + 1px), 300px); }
+.meo-input-suggestions[data-suggestion-kind='slash'] { --meo-suggestion-width: max(288px, 22.15em); }
+.meo-input-suggestions[data-suggestion-kind='slash']:lang(en) { --meo-suggestion-width: max(336px, 25.85em); }
+.meo-input-suggestions[data-suggestion-kind='headings'] { --meo-suggestion-width: max(272px, 20.92em); }
+.meo-input-suggestions[data-suggestion-kind='headings']:lang(en) { --meo-suggestion-width: max(360px, 27.69em); }
+.meo-narrow-suggestions { --meo-suggestion-width: max(184px, 14.15em); }
+.meo-html-suggestions { --meo-suggestion-width: max(208px, 16em); }
+.meo-html-suggestions[data-html-kind='property'] { --meo-suggestion-width: max(224px, 17.23em); }
+.meo-html-suggestions[data-html-kind='constant'] { --meo-suggestion-width: max(304px, 23.38em); }
+.meo-math-suggestions { --meo-suggestion-width: max(336px, 25.85em); }
+.meo-suggestion-guidance { box-sizing: border-box; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 8px; border-top: 1px solid var(--meo-ui-separator); background: var(--meo-ui-surface-raised); color: var(--meo-ui-text-muted); font: 12px/18px var(--vscode-font-family, system-ui, sans-serif); white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.meo-input-suggestions[data-placement='above'] .meo-suggestion-guidance { order: -1; border-top: 0; border-bottom: 1px solid var(--meo-ui-separator); }
+.meo-suggestion-keys { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.meo-suggestion-key { display: inline-flex; align-items: center; gap: 4px; }
+.meo-suggestion-key kbd { padding: 2px 6px; border-radius: 4px; background: var(--meo-ui-surface-hover); color: inherit; font: inherit; line-height: 16px; }
+.meo-suggestion-settings { flex: 0 0 auto; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.meo-suggestion-settings:hover, .meo-suggestion-settings:focus-visible { color: var(--meo-ui-text); text-decoration: underline; }
+.meo-suggestion-settings:focus-visible { outline: 1px solid var(--meo-ui-focus); outline-offset: 2px; }
 .meo-input-suggestions[hidden] { display: none; }
 html[data-editor-appearance='dark'] .meo-input-suggestions {
   --meo-suggestion-match-color: var(--meo-ui-text-emphasis);

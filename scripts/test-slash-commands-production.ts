@@ -603,7 +603,7 @@ try {
   for (const value of ['Label', 'target', 'Hint']) { await page.keyboard.type(value); await page.keyboard.press('Tab'); }
   assert.equal(await page.evaluate(() => (document.activeElement as HTMLTextAreaElement).value), '[Label](target "Hint")', 'mouse-selected templates retain Tab navigation');
   await prepareCell(); await page.keyboard.type('/b'); await open();
-  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-controls')), await page.$eval('.meo-input-suggestions', e => e.id), 'the native input owns its candidate accessibility relationship');
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-controls')), await page.$eval('.meo-suggestion-list', e => e.id), 'the native input controls the listbox, excluding the separate settings action');
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
   assert.equal(await page.evaluate(() => (document.activeElement as HTMLTextAreaElement).value), '******', 'native arrow selection remains stable after keyup');
   await page.evaluate(() => (window as any).editor.undo()); await waitText(table.replace('|  | x |', '| /b | x |'));

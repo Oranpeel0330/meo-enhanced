@@ -86,13 +86,13 @@ try {
     phase = mode + '/' + appearance + '/' + language;
     await prepare('[File](/)', 8, mode, appearance, language);
     await visible(); assert.equal(await page.$('.meo-tooltip.is-visible'), null, 'unclipped directory has no hint');
-    assert.equal(await menuWidth(), 248, 'normal-size directory menu is compact');
+    assert.equal(await menuWidth(), language === 'en' ? 304 : 288, 'normal-size directory menu fits the single-line guidance');
     assert.equal(await page.$('.meo-input-suggestions .meo-input-suggestion-detail'), null, 'directory candidates do not repeat their path');
     await page.keyboard.press('Tab'); await visible();
     await page.waitForFunction(() => (window as any).requests.some((request: any) => request.query === '/docs/'));
     await tooltip();
     assert.equal(await tooltipText(), longName, 'path hint reveals only the clipped filename without hover');
-    assert.equal(await menuWidth(), 248, 'directory chaining does not change width');
+    assert.equal(await menuWidth(), language === 'en' ? 304 : 288, 'directory chaining does not change width');
     assert.equal(await page.$('.meo-slash-suggestions:not([hidden])'), null, 'directory slash does not become a command');
     assert.equal(await page.evaluate(() => document.activeElement === (window as any).editor.view.contentDOM), true, 'hint retains editing focus');
     const geometry = await page.evaluate(() => {
@@ -104,7 +104,7 @@ try {
     assert.ok(['left', 'right'].includes(geometry.side!));
     await page.keyboard.press('ArrowDown');
     await page.waitForFunction(() => !document.querySelector('.meo-tooltip.is-visible'));
-    assert.equal(await menuWidth(), 248, 'short selection does not shrink the menu');
+    assert.equal(await menuWidth(), language === 'en' ? 304 : 288, 'short selection does not shrink the menu');
     await page.keyboard.press('ArrowUp'); await tooltip();
     await page.keyboard.press('Enter'); await closed();
     assert.equal(await text(), '[File](/docs/' + encodeMarkdownPath(longName) + ')');

@@ -7,7 +7,8 @@ import { htmlCompletionSource, htmlLanguage } from '@codemirror/lang-html';
 import { parser } from '@lezer/markdown';
 import { isolateHistory } from '@codemirror/commands';
 import type { LinkCandidate } from '../../../src/protocol/editorServices';
-import { detectSuggestionContext, emojiSuggestions, isSuggestionAddress, type SuggestionContext } from '../application/inputSuggestions';
+import { detectSuggestionContext, emojiSuggestions, inputSuggestionSetting, isSuggestionAddress, type SuggestionContext } from '../application/inputSuggestions';
+import type { InputSuggestionSetting } from '../../../src/foundation/editingPreferences';
 import { inputAssistanceFacet } from './typingAssistance';
 import { isCodeInput } from './pasteAssistance';
 import { uiLanguageFacet } from './uiLanguage';
@@ -44,6 +45,7 @@ function incompleteHtmlCompletion(state: EditorState, position: number, explicit
 }
 
 export function createInputSuggestions(options: {
+  readonly openSettings?: (setting: InputSuggestionSetting) => void;
   readonly inputContext: (state: EditorState, position: number) => MarkdownInputContext;
   readonly mathContext: (state: EditorState, position: number) => MathCompletionBody | null;
   readonly renderMathPreview: (source: string) => string | null;
@@ -119,7 +121,7 @@ export function createInputSuggestions(options: {
     get reverseOrder() { return this.view.state.facet(inputAssistanceFacet).slashPreferAbove; }
     items: readonly Suggestion[] = []; context: InputSuggestionContext | null = null; head = 0;
     constructor(readonly view: EditorView) {
-      this.popup.className = 'meo-input-suggestions'; this.popup.hidden = true; this.popup.setAttribute('role', 'listbox');
+      this.popup.className = 'meo-input-suggestions'; this.popup.hidden = true; this.popup.setAttribute('role', 'group');
       this.popup.id = 'meo-input-suggestions-' + createRequestPrefix();
       view.dom.ownerDocument.body.append(this.popup);
       for (const type of ['input', 'keydown', 'select', 'pointerup', 'compositionstart', 'compositionend', 'focusout']) view.dom.addEventListener(type, this.nativeEvent, type === 'keydown' || type.startsWith('composition'));
@@ -296,6 +298,8 @@ export function createInputSuggestions(options: {
       this.popup.classList.toggle('meo-narrow-suggestions', this.context?.type === 'emoji');
       this.popup.style.removeProperty('--meo-suggestion-max-height'); this.popup.style.removeProperty('max-width');
       const list = document.createElement('div'); list.className = 'meo-suggestion-list';
+      list.id = this.popup.id + '-list'; list.setAttribute('role', 'listbox');
+      list.setAttribute('aria-label', this.popup.lang === 'zh-CN' ? '输入候选' : 'Input suggestions');
       if (slash || this.context?.type === 'math') list.classList.add('meo-slash-list');
       this.popup.append(list);
       const font = getComputedStyle(this.view.contentDOM);
@@ -370,10 +374,31 @@ export function createInputSuggestions(options: {
         });
         if (this.reverseOrder) list.prepend(row); else list.append(row);
       });
+      this.renderGuidance();
       this.popup.hidden = false; this.ariaInput = this.cellInput ?? this.view.contentDOM;
-      this.ariaInput.setAttribute('aria-controls', this.popup.id); this.ariaInput.setAttribute('aria-activedescendant', this.popup.id + '-' + this.index);
+      this.ariaInput.setAttribute('aria-controls', list.id); this.ariaInput.setAttribute('aria-activedescendant', this.popup.id + '-' + this.index);
       this.position();
       if (!this.popup.hidden) { this.scrollSelection(); this.position(); }
+    }
+    renderGuidance() {
+      const zh = this.popup.lang === 'zh-CN', footer = document.createElement('div');
+      footer.className = 'meo-suggestion-guidance';
+      const keys = document.createElement('span'); keys.className = 'meo-suggestion-keys';
+      for (const [key, label] of [['↑↓', zh ? '移动' : 'Move'], ['Enter', zh ? '选择' : 'Select'], ['Esc', zh ? '关闭' : 'Close']]) {
+        const group = document.createElement('span'), cap = document.createElement('kbd');
+        group.className = 'meo-suggestion-key'; cap.textContent = key;
+        group.append(cap, document.createTextNode(label)); keys.append(group);
+      }
+      const settings = document.createElement('button'); settings.type = 'button'; settings.className = 'meo-suggestion-settings';
+      settings.textContent = zh ? '不再显示' : 'Disable…'; settings.disabled = !options.openSettings;
+      settings.dataset.tooltip = zh ? '前往设置关闭此类候选' : 'Open settings to disable these suggestions';
+      settings.addEventListener('click', () => {
+        if (!this.context) return;
+        const setting = inputSuggestionSetting(this.context.type);
+        this.dismissed = true; this.htmlActivation = null; this.slashFrom = null; this.cellFrom = null; this.cellInput = null;
+        this.clear(); options.openSettings?.(setting);
+      });
+      footer.append(keys, settings); this.popup.append(footer);
     }
     select(index: number, scroll: boolean) {
       this.index = index;
@@ -486,6 +511,7 @@ export function createInputSuggestions(options: {
       // Stay on this side while it meets the target; equal row capacities must not cause a flip.
       const currentRows = this.above ? aboveRows : belowRows, otherRows = this.above ? belowRows : aboveRows;
       if (currentRows < minimumRows && otherRows > currentRows) this.above = !this.above;
+      this.popup.dataset.placement = this.above ? 'above' : 'below';
       const available = this.above ? above : below;
       const rows = Math.floor((Math.min(preferred, available) - chrome + 0.001) / first.height);
       if (rows < 1) { close(); return; }

@@ -1,5 +1,8 @@
-import type { InputAssistance } from '../../../src/foundation/editingPreferences';
+import type { InputAssistance, InputSuggestionSetting } from '../../../src/foundation/editingPreferences';
 export type SuggestionContext = { readonly type: 'slash' | 'emoji' | 'documents' | 'paths' | 'headings'; readonly query: string; readonly target: string; readonly length: number; readonly wiki: boolean };
+export function inputSuggestionSetting(kind: SuggestionContext['type'] | 'math' | 'html'): InputSuggestionSetting {
+  return kind === 'documents' || kind === 'paths' || kind === 'headings' ? 'documentSuggestions' : kind;
+}
 /** Address ownership is independent of whether suggestions are enabled or available. */
 export const isSuggestionAddress = (before: string) => /\]\([^)]*$|\]\[[^\]]*$|\[\[[^\]]*$|!\[[^\]]*$|<[^>]*$|(?:[a-z][a-z0-9+.-]*:\/+|www\.)[^\s]*$/i.test(before);
 /** Pinyin separators affect the current preedit segment only; lengths and directory prefixes remain literal. */

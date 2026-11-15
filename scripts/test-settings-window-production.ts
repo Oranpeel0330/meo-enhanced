@@ -165,6 +165,93 @@ try {
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
     }, { text, mode, outline, legacyStrongColoring });
   };
+  if (process.argv.includes('--suggestions-only') || process.argv.length === 2) {
+    const folder = path.resolve('.local/test-artifacts/suggestion-guidance'); await fs.mkdir(folder, { recursive: true });
+    const examples = [
+      { kind: 'slash', before: '', after: '', typed: '/', setting: 'slash' },
+      { kind: 'documents', before: '[[', after: ']]', typed: 'pr', setting: 'documentSuggestions' },
+      { kind: 'paths', before: '[Guide](./', after: ')', typed: 'g', setting: 'documentSuggestions' },
+      { kind: 'headings', before: '[Go](#', after: ')', typed: 'ov', setting: 'documentSuggestions' },
+      { kind: 'emoji', before: '', after: '', typed: ':s', setting: 'emoji' },
+      { kind: 'math', before: '$', after: '$', typed: '\\s', setting: 'math' },
+      { kind: 'html', name: 'html-tags', before: '', after: '', typed: '<d', setting: 'html' },
+      { kind: 'html', name: 'html-attributes', before: '<div ', after: '></div>', typed: 'c', setting: 'html' },
+      { kind: 'html', name: 'html-values', before: '<input type="', after: '">', typed: 't', setting: 'html' }
+    ];
+    for (const mode of ['source', 'live'] as const) for (const language of ['zh-CN', 'en'] as const) {
+      await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+      await openFixture('', mode);
+      await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden') && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+      await page.evaluate(language => {
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiLanguageChanged', uiLanguagePreference: language, uiLanguage: language, automaticUiLanguage: language } }));
+        const g = window as any; g.__preferences.input.emoji = true;
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences: g.__preferences, revision: ++g.__revision } }));
+      }, language);
+      await page.locator('.more-tools-wrapper > .format-button').click();
+      await page.locator(`button.editor-appearance-button[data-editor-appearance="${language === 'en' ? 'dark' : 'light'}"]`).click();
+      await page.locator('.more-tools-wrapper > .format-button').click();
+      for (const [index, item] of examples.entries()) {
+        const label = `${mode}/${language}/${item.name ?? item.kind}`;
+        const above = index % 2 === 1;
+        await page.evaluate(({ item, above }) => {
+          const g = window as any, view = g.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          g.__linkCandidates = [{ label: 'Project guide.md', insert: 'project-guide.md', detail: 'docs/project-guide.md', kind: 'file' }, { label: 'Project notes.md', insert: 'project-notes.md', detail: 'docs/project-notes.md', kind: 'file' }];
+          g.__preferences.input.slashPreferAbove = above;
+          window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences: g.__preferences, revision: ++g.__revision } }));
+          const prefix = '# Overview\n\n' + 'Example paragraph.\n\n'.repeat(8), from = prefix.length + item.before.length;
+          view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: prefix + item.before + item.after }, selection: { anchor: from }, scrollIntoView: true }); view.focus();
+        }, { item, above });
+        await page.keyboard.type(item.typed);
+        await page.waitForSelector('.meo-input-suggestions:not([hidden])', { timeout: 3000 });
+        await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        const layout = await page.evaluate(() => {
+          const popup = document.querySelector<HTMLElement>('.meo-input-suggestions:not([hidden])')!, footer = popup.querySelector<HTMLElement>('.meo-suggestion-guidance')!, list = popup.querySelector<HTMLElement>('.meo-suggestion-list')!;
+          const groups = [...footer.querySelectorAll<HTMLElement>('.meo-suggestion-key')].map(key => key.getBoundingClientRect());
+          const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          return { kind: popup.dataset.suggestionKind, placement: popup.dataset.placement, width: popup.getBoundingClientRect().width,
+            footer: footer.getBoundingClientRect().toJSON(), list: list.getBoundingClientRect().toJSON(), fits: footer.scrollWidth <= footer.clientWidth + 1, footerScrollWidth: footer.scrollWidth, footerClientWidth: footer.clientWidth, footerFont: getComputedStyle(footer).font,
+            singleLine: groups.every(group => group.top === groups[0].top), keys: [...footer.querySelectorAll('kbd')].map(key => key.textContent),
+            text: view.state.doc.toString(), selection: view.state.selection.main.toJSON(), updates: (window as any).__messages.filter((m: any) => m.type === 'updateEditingPreferences').length };
+        });
+        assert.equal(layout.kind, item.kind, label); assert.equal(layout.placement, above ? 'above' : 'below', label + ': actual placement');
+        assert.equal(layout.fits && layout.singleLine, true, label + ': complete guidance fits one line: ' + JSON.stringify(layout));
+        assert.deepEqual(layout.keys, ['↑↓', 'Enter', 'Esc']); assert.ok(layout.width >= (language === 'en' ? 304 : 288), label + ': widened fixed minimum');
+        assert.ok(above ? layout.footer.bottom <= layout.list.top + 1 : layout.footer.top >= layout.list.bottom - 1, label + ': guidance stays away from input');
+        if (mode === 'source') await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `${language}-${item.name ?? item.kind}.png`) });
+        await page.locator('.meo-suggestion-settings').click();
+        await page.waitForSelector('.settings-window[open]');
+        assert.equal(await page.$('.meo-input-suggestions:not([hidden])'), null, label + ': candidate popup closes');
+        assert.equal(await page.$eval('.settings-tab[data-tab="typing"]', tab => tab.getAttribute('aria-selected')), 'true');
+        const target = `.settings-item[data-setting="${item.setting}"]`;
+        assert.equal(await page.$eval(target, row => row.classList.contains('is-revealed')), true, label + ': correct shared setting is emphasized');
+        assert.equal(await page.evaluate(({ target, layout }) => {
+          const g = window as any, view = g.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          const row = document.querySelector(target)!, control = row.querySelector('button')!, box = row.getBoundingClientRect(), viewport = document.querySelector('.settings-content')!.getBoundingClientRect();
+          return control === document.activeElement && box.top >= viewport.top && box.bottom <= viewport.bottom
+            && g.__preferences.input[row.getAttribute('data-setting')!] === true
+            && view.state.doc.toString() === layout.text && JSON.stringify(view.state.selection.main.toJSON()) === JSON.stringify(layout.selection)
+            && g.__messages.filter((m: any) => m.type === 'updateEditingPreferences').length === layout.updates;
+        }, { target, layout }), true, label + ': focused visible setting, unchanged value/text/selection');
+        if (mode === 'source' && item.kind === 'slash') {
+          await page.screenshot({ path: path.join(folder, `${language}-settings.png`) });
+          const typography = () => page.$eval(target + ' .settings-item-title', row => ({ color: getComputedStyle(row).color, weight: getComputedStyle(row).fontWeight }));
+          const before = await typography();
+          await page.waitForFunction(target => !document.querySelector(target)?.classList.contains('is-revealed'), { timeout: 3000 }, target);
+          assert.deepEqual(await typography(), before, 'setting emphasis never changes text color or weight');
+          await page.locator(target + ' button').click();
+          await page.waitForFunction(setting => (window as any).__preferences.input[setting] === false, {}, item.setting);
+          assert.equal(await page.$eval(target + ' button', control => control.getAttribute('aria-checked')), 'false', 'the user can disable the feature through the revealed control');
+        }
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.querySelector('.settings-window[open]'));
+        assert.equal(await page.evaluate(() => {
+          const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor')); return view.hasFocus;
+        }), true, label + ': closing returns to the document');
+      }
+    }
+    assert.deepEqual(errors, []); console.log('Candidate guidance: seven kinds, HTML subtypes, bilingual themes, both modes, actual sides, setting scope and focus passed; screenshots: ' + folder);
+    if (process.argv.includes('--suggestions-only')) { await closeTestBrowser(browser); process.exit(0); }
+  }
   if (process.argv.includes('--content-width-only') || process.argv.length === 2) {
     const folder = path.join('.local', 'test-runs', 'content-width');
     await fs.mkdir(folder, { recursive: true });

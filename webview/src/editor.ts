@@ -209,7 +209,7 @@ import {
 } from './editor/interactionContinuity';
 import { markExternalDocumentPresentation } from './editor/externalDocumentPresentation';
 import { inputAssistanceFacet, typingAssistance } from './editor/typingAssistance';
-import { defaultInputAssistance, type InputAssistance } from '../../src/foundation/editingPreferences';
+import { defaultInputAssistance, type InputAssistance, type InputSuggestionSetting } from '../../src/foundation/editingPreferences';
 import { inlineCodeMarkers } from './application/symbolInput';
 import { chineseWordNavigation } from './editor/chineseWordNavigation';
 
@@ -258,6 +258,7 @@ type CreateEditorOptions = {
   initialTableStickyHeaderEnabled?: boolean;
   initialLatexDelimiters?: boolean;
   initialInputAssistance?: InputAssistance;
+  openInputSuggestionSettings?: (setting: InputSuggestionSetting) => void;
   requestLinkCandidates?: (input: { kind: 'documents' | 'paths' | 'headings'; query: string; target: string; wiki?: boolean }) => Promise<readonly LinkCandidate[]>;
   initialDiagnostics?: readonly EditorDiagnostic[];
   initialImageIntrinsicSizes?: readonly import('../../src/foundation/imageDimensions').ImageIntrinsicSize[];
@@ -314,6 +315,7 @@ export function createEditor({
   initialTableStickyHeaderEnabled = true,
   initialLatexDelimiters = false,
   initialInputAssistance = defaultInputAssistance,
+  openInputSuggestionSettings,
   requestLinkCandidates,
   initialDiagnostics = [],
   initialImageIntrinsicSizes = [],
@@ -2311,6 +2313,7 @@ export function createEditor({
       Prec.highest(typingAssistance),
       Prec.highest(pasteAssistance((view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text))),
       Prec.highest(createInputSuggestions({ inputContext, mathContext: getMathCompletionBody, requestLinks: requestLinkCandidates, currentHeadings: () => currentHeadingSuggestions(readDocumentTextProjection(view.state.doc)),
+        openSettings: openInputSuggestionSettings,
         renderMathPreview: source => renderLatexMathToHtml(source, 'inline'),
         cellCoords: measureTextareaSelectionStart,
         focusTable: focusInsertedTable,

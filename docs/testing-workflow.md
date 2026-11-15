@@ -3354,6 +3354,17 @@ release acceptance session.
 
 ## Settings, typing assistance and shortcuts
 
+`bun scripts/test-settings-window-production.ts --suggestions-only` runs the
+shared guidance and settings-entry cases from the owning production settings
+suite (also included in its default release invocation and rendered/viewport
+targeted plans). It checks seven menu kinds plus HTML tag/attribute/value states,
+both modes, Chinese/light and English/dark, actual above/below placement, complete
+single-line guidance and fixed minimum widths. Trusted clicks must reveal the
+correct existing setting without changing its value or document selection;
+the row emphasis expires without changing text typography and closing restores
+document focus. Captured production menus and setting rows are saved under
+`.local/test-artifacts/suggestion-guidance/`.
+
 `scripts/test-input-suggestion-position-production.ts` covers the shared candidate
 positioning owner in `test:browser` and the rendered/viewport targeted plans.
 It reproduces natural lazy-list indentation in ordinary and actually optimized
@@ -3387,7 +3398,8 @@ segment/fragment/title preservation, vault-scoped fuzzy/multiword ranking before
 limit, background aliases/titles and invalidation, shortest unambiguous Wiki targets,
 native table alias escaping, slash ownership even when suggestions are disabled, and
 selected clipped text without pointer hover. Path menus use one line and do not repeat
-the path; default-size width is 248px, larger fonts stop at 300px, selection and
+the path; default-size width is 288px in Chinese and 304px in English, larger
+fonts stop at 300px/304px respectively, selection and
 directory chaining retain width, and narrow viewports constrain the menu. Wiki
 document results retain the wider two-line layout at 320px for the default size.
 Candidate widths are fixed by family and UI language, with font scaling and viewport
