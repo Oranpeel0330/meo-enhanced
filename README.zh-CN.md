@@ -1,8 +1,8 @@
 # MEO Enhanced
 
-在 VS Code 中流畅编写、预览和审阅复杂 Markdown，随时切换实时、源码与预览模式，并轻松处理表格、Mermaid、LaTeX、HTML 等内容。
+Write, preview, and review complex Markdown in VS Code. Move freely between Live, Source, and Preview modes, with in-place rendering and editing for tables, Mermaid diagrams, LaTeX formulas, HTML, and more.
 
-Write, preview, and review complex Markdown seamlessly in VS Code, switch freely between Live, Source, and Preview modes, and handle tables, Mermaid, LaTeX, HTML, and more with ease.
+在 VS Code 中流畅编写、预览和审阅复杂 Markdown。自由切换实时、源码与预览模式，在文档原位查看和编辑表格、Mermaid 图表、LaTeX 公式与 HTML 等内容。
 
 <p align="center">
   <a href="https://github.com/huangko555/meo-enhanced/blob/main/README.md">English</a> · <strong>简体中文</strong> · <a href="https://github.com/huangko555/meo-enhanced/blob/main/CONTRIBUTING.md">贡献指南</a>
@@ -17,157 +17,108 @@ Write, preview, and review complex Markdown seamlessly in VS Code, switch freely
 
 ![MEO Enhanced 在深色和浅色外观下显示同一份 Live 文档](docs/readme/zh-cn/product-overview.png)
 
-MEO Enhanced 适用于需要在 VS Code 中编写和审阅复杂 Markdown 文档的用户。编辑器将 Markdown 源码、渲染结果和版本差异集中在同一界面中，减少不同编辑器和预览窗口之间的切换。
+## 一份文档，三种工作方式
 
-## 界面与显示设置
-
-工具栏及其设置面板提供以下选项：
-
-- **界面语言**：简体中文、English 或自动跟随 VS Code 显示语言。
-- **编辑器外观**：浅色、深色或自动跟随当前 VS Code 主题。
-- **内容字号**：跟随 VS Code 编辑器字号，或使用 `10` 至 `32` 的自定义字号。
-- **文档排版**：在“更多设置 > 外观”调整字号与行间距；行间距默认 `1.5` 倍，修改后自动保存。
-- **Preview 设置**：选择预设，并调整其支持的外观、字体和代码着色选项。
-
-![MEO Enhanced 设置面板，包含界面语言、编辑器外观和字号选项](docs/readme/zh-cn/settings-panel.png)
-
-## 三种显示模式
-
-资源管理器中的 **MEO Outline** 视图显示最近聚焦的 MEO 编辑器的标题，分屏对照编辑时可共用一个侧边栏目录。它跟随分屏焦点切换，滚动时只高亮当前标题，点击即可在实时、源码和预览模式中跳转。
-
-标题行不显示图标，标题栏提供全部展开和全部折叠，缩进沿用 VS Code 的树形设置。在资源管理器中展开一次即可；后台编辑器以及隐藏的大纲停止订阅。视图标题统一为 **MEO Outline**；原生工作台操作跟随 VS Code 的语言，提示和空状态文案跟随 MEO 的界面语言。
-
-VS Code 底部状态栏显示当前 MEO 文档的光标行／总行数和字数；实时、源码模式还显示选中字数，预览模式显示全文统计。悬停可查看统计口径和源码字符数：中日韩文字逐字计算，其他语言按词计算，包含代码文字，排除 Markdown 标记、链接地址和 frontmatter。
-
-- **Live**：在文档原位置显示标题、列表、表格、图片、图表和公式等渲染结果，同时保留直接编辑能力。
-- **Source**：显示完整 Markdown 源码和语法颜色，适用于精确修改标记、批量编辑和原始内容检查。
-- **Preview**：以只读形式显示完整渲染结果，提供预设选择和导出功能。
-
-三种模式使用同一份文档内容。模式切换时会保留当前阅读位置，无需创建或维护单独的预览文档。
-
-![同一份 Markdown 文档在 Live、Source 和 Preview 模式中的显示效果](docs/readme/zh-cn/display-modes.png)
-
-## 预览预设与导出
-
-Preview 内置 **默认** 和 **GitHub README** 两套预设。默认跟随编辑器配色；GitHub README 提供 GitHub 风格的本地预览。GitHub 与自定义预设使用各自的浅／深色配色。
-
-通过预设菜单底部的 **自定义预设…** 进入管理页，导入和管理自己的预设。[制作指南与示例](https://github.com/huangko555/meo-enhanced/blob/main/preview-presets/README.zh-CN.md)在 GitHub 单独提供。
-
-**导出为…** 支持以下格式，每种均可选择含目录版本：
-
-| 格式 | 用途与样式 |
+| 模式 | 适合做什么 |
 | --- | --- |
-| HTML | 在浏览器阅读，沿用当前预览预设和配色 |
-| PDF | 分享与打印，沿用预设并适配分页布局 |
-| Word（.docx） | 后续编辑，使用固定的文档格式 |
+| **实时（Live）** | 直接在渲染后的文档中写作，编辑表格、图片、图表和公式。 |
+| **源码（Source）** | 查看完整 Markdown，精确调整语法，或与预览分栏对照。 |
+| **预览（Preview）** | 专注阅读，切换预览风格，并导出文档。 |
 
-管理页中的导出用于分享预设文件。
+三种模式使用同一份内容，切换时保留阅读位置。资源管理器中的 **MEO Outline** 可在三种模式中跳转标题；底部状态栏显示行数与字数，实时和源码模式还支持选中字数统计。
 
-## 文档改动审阅
+![实时、源码和预览三种视图的竖向对照：直接编辑表格、查看原始 Markdown 标记，以及阅读完整排版](docs/readme/zh-cn/display-modes.png)
 
-文档改动审阅会随编辑实时更新，在编辑器侧边显示新增、修改和删除标记，并在工具栏中汇总变更数量。右侧概览标记显示改动在全文中的分布，方便在长文档中快速定位。
+## 导出 HTML、PDF 和 Word
 
-![Live 模式中的长文档改动标记与右侧概览定位](docs/readme/zh-cn/change-review-overview.png)
+写好 Markdown 后，在预览模式中点击 **导出为…**，选择交付格式。三种格式均提供**含目录**选项。
 
-支持以下比较基线：
+| 格式 | 使用场景 | 导出样式 |
+| --- | --- | --- |
+| **HTML** | 在浏览器中阅读与分享 | 沿用当前预览预设和配色 |
+| **PDF** | 固定版式，便于分享和打印 | 沿用预设，并适配分页布局 |
+| **Word（.docx）** | 交给他人继续编辑 | 使用固定文档格式 |
 
-- **最近保存版本**：手动编辑时推荐，比较当前内容与最近一次磁盘保存内容。
-- **Agent 编辑前版本**：Agent 编辑时推荐，显示连续磁盘写入产生的改动。
-- **Git HEAD**：比较当前文档与最新 Git 提交中的版本。
-- **手动快照**：固定当前文档状态，并将后续改动与该状态比较。
+![预览模式的导出菜单，提供 HTML、PDF、Word 以及各自的含目录版本](docs/readme/zh-cn/export-formats.png)
 
-> **“Agent 编辑前版本”如何工作？**
+## 为文档选择风格，也可以制作自己的预设
+
+内置 **默认、GitHub README、Typora Newsprint、Typora Whitey、Obsidian Minimal** 五套预览风格。同一份内容可以呈现为项目说明、纸面文章或简洁笔记。
+
+![同一份 Markdown 在 GitHub README、Typora Newsprint、Obsidian Minimal 与 Typora Whitey 预设中的叠放对照，Whitey 位于最右侧](docs/readme/zh-cn/preview-styles.png)
+
+想调整字体、颜色和排版，可以从仓库提供的示例开始，制作自己的预设：
+
+1. 从[预设指南与示例](preview-presets/README.zh-CN.md)选择一套风格，修改配置和 CSS。
+2. 点击预设菜单底部的 **自定义预设…**，进入管理页并导入预设文件夹。
+3. 回到预览选择新预设；满意后导出 HTML 或 PDF，也可导出预设文件与他人分享。
+
+预设用于独立预览、源码分栏预览及 HTML／PDF 导出。实时和源码编辑界面保留编辑器外观。
+
+## 复杂内容，也能直接编辑
+
+![每行两项展示表格工具栏、Mermaid 源码与图表、LaTeX 公式、语法高亮代码、可交互 HTML，以及图片原始链接和预览](docs/readme/zh-cn/complex-content.png)
+
+- **表格**：直接编辑单元格，增删行列、调整对齐与列宽，跨单元格选择和复制。长表格提供浮动表头与工具栏。
+- **Mermaid**：在文档原位置展开源码和实时预览，切换上下或左右布局、拖动分栏；支持缩放、全屏及复制图片或源码。
+- **LaTeX**：点击块级公式即可编辑源码并查看实时结果，支持公式补全预览与格式化。也可按需开启 `\(...\)` 和 `\[...\]` 公式语法。
+- **代码块与 HTML**：代码块支持语法高亮、复制和长代码折叠；受支持的安全 HTML 可以原位编辑、预览与格式化。
+- **图片**：支持本地与远程图片，剪贴板图片自动保存并插入；保存目录与命名规则可配置。
+
+同时支持 Frontmatter Properties、GitHub Alerts、脚注、任务列表、Wiki 链接、`==高亮==` 和合并冲突处理。
+
+更多用法见[设置与剪贴板说明](docs/editing-preferences.md)、[图片目录与命名设置](docs/image-storage.md)及[自定义预设指南](preview-presets/README.zh-CN.md)。界面提供简体中文与 English，可切换浅色、深色或跟随 VS Code，并调整字号与行间距。
+
+## 在编辑器中审阅改动
+
+编辑器侧边显示新增、修改和删除标记，工具栏汇总变更数量，右侧概览标记帮助定位改动在全文中的分布。源码模式还可展开修改前的内容，结合上下文检查每处变化。
+
+![当前源码模式中的改动审阅，显示新增与删除内容、变更统计以及比较基线菜单](docs/readme/zh-cn/change-review.png)
+
+| 比较基线 | 适合的场景 |
+| --- | --- |
+| **最近保存版本** | 手动编辑时，检查尚未保存的改动 |
+| **Agent 编辑前版本** | 检查 Agent 连续写入磁盘产生的改动 |
+| **Git HEAD** | 与最新 Git 提交中的版本比较 |
+| **手动快照** | 固定当前状态，审阅之后的改动 |
+
+> **“Agent 编辑前版本”如何确定？**
 >
-> Agent 的修改会直接写入磁盘，不会形成“未保存内容”。因此，该选项比较当前内容与更前一次的磁盘保存版本，显示两次磁盘保存之间的差异。
+> Agent 通常直接写入磁盘，因此需要与更早一次的保存内容比较。
 >
-> 10 秒内连续发生的磁盘写入会视为同一轮修改，并继续使用这一轮首次写入前的版本作为比较基线。
->
-> 如果没有更前一次的保存记录，则使用最近保存版本作为基线。
+> 10 秒内连续发生的磁盘写入视为同一轮修改，并使用这一轮首次写入前的版本作为基线；没有更早的保存记录时，回退到最近保存版本。
 
-Source 模式可以在修改行上方显示修改前内容。代码块、表格、Mermaid 和公式等连续内容会合并显示对应的改动标记，便于结合完整结构进行审阅。
+## 安装与开始使用
 
-![改动审阅菜单，以及 Source 模式中的新增、删除和修改前内容](docs/readme/zh-cn/change-review.png)
-
-## Markdown 内容支持
-
-### 表格
-
-Markdown 表格以可交互形式显示，并支持以下操作：
-
-- 直接编辑单元格内容。
-- 增加或删除行列，设置列对齐方式。
-- 拖动调整列宽，并在当前会话中保留宽度。
-- 跨单元格选择和复制。
-- 在单元格中使用链接、图片、列表、代码和多行内容。
-- 在长表格中显示浮动表头和编辑工具栏。
-
-### 图片与 HTML
-
-图片支持本地路径、工作区相对路径、Windows 绝对路径和远程地址。从剪贴板粘贴图片时，文件自动保存并插入文档。在 **设置 → 输入 → 粘贴 → 图片保存位置** 中，可选择文档旁的文件夹、文档旁按文档名分开，或自定义路径（高级）。选中后在对应选项下展开路径设置。固定的 ./ 表示当前 Markdown 文档所在目录，无需工作区；图片默认按文档名加序号命名，也可选择日期时间、图片序号或毫秒时间戳，并查看完整路径示例。有效修改自动保存，既有图片不会移动。详见[图片目录与命名设置](docs/image-storage.md)。
-
-受支持的安全行内 HTML 和块级 HTML 可以在 Live 与 Preview 中显示。在 Live 中点击 HTML 块，即可在原位置编辑带语法颜色的源码；有可见输出时，源码下方会显示实时预览。独立但没有可见输出的片段以浅色源码保留，方便发现和修改。格式化操作会保留受保护内容，并支持撤销。HTML 与 PDF 导出使用受支持的渲染结果。
-
-![可交互 Markdown 表格，以及图片和 HTML 的 Live 显示效果](docs/readme/zh-cn/tables-images-html.png)
-
-### Mermaid、LaTeX 与代码块
-
-Mermaid 图表直接在 Live 主文档中展开带语法颜色的源码，下方或右侧同步显示预览。支持上下／左右布局切换和分栏比例拖动，完成编辑后返回图表；同时支持缩放、全屏查看，以及复制图片或源码。
-
-点击块级 LaTeX 公式，即可在主文档中编辑带语法颜色的源码，下方同时显示实时预览。补全候选附带公式预览；显示源码时提供全选和排版格式化按钮。较大的图表和公式会根据 Preview 与导出区域调整显示尺寸。
-
-在工具栏的 **设置 → 文档设置** 浮窗中，可直接开启第五项 **LaTeX 风格公式**，也可在 **更多设置 → 常规 → 公式语法** 中调整。支持 `\(...\)` 行内公式和 `\[...\]` 块级公式，并同步应用于编辑、预览和导出。GitHub README 预设固定使用 GitHub 公式语法，不受此开关影响。默认关闭以保留 Markdown 括号转义；开启后，使用相同写法的普通括号文字也会按公式处理。工作区内的选择保存在工作区设置中，不会自动改写文档。
-
-代码块支持语法高亮、全选、复制和长代码折叠。Preview 与导出可以保留代码语法颜色。
-
-![Live 模式中渲染后的 Mermaid 图表、LaTeX 公式和代码块](docs/readme/zh-cn/diagrams-formulas-code.png)
-
-### 其他 Markdown 内容
-
-- Frontmatter Properties，以及复杂 YAML 内容的源码编辑。
-- GitHub Alerts、脚注、任务列表和引用块。
-- 普通链接、文档内锚点和 Wiki 链接；支持 `![[图片.png]]`、`![[图片.png|300]]` 和 `![[图片.png|300x200]]`。
-- `==高亮==`、键盘按键、颜色值预览和行内样式。
-- 合并冲突块的可视化操作。
-
-Wiki 引用优先识别所属 Obsidian 仓库，否则使用当前工作区；支持明确相对路径、仓库路径和唯一短文件名。重名时提示补全路径。表格中的尺寸分隔符需转义，例如 `![[图片.png\|300]]`。默认预览及导出支持此语法，GitHub README 预设保留 GitHub 的 Markdown 规则。
-
-### 设置与输入辅助
-
-从设置菜单打开 **更多设置**，调整输入辅助和快捷键。符号输入、表格粘贴及快捷键冲突规则见 [设置与剪贴板说明](docs/editing-preferences.md)。
-
-Windows 上在 Live / Source 文档编辑区单按左 Alt 会保留光标。VS Code 菜单仍可用鼠标打开，Alt 组合快捷键保留原有行为。
-
-## 安装
-
-从 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=huangko555.meo-enhanced) 安装 **MEO Enhanced - Markdown 编辑器**，或在终端中执行：
+从 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=huangko555.meo-enhanced) 安装 **MEO Enhanced - Markdown 编辑器**，或在终端执行：
 
 ```shell
 code --install-extension huangko555.meo-enhanced
 ```
 
-安装完成后，可直接打开 `.md`、`.markdown`、`.mdx` 或 `.mdc` 文件。也可以右键文件并选择 **使用 MEO Enhanced 打开**。同时安装其他 Markdown 编辑器时，请通过 VS Code 的 **打开方式... → 配置默认编辑器** 选择首选编辑器。如果另一个扩展在启动时改写编辑器关联，仍需禁用或修复它，才能保留这项选择。
+安装后打开 Markdown 文件即可开始，也可以右键选择 **使用 MEO Enhanced 打开**。切换到预览模式，选择风格，再通过 **导出为…** 分享文档。
 
-离线安装时，从 [GitHub Releases](https://github.com/huangko555/meo-enhanced/releases) 下载 `.vsix`，然后在 VS Code 中执行 **Extensions: Install from VSIX...**。
-
-## 兼容性
-
-- 需要 VS Code `1.94.0` 或更高版本。
+- 需要 **VS Code 1.94.0 或更高版本**。
 - 支持 `.md`、`.markdown`、`.mdx` 和 `.mdc` 文件。
-- 可以与原版 MEO 同时安装，两者使用独立的编辑器、命令和设置。
+- 可与原版 MEO 同时安装，编辑器、命令和设置相互独立。
+- 离线安装：从 [GitHub Releases](https://github.com/huangko555/meo-enhanced/releases) 下载 VSIX，在 VS Code 中执行 **Extensions: Install from VSIX...**。
+
+<details>
+<summary>同时安装其他 Markdown 编辑器时，如何设置默认打开方式？</summary>
+
+使用 VS Code 的 **打开方式… → 配置默认编辑器** 选择首选编辑器。如果其他扩展在启动时改写编辑器关联，仍需禁用或修复该扩展，才能保留你的选择。
+
+</details>
 
 ## 赞助
 
-如果 MEO Enhanced 对你有帮助，欢迎自愿赞助，支持项目持续开发与维护。
+MEO Enhanced 免费开源。如果它对你有帮助，欢迎自愿赞助，支持持续开发与维护。
 
-- **[爱发电（支付宝 / 微信支付）](https://afdian.com/a/meoenhanced)**：可自选金额。爱发电按月展示赞助，单次支持请选择 1 个月；金额和续费设置以付款页显示为准。
+- **[爱发电（支付宝／微信支付）](https://afdian.com/a/meoenhanced)**：可自选金额。爱发电按月展示赞助，单次支持请选择 1 个月；金额和续费设置以付款页显示为准。
 - **[Ko-fi（国际用户）](https://ko-fi.com/meoenhanced)**：一次性打赏，可自选金额。
 
-MEO Enhanced 保持免费开源。赞助完全自愿，不附带会员权益或服务承诺。
+赞助不附带会员权益或服务承诺。
 
-## 项目来源
+## 项目来源与许可证
 
-MEO Enhanced 基于 [Markdown Editor Optimized（MEO）](https://github.com/vadimmelnicuk/meo) 开发。编辑功能使用 [CodeMirror](https://codemirror.net/) 实现，交互设计参考了 [Obsidian](https://obsidian.md/)。
-
-## 许可证
-
-[MIT License](LICENSE)
+基于 [Markdown Editor Optimized（MEO）](https://github.com/vadimmelnicuk/meo) 开发，使用 [CodeMirror](https://codemirror.net/) 实现编辑功能，交互设计参考 [Obsidian](https://obsidian.md/)。项目采用 [MIT License](LICENSE)。

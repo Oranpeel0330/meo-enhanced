@@ -1,8 +1,8 @@
 # MEO Enhanced
 
-Write, preview, and review complex Markdown seamlessly in VS Code, switch freely between Live, Source, and Preview modes, and handle tables, Mermaid, LaTeX, HTML, and more with ease.
+Write, preview, and review complex Markdown in VS Code. Move freely between Live, Source, and Preview modes, with in-place rendering and editing for tables, Mermaid diagrams, LaTeX formulas, HTML, and more.
 
-在 VS Code 中流畅编写、预览和审阅复杂 Markdown，随时切换实时、源码与预览模式，并轻松处理表格、Mermaid、LaTeX、HTML 等内容。
+在 VS Code 中流畅编写、预览和审阅复杂 Markdown。自由切换实时、源码与预览模式，在文档原位查看和编辑表格、Mermaid 图表、LaTeX 公式与 HTML 等内容。
 
 <p align="center">
   <strong>English</strong> · <a href="https://github.com/huangko555/meo-enhanced/blob/main/README.zh-CN.md">简体中文</a> · <a href="https://github.com/huangko555/meo-enhanced/blob/main/CONTRIBUTING.md">Contributing</a>
@@ -15,129 +15,80 @@ Write, preview, and review complex Markdown seamlessly in VS Code, switch freely
   <a href="#sponsor">Sponsor</a>
 </p>
 
-![MEO Enhanced showing the same Live document in Dark and Light appearances](docs/readme/en/product-overview.png)
+![MEO Enhanced showing the same Live document in dark and light appearances](docs/readme/en/product-overview.png)
 
-MEO Enhanced is designed for users who write and review complex Markdown documents in VS Code. It brings Markdown source, rendered output, and version differences into one interface, reducing the need to switch between separate editors and preview windows.
+## One document, three ways to work
 
-## Interface and display settings
-
-The toolbar and its settings panel provide the following options:
-
-- **Interface language**: Simplified Chinese, English, or the current VS Code display language.
-- **Editor appearance**: Light, Dark, or the current VS Code theme.
-- **Content font size**: Follow the VS Code editor font size or use a custom size from `10` to `32`.
-- **Document typography**: Adjust font size and line spacing in More Settings > Appearance. Line spacing defaults to `1.5×`; changes save automatically.
-- **Preview settings**: Choose a preset and adjust its supported appearance, font, and code-coloring options.
-
-![MEO Enhanced settings panel with interface language, editor appearance, and font size options](docs/readme/en/settings-panel.png)
-
-## Three display modes
-
-The Explorer **MEO Outline** view mirrors the headings of the most recently focused MEO editor, so split editors can share one sidebar outline. It follows split-editor focus, highlights only the current heading, and jumps on click in Live, Source and Preview.
-
-The outline tree's title bar provides actions to expand or collapse all nodes. Rows have no icons, and indentation follows VS Code's tree settings. Open the view once in the Explorer; background editors and a hidden outline remain unsubscribed. The view title stays **MEO Outline**; native workbench actions follow VS Code's language, while tooltips and empty states follow MEO's interface language.
-
-The VS Code status bar shows the active MEO document's current/total source lines and word count, including selected words in Live and Source. Preview shows document totals. Hover for the counting rules and source character count; CJK characters count individually, other languages by word, with code text included and Markdown markup, link destinations and frontmatter excluded.
-
-- **Live**: Displays rendered headings, lists, tables, images, diagrams, formulas, and other content in place while retaining direct editing.
-- **Source**: Displays the complete Markdown source with syntax highlighting for precise markup changes, bulk editing, and inspection of the original content.
-- **Preview**: Displays the fully rendered document in a read-only view, with preset and export controls.
-
-All three modes use the same document content. The current reading position is preserved when switching modes, without creating or maintaining a separate preview document.
-
-![The same Markdown document displayed in Live, Source, and Preview modes](docs/readme/en/display-modes.png)
-
-## Preview presets and export
-
-Preview includes **Default**, which follows editor colors, and **GitHub README**, which provides a local GitHub-style preview. GitHub and custom presets use their own light/dark palettes.
-
-Choose **Custom presets…** at the bottom of the preset menu to import and manage your presets. The [creation guide and examples](https://github.com/huangko555/meo-enhanced/blob/main/preview-presets/README.md) are provided separately on GitHub.
-
-**Export as…** offers these formats, each with an optional table of contents:
-
-| Format | Purpose and style |
+| Mode | What you can do |
 | --- | --- |
-| HTML | Browser reading, using the current preview preset and colors |
-| PDF | Sharing and printing, using the preset with paginated layout |
-| Word (.docx) | Further editing, using a fixed document format |
+| **Live** | Write directly in the rendered document and edit tables, images, diagrams, and formulas in place. |
+| **Source** | Inspect the complete Markdown, adjust markup precisely, or work alongside a split preview. |
+| **Preview** | Focus on reading, choose a preview style, and export your document. |
 
-Exporting from preset settings shares the preset files.
+All three modes use the same content and preserve your reading position when switching. The Explorer's **MEO Outline** navigates headings in every mode. The status bar shows line and word counts, including selected words in Live and Source.
 
-## Document change review
+![A vertical comparison of Live table editing, raw Markdown in Source, and the fully rendered Preview](docs/readme/en/display-modes.png)
 
-Change review updates in real time as you edit, displaying additions, modifications, and deletions beside the editor and summarizing their counts in the toolbar. The overview ruler on the right shows how changes are distributed throughout the document, making them easy to locate in long files.
+## Export to HTML, PDF, and Word
 
-![Change markers and overview navigation for a long document in Live mode](docs/readme/en/change-review-overview.png)
+When your Markdown is ready, open Preview and choose **Export as…**. All three formats offer a **with table of contents** option.
 
-The following comparison baselines are available:
+| Format | When to use it | Export style |
+| --- | --- | --- |
+| **HTML** | Reading and sharing in a browser | Uses the current preview preset and colors |
+| **PDF** | Sharing and printing with a fixed layout | Uses the preset with a paginated layout |
+| **Word (.docx)** | Handing the document over for further editing | Uses a fixed document format |
 
-- **Last Saved Version**: Recommended for manual editing. Compares the current content with the most recent content saved to disk.
-- **Before Agent Edits**: Recommended for agent editing. Shows changes produced by consecutive writes to disk.
-- **Git HEAD**: Compares the current document with its version in the latest Git commit.
-- **Manual Snapshot**: Captures the current document state and compares subsequent changes against it.
+![The Preview export menu with HTML, PDF, and Word options, each available with a table of contents](docs/readme/en/export-formats.png)
 
-> **How does “Before Agent Edits” work?**
+## Choose a style, or make your own preset
+
+Five built-in preview styles are available: **Default, GitHub README, Typora Newsprint, Typora Whitey, and Obsidian Minimal**. Give the same content the feel of a project README, a printed article, or a clean set of notes.
+
+![The same Markdown in GitHub README, Typora Newsprint, Obsidian Minimal, and Typora Whitey, with Whitey at the right of the overlapping stack](docs/readme/en/preview-styles.png)
+
+To customize fonts, colors, and layout, start with one of the examples in this repository:
+
+1. Choose a style from the [preset guide and examples](preview-presets/README.md), then edit its configuration and CSS.
+2. Select **Custom presets…** at the bottom of the preset menu and import your preset folder.
+3. Choose the new preset in Preview, then export to HTML or PDF. You can also export preset files to share with others.
+
+Presets apply to standalone Preview, Source split preview, and HTML/PDF exports. Live and Source retain the editor's appearance.
+
+## Edit complex content in place
+
+![Two-column examples of table controls, Mermaid source and diagrams, LaTeX, highlighted code, interactive HTML, and an image with its original Markdown link](docs/readme/en/complex-content.png)
+
+- **Tables**: Edit cells directly, add or remove rows and columns, adjust alignment and widths, and select or copy across cells. Long tables include a sticky header and toolbar.
+- **Mermaid**: Open source and a live preview in the document, choose a stacked or side-by-side layout, and resize the split. Zoom, fullscreen viewing, and image/source copying are available.
+- **LaTeX**: Click a block formula to edit its source and see the result immediately, with completion previews and formatting. You can also enable `\(...\)` and `\[...\]` math delimiters.
+- **Code blocks and HTML**: Code blocks offer syntax highlighting, copying, and folding for long code. Supported safe HTML can be edited, previewed, and formatted in place.
+- **Images**: Use local or remote images, or paste from the clipboard to save and insert a file automatically. Image folders and naming rules are configurable.
+
+Also supports Frontmatter Properties, GitHub Alerts, footnotes, task lists, Wiki links, `==highlights==`, and merge conflict actions.
+
+See the [settings and clipboard guide](docs/editing-preferences.md), [image folder and naming settings](docs/image-storage.md), and [custom preset guide](preview-presets/README.md) for more. The interface supports English and Simplified Chinese, light/dark appearances or the current VS Code theme, and adjustable font size and line spacing.
+
+## Review changes in the editor
+
+See additions, modifications, and deletions beside the document, with change counts in the toolbar and an overview ruler showing their distribution throughout the file. Source mode can also show the previous content so you can review each change in context.
+
+![Source change review with added and deleted content, change counts, and the comparison baseline menu](docs/readme/en/change-review.png)
+
+| Comparison baseline | When to use it |
+| --- | --- |
+| **Last Saved Version** | Checking unsaved changes while editing manually |
+| **Before Agent Edits** | Reviewing changes from consecutive agent writes to disk |
+| **Git HEAD** | Comparing with the latest Git commit |
+| **Manual Snapshot** | Capturing the current state to review subsequent edits |
+
+> **How is “Before Agent Edits” determined?**
 >
-> Agent changes are written directly to disk, so they do not appear as unsaved content. This option therefore compares the current content with the preceding version saved to disk, showing the difference between two disk saves.
+> Agents typically write directly to disk, so this baseline compares against an earlier saved version.
 >
-> Consecutive disk writes within 10 seconds are treated as one editing round and continue to use the version from before the first write in that round as the comparison baseline.
->
-> If no preceding saved version is available, the most recently saved version is used as the baseline.
+> Consecutive disk writes within 10 seconds are treated as one editing round, using the version from before its first write. If no earlier saved version is available, it falls back to the most recently saved version.
 
-Source mode can display the previous content above modified lines. Consecutive content such as code blocks, tables, Mermaid diagrams, and formulas is grouped under the corresponding change marker so that each change can be reviewed in context.
-
-![Change review menu and additions, deletions, and previous content displayed in Source mode](docs/readme/en/change-review.png)
-
-## Markdown content support
-
-### Tables
-
-Markdown tables are displayed as interactive tables with support for:
-
-- Direct cell editing.
-- Adding or deleting rows and columns, and setting column alignment.
-- Dragging to resize columns and retaining widths for the current session.
-- Selecting and copying across multiple cells.
-- Links, images, lists, code, and multiline content inside cells.
-- A sticky header and editing toolbar for long tables.
-
-### Images and HTML
-
-Images can use local paths, workspace-relative paths, Windows absolute paths, or remote URLs. Configure pasted images in **Settings → Input → Paste → Image save location**: beside the document, beside the document by file name, or a custom path (advanced). Each choice expands its own path controls when selected. The fixed ./ prefix starts in the current Markdown directory; no workspace is required. Image names default to the document name plus a sequence number; date/time, image numbers and millisecond timestamps are also available, with a full-path example. Valid changes save automatically and existing images stay in place. See [image folder and naming settings](docs/image-storage.md).
-
-Supported safe inline and block HTML renders in Live and Preview. In Live, click an HTML block to edit its syntax-colored source in place; visible output is previewed below the source. Standalone fragments with no visible output remain discoverable as faint source text. The format action preserves protected content and can be undone. HTML and PDF exports use the supported rendered output.
-
-![An interactive Markdown table with images and HTML rendered in Live mode](docs/readme/en/tables-images-html.png)
-
-### Mermaid, LaTeX, and code blocks
-
-Mermaid diagrams expand their syntax-colored source directly in the Live document for editing, with a live preview below or beside it. Switch between stacked and side-by-side layouts, resize the split, and finish editing to return to the diagram. Diagrams support zoom, fullscreen viewing, and image/source copying.
-
-Click a block LaTeX formula to edit its syntax-colored source in the main document, with a live preview below. Completion suggestions include formula previews. Select-all and layout-formatting buttons appear while the source is shown. Larger diagrams and formulas adapt to the available Preview and export area.
-
-Enable **LaTeX math delimiters** in the toolbar's **Settings → Document settings** popover, or in **More Settings → General → Math syntax**, to recognize `\(...\)` inline and `\[...\]` display math across editing, preview and export. The GitHub README preset keeps GitHub's fixed math syntax regardless of this switch. It is off by default to preserve Markdown bracket escapes; when enabled, escaped bracket text using these pairs is interpreted as math. Changes are saved to workspace settings when a workspace is open, and do not rewrite the document.
-
-Code blocks support syntax highlighting, select all, copy, and folding for long code. Preview and exported documents can retain syntax colors.
-
-![Rendered Mermaid diagram, LaTeX formula, and code block in Live mode](docs/readme/en/diagrams-formulas-code.png)
-
-### Other Markdown content
-
-- Frontmatter Properties and source editing for complex YAML content.
-- GitHub Alerts, footnotes, task lists, and blockquotes.
-- Standard links, document anchors, and Wiki links, including `![[image.png]]`, `![[image.png|300]]`, and `![[image.png|300x200]]`.
-- `==highlights==`, keyboard keys, color previews, and inline styles.
-- Visual actions for merge conflict blocks.
-
-Wiki references use the containing Obsidian vault, or the current workspace as a fallback. Explicit relative paths, vault paths, and unique short filenames are supported; duplicate names require a more specific path. Escape the size separator in tables, for example `![[image.png\|300]]`. Default Preview and exports support this syntax; the GitHub README preset keeps GitHub Markdown semantics.
-
-### Settings and typing assistance
-
-Open **More settings** from the settings menu to adjust typing assistance and shortcuts. See the [settings and clipboard guide](docs/editing-preferences.md) for input rules, table paste behavior and shortcut conflicts.
-
-On Windows, pressing left Alt alone while editing in Live or Source keeps the caret in the document. Open the VS Code menu with the mouse; Alt combinations keep their existing behavior.
-
-## Install
+## Install and get started
 
 Install **MEO Enhanced - Markdown Editor** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=huangko555.meo-enhanced), or run:
 
@@ -145,29 +96,29 @@ Install **MEO Enhanced - Markdown Editor** from the [VS Code Marketplace](https:
 code --install-extension huangko555.meo-enhanced
 ```
 
-After installation, open any `.md`, `.markdown`, `.mdx`, or `.mdc` file directly. You can also right-click a file and select **Open With MEO Enhanced**. When another Markdown editor is installed, use VS Code's **Open With... → Configure Default Editor** command to choose your preference. An extension that rewrites editor associations on startup can still override that choice until it is disabled or fixed.
+Open a Markdown file to start, or right-click it and choose **Open With MEO Enhanced**. Switch to Preview, choose a style, and use **Export as…** to share your document.
 
-For offline installation, download a `.vsix` package from [GitHub Releases](https://github.com/huangko555/meo-enhanced/releases), then run **Extensions: Install from VSIX...** in VS Code.
-
-## Compatibility
-
-- Requires VS Code `1.94.0` or newer.
+- Requires **VS Code 1.94.0 or newer**.
 - Supports `.md`, `.markdown`, `.mdx`, and `.mdc` files.
-- Can be installed alongside the original MEO extension; each extension uses independent editors, commands, and settings.
+- Can be installed alongside the original MEO, with independent editors, commands, and settings.
+- For offline installation, download a VSIX from [GitHub Releases](https://github.com/huangko555/meo-enhanced/releases), then run **Extensions: Install from VSIX...** in VS Code.
+
+<details>
+<summary>How do I choose a default editor when other Markdown editors are installed?</summary>
+
+Use VS Code's **Open With… → Configure Default Editor** command to choose your preferred editor. An extension that rewrites editor associations on startup may still override that choice until it is disabled or fixed.
+
+</details>
 
 ## Sponsor
 
-If MEO Enhanced helps you, you can support its ongoing development and maintenance with a voluntary tip.
+MEO Enhanced is free and open source. If it helps you, you can support its ongoing development and maintenance with a voluntary tip.
 
 - **[Ko-fi — international supporters](https://ko-fi.com/meoenhanced)**: One-time tips with an amount you choose.
 - **[Afdian — Alipay / WeChat Pay](https://afdian.com/a/meoenhanced)**: Choose your amount. Support is displayed in months; choose one month for a single payment. Check the amount and renewal settings at checkout.
 
-MEO Enhanced remains free and open source. Tips are entirely voluntary and do not include membership benefits or service commitments.
+Tips do not include membership benefits or service commitments.
 
-## Project origin
+## Project origin and license
 
-MEO Enhanced is based on [Markdown Editor Optimized (MEO)](https://github.com/vadimmelnicuk/meo). Editing is powered by [CodeMirror](https://codemirror.net/), with interaction design inspired by [Obsidian](https://obsidian.md/).
-
-## License
-
-[MIT License](LICENSE)
+Based on [Markdown Editor Optimized (MEO)](https://github.com/vadimmelnicuk/meo), with editing powered by [CodeMirror](https://codemirror.net/) and interaction design inspired by [Obsidian](https://obsidian.md/). Licensed under the [MIT License](LICENSE).
