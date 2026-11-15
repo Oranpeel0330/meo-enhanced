@@ -2382,6 +2382,19 @@ copy checks remain part of the same contract and the targeted rendered gate.
 
 ## Editor startup and loading
 
+`scripts/startup-presentation-checks.ts`, called by the startup contract, serves
+the real static shell and emitted modules with held shell/editor responses and
+delayed Preview rendering. Ordinary and production-large Live/Source/Preview
+cases retain the original loading element and spinner, cover the document and
+outline at one stationary width, and expose an interactive surface in the first
+uncovered sampled frame. Preview remains covered past the former initial-paint
+fallback. These cases cover Chinese/dark and English/light, keep the final
+outline width, verify that the first Live/Source keystroke retains the complete
+document and reaches the Host, and bound pre-init canvas color sampling to zero:
+actual Host settings own the first palette. Screenshots and frame evidence are written to
+`.local/test-artifacts/startup-presentation/`. Native installed timing remains a
+separate boundary; held-resource timings are not startup performance claims.
+
 The regression and release gates run `scripts/test-panel-session-ready-init.ts` and
 `scripts/test-editor-startup-load.ts`. The first checks that concurrent Webview
 `ready` messages share one `init`, a later `ready` can retry a lost delivery,

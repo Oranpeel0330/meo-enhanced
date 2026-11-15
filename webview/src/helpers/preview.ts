@@ -1055,6 +1055,7 @@ export function createPreviewController({
     }
     latestAcceptedEnvironmentGeneration = -1;
     setStatus(uiStrings.previewFailed);
+    schedulePaintReady();
     logWebviewRenderError('preview.window', error);
   };
   const connectDocumentSearch = () => {

@@ -36,7 +36,7 @@ export function getWebviewPreloadShellMarkup(language: 'en' | 'zh-CN' = 'en'): s
           </div>
           <div class="surface-loading meo-startup-loading" role="status" aria-live="polite">
             <span class="surface-loading-spinner" aria-hidden="true"></span>
-            <span>${language === 'zh-CN' ? '正在加载…' : 'Loading…'}</span>
+            <span class="surface-loading-label">${language === 'zh-CN' ? '正在加载…' : 'Loading…'}</span>
           </div>
         `;
 }

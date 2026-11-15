@@ -223,7 +223,7 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
   await page.goto(server.url.href, { waitUntil: 'domcontentloaded' });
   await page.bringToFront();
   await page.waitForFunction(() => document.visibilityState === 'visible');
-  await page.waitForFunction(mode => !document.querySelector('.meo-preload-toolbar') && !document.querySelector('.mode-group [aria-busy="true"]')
+  await page.waitForFunction(mode => !document.querySelector('.meo-preload-toolbar, .meo-startup-loading') && !document.querySelector('.mode-group [aria-busy="true"]')
     && (mode === 'preview' ? document.querySelector<HTMLElement>('.preview-status')?.hidden
       && !!document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.querySelector('main.meo-export-doc')
       : document.querySelector('.editor-host > .cm-editor') && !document.querySelector('.editor-host')?.hasAttribute('inert')), {}, initialMode);

@@ -176,12 +176,6 @@ initializeHtmlStyles(message => vscode.postMessage(message));
 initializeWikiLinkHandling(vscode);
 initializeLocalLinkHandling(vscode);
 
-applyBuiltInVisualBaseline(
-  document.body.classList.contains('vscode-light')
-    || document.body.classList.contains('vscode-high-contrast-light')
-    ? 'light'
-    : 'dark'
-);
 setImageSrcResolver(resolveImageSrc);
 
 const root = document.getElementById('app');
@@ -197,12 +191,11 @@ const tooltipBinding = bindTooltips(document.body, {
 });
 let activeUiLanguage: UiLanguage = 'en';
 let activeUiStrings = getUiStrings(activeUiLanguage);
-const startupLoadingPresentation = createLoadingPresentation('meo-startup-loading');
-const preloadLoading = root.querySelector('.meo-startup-loading');
+const preloadLoading = root.querySelector<HTMLElement>('.meo-startup-loading');
+const startupLoadingPresentation = createLoadingPresentation('meo-startup-loading', preloadLoading);
 startupLoadingPresentation.setLabel(preloadLoading?.textContent?.trim() || activeUiStrings.loading);
 startupLoadingPresentation.begin(() => true, () => {}, { immediate: true });
-if (preloadLoading) preloadLoading.replaceWith(startupLoadingPresentation.element);
-else root.append(startupLoadingPresentation.element);
+if (!preloadLoading) root.append(startupLoadingPresentation.element);
 let activeUiLanguagePreference: UiLanguagePreference = 'auto';
 let automaticUiLanguage: UiLanguage = 'en';
 
@@ -1382,6 +1375,7 @@ const applyUiLanguage = (language: UiLanguage): void => {
   findPanelController.setUiLanguage(language);
   outlineController.setUiLanguage(language);
   previewController.setUiLanguage(language);
+  startupLoadingPresentation.setLabel(strings.loading);
   refreshEditorLoadingLabel();
   toolbarOverflowLayoutKey = '';
   syncToolbarOverflow();
@@ -1760,13 +1754,18 @@ const existingEditorWrapper = root.querySelector('.editor-wrapper');
 const editorWrapper = existingEditorWrapper instanceof HTMLElement ? existingEditorWrapper : document.createElement('div');
 editorWrapper.classList.add('editor-wrapper', 'meo-preload-editor-shell');
 editorWrapper.setAttribute('aria-hidden', 'true');
-const revealInitialShell = (): void => {
-  startupLoadingPresentation.finish();
-  startupLoadingPresentation.element.remove();
+const prepareInitialShell = (): void => {
   toolbar.classList.remove('meo-preload-toolbar');
   toolbar.removeAttribute('aria-hidden');
   editorWrapper.classList.remove('meo-preload-editor-shell');
+};
+const revealInitialShell = (): void => {
+  if (!startupLoadingPresentation.pending) return;
+  prepareInitialShell();
+  startupLoadingPresentation.finish();
+  startupLoadingPresentation.element.remove();
   editorWrapper.removeAttribute('aria-hidden');
+  documentStatistics.schedule();
 };
 
 const existingEditorHost = editorWrapper.querySelector('.editor-host');
@@ -1818,28 +1817,6 @@ let applyCodeThemeForPreview = (appearance: 'light' | 'dark') => {
   setShikiTheme(codePaletteAdapter.resolve(undefined, appearance).sourceTheme, 'preview');
 };
 let previewPaintReady = false;
-let resolveInitialPreviewPaint: (() => void) | null = null;
-const waitForInitialPreviewPaint = (): Promise<void> => {
-  if (previewPaintReady) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (resolveInitialPreviewPaint === finish) resolveInitialPreviewPaint = null;
-      resolve();
-    };
-    resolveInitialPreviewPaint = finish;
-    window.setTimeout(() => {
-      if (!settled && getActiveEditorMode() === 'preview') {
-        // A throttled paint callback must not leave the inert Live surface covering Preview.
-        editorHost.removeAttribute('data-preview-cover');
-        outlineController?.refreshAppearance(); documentViews?.refreshAppearance();
-      }
-      finish();
-    }, 600);
-  });
-};
 let previewViewportInteractionGeneration = 0;
 const previewFontsTransport = createPreviewFontsTransport(request => vscode.postMessage(request));
 const documentContentTransport = createDocumentContentTransport(request => vscode.postMessage(request));
@@ -1897,7 +1874,6 @@ const previewController = createPreviewController({
   },
   onPaintReady: () => {
     previewPaintReady = true;
-    resolveInitialPreviewPaint?.();
     editorHost.removeAttribute('data-preview-cover');
     editorSurface.removeAttribute('data-preview-preparing');
     const splitWillReveal = pendingSourcePreviewReveal !== null;
@@ -1910,13 +1886,16 @@ const previewController = createPreviewController({
     if (getActiveEditorMode() === 'preview' && outlineController?.isVisible()) outlineController.refreshViewport();
     if (getActiveEditorMode() === 'preview') sidebarOutline?.refreshViewport();
     if (getActiveEditorMode() === 'preview') findPanelController.refreshForModeChange();
+    // Preview owns its first accepted paint independently of the background
+    // text editor. Keep one document-wide cover until that paint or error state.
+    if (getActiveEditorMode() === 'preview') revealInitialShell();
   },
   onLoadingVisible: () => {
     if (getActiveEditorMode() === 'preview') {
       editorHost.removeAttribute('data-preview-cover');
-      // Initial Preview also waits for paint under the bootstrap shell. A real
-      // loading surface must be visible while that first frame is still pending.
-      revealInitialShell();
+      // Lay out the destination behind the original startup cover. Toolbar
+      // controls remain available to cancel a pending first presentation.
+      prepareInitialShell();
     } else if (isSidePreviewVisible()) {
       previewController.host.style.removeProperty('visibility');
       // The loading status remains accessible while the unfinished iframe
@@ -2083,12 +2062,13 @@ const beginEditorLoading = (mode: 'live' | 'source'): void => {
   }, () => {
     editorHost.setAttribute('aria-busy', 'true');
     editorHost.inert = true;
-    revealInitialShell();
+    prepareInitialShell();
   }, { immediate: initialEditorPresentationPending || (!editor && previewController.host.hidden) });
 };
 editorWrapper.replaceChildren(editorSurface, outlineController.sidebar, selectionMenuElements.menu);
-// Keep the shared popup outside toolbar stacking and inside editor focus ownership.
-root.replaceChildren(toolbar, editorNoticeBanner, editorWrapper, previewOptionsPanel, startupLoadingPresentation.element);
+// Keep the popup inside editor focus ownership and the startup cover connected,
+// so assembling the final-width shell does not restart its spinner animation.
+root.prepend(toolbar, editorNoticeBanner, editorWrapper, previewOptionsPanel);
 
 const editorModeApplication = createEditorModeApplication();
 let editorModeRuntime: EditorModeRuntime;
@@ -2220,6 +2200,7 @@ const finishSourcePreviewReveal = (): void => {
     previewController.finishLoadingPresentation();
     previewController.host.inert = false;
     previewController.host.style.removeProperty('visibility');
+    revealInitialShell();
     outlineController.refreshAppearance(); documentViews?.refreshAppearance();
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
       if (reveal.generation === sourcePreviewRevealGeneration && isSidePreviewVisible()) {
@@ -3043,6 +3024,7 @@ const documentOperationResponder = createDocumentOperationResponder({
   }
 });
 const documentStatistics = createDocumentStatisticsReporter(() => {
+  if (startupLoadingPresentation.pending) return null;
   const mode = getActiveEditorMode();
   if (mode === 'preview' ? !previewController.isReadingSurfaceReady()
     : !editor || !editorInteractive || editorLoadingPresentation.pending) return null;
@@ -3370,6 +3352,7 @@ const editorModeEffectAdapter = createEditorModeEffectAdapter({
       && editorModeApplication.getState().intentId === intent;
     presentModePreparation(mode);
     beginEditorLoading(mode);
+    let revealPreparedEditor = false;
     try {
       if (mode === 'source' && deferEditorViewportUntilPreviewExit && pendingEditorViewportAfterPreviewExit) {
         // Claim the destination before syntax preparation yields. A canceled
@@ -3403,8 +3386,8 @@ const editorModeEffectAdapter = createEditorModeEffectAdapter({
         (editor.view as typeof editor.view & { measure(flush?: boolean): void }).measure(false);
       }
       if (
-        !preparingAtomicSourcePreview && !previewController.host.hidden &&
-        (mode === 'live' || (mode === 'source' && editorHost.inert))
+        !preparingAtomicSourcePreview && (startupLoadingPresentation.pending || (!previewController.host.hidden &&
+        (mode === 'live' || (mode === 'source' && editorHost.inert))))
       ) {
         await editor.whenVisiblePresentationReady(LIVE_PRESENTATION_REVEAL_WAIT_MS);
       }
@@ -3418,11 +3401,13 @@ const editorModeEffectAdapter = createEditorModeEffectAdapter({
       failureNotice.clearFailureNotice(editorNoticeIssue.editorModeTransition);
       if (mode === 'live') failureNotice.clearFailureNotice(editorNoticeIssue.liveModeUnavailable);
       failureNotice.updateEditorNotice();
+      revealPreparedEditor = !preparingAtomicSourcePreview;
     } finally {
       // An older preparation must not clear the newer intent's indicator.
       if (isCurrent()) {
         presentModePreparation(null);
         finishEditorLoading();
+        if (revealPreparedEditor) revealInitialShell();
       }
     }
   },
@@ -4008,15 +3993,13 @@ window.addEventListener('message', (event) => {
             });
           }
           readingPositionLifecycle?.surfaceReady();
-          if (initializedMode === 'preview') {
-            await waitForInitialPreviewPaint();
-          } else {
+          if (initializedMode !== 'preview') {
             await editor?.whenVisiblePresentationReady(LIVE_PRESENTATION_REVEAL_WAIT_MS);
           }
           initialEditorPresentationPending = false;
           const initialPresentationCurrent = editorModeApplication.getState().intentId === initialPresentationIntent;
           if (initialPresentationCurrent) finishEditorLoading();
-          revealInitialShell();
+          if (initialPresentationCurrent && (initializedMode !== 'preview' || previewPaintReady)) revealInitialShell();
           failureNotice.updateEditorNotice();
         })
         .catch((error) => {

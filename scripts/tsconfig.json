@@ -16,6 +16,7 @@
     "check-test-inventory.ts",
     "check-architecture.ts",
     "browser-test-helpers.ts",
+    "startup-presentation-checks.ts",
     "feature-coverage-report.ts",
     "source-import-contracts.ts"
   ]

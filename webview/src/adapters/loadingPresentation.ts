@@ -2,21 +2,23 @@ import { loadingPresentationStyles } from '../../../src/foundation/loadingPresen
 export { loadingPresentationStyles };
 
 /** Callers choose immediate feedback for empty regions and own readiness and cancellation. */
-export function createLoadingPresentation(className: string) {
+export function createLoadingPresentation(className: string, existingElement?: HTMLElement | null) {
   if (!document.getElementById('meo-loading-presentation-style')) {
     const style = document.createElement('style'); style.id = 'meo-loading-presentation-style';
     style.textContent = loadingPresentationStyles; document.head.append(style);
   }
-  const element = document.createElement('div');
+  const element = existingElement ?? document.createElement('div');
   element.className = `surface-loading ${className}`;
-  element.hidden = true;
+  if (!existingElement) element.hidden = true;
   element.setAttribute('role', 'status');
   element.setAttribute('aria-live', 'polite');
-  const spinner = document.createElement('span');
+  const spinner = element.querySelector<HTMLElement>('.surface-loading-spinner') ?? document.createElement('span');
   spinner.className = `surface-loading-spinner ${className}-spinner`;
   spinner.setAttribute('aria-hidden', 'true');
-  const label = document.createElement('span');
-  element.append(spinner, label);
+  const label = element.querySelector<HTMLElement>('.surface-loading-label') ?? document.createElement('span');
+  label.className = 'surface-loading-label';
+  if (spinner.parentElement !== element) element.append(spinner);
+  if (label.parentElement !== element) element.append(label);
   let pending = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   return {

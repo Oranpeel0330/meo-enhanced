@@ -188,6 +188,7 @@ body {
 
 .meo-startup-loading {
   inset: var(--meo-editor-toolbar-height, 40px) 0 0;
+  z-index: var(--meo-layer-document-status);
   font-family: var(--vscode-font-family, system-ui);
 }
 

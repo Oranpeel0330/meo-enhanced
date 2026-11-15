@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { webviewPreloadModules } from '../src/extension/webviewResourceHints';
 import { getWebviewPreloadShellCss, getWebviewPreloadShellMarkup } from '../src/shared/webviewPreloadShell';
+import { checkStartupPresentation } from './startup-presentation-checks';
 
 async function checkEditorModulePreload(browser: Awaited<ReturnType<typeof launchTestBrowser>>, init: Record<string, unknown>) {
   const dist = path.resolve('webview/dist');
@@ -128,6 +129,7 @@ const observeStatistics = (page: Page) => page.evaluate(source => {
 let handoffInit: Record<string, unknown> | undefined;
 let primaryError: unknown;
 try {
+  await checkStartupPresentation(browser);
   for (const lineEnding of ['\n', '\r\n']) for (const custom of [false, true]) for (const mode of ['live', 'source', 'preview'] as const) {
     let savedState: unknown;
     const manualMode = mode === 'live' ? 'source' : mode === 'source' ? 'preview' : 'live';
