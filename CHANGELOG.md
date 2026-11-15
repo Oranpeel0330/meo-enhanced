@@ -4,6 +4,10 @@ This changelog retains the release history of the original Markdown Editor
 Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
 ## 0.4.1
+- Kept initial loading colors and document presentation stable until the editor is ready, with recoverable Preview loading failures.
+- Kept input suggestion menus aligned through indentation and layout changes, with keyboard guidance and a direct settings entry.
+- Preserved the existing keyboard-label shape while improving dark outlines in suggestion menus and document content.
+- Matched Preview and outline scrollbar gutters to their document backgrounds.
 - Added an adjustable 400–2400px maximum content width for Live and Source, with typed values and 100px steps in the dependent settings controls; Preview keeps its own layout.
 - Prepared nearby Live code colors and Preview resources before viewport entry, retaining bounded work and reading-position protection.
 - Loaded cold Preview syntax-worker assets alongside layout so nearby code can receive its final colors before continuous reading reaches it.
