@@ -8490,8 +8490,8 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
 .more-tools-navigation-option > svg { flex: 0 0 16px; stroke-width: 1.5; }
 .more-tools-navigation-option:focus-visible:not(:disabled) { outline: 1px solid var(--meo-ui-focus) !important; outline-offset: -1px; }
 .more-tools-option.more-tools-navigation-option:active:not(:disabled) { background: var(--meo-ui-surface-pressed); }
-.more-tools-navigation-action { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 3px; margin-right: 1px; white-space: nowrap; }
-.more-tools-support-link-icon { flex: 0 0 24px; }
+.more-tools-navigation-action { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; margin-right: 2px; white-space: nowrap; }
+.more-tools-support-link-icon { flex: 0 0 16px; }
 .more-tools-feedback-action, .more-tools-sponsor-action { color: var(--meo-ui-feedback-action); }
 .more-tools-feedback-link.is-version-open { background: var(--meo-ui-surface-hover); }
 .feedback-version-popover { position: fixed; z-index: var(--meo-layer-window-popover); box-sizing: border-box; width: 232px; color: var(--meo-ui-text); font: 12px/1.5 var(--vscode-font-family, system-ui, sans-serif); }
