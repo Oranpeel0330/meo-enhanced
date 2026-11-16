@@ -28,7 +28,7 @@ import { createEditingPreferencesTransport } from './adapters/editingPreferences
 import { createPreviewFontsTransport } from './adapters/previewFontsTransport';
 import { createEditorServicesTransport } from './adapters/editorServicesTransport';
 import { defaultInputAssistance, isEditorCommandId, type EditingPreferences } from '../../src/foundation/editingPreferences';
-import { createElement, Heading, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, List, ListOrdered, SquareCheck, ListTree, Hash, Code, SquareCode, Terminal, Quote, Minus, Plus, Table2, Link, Unlink, Brackets, Sigma, Image, Bold, Italic, Strikethrough, Search, FileCode2, Undo2, Redo2, RotateCcw, Settings, Settings2, Check, ChevronRight, ArrowRight, Ellipsis, Sun, Moon, SunMoon, Languages, Type, SlidersHorizontal, CircleQuestionMark, ExternalLink, Heart, History, Info } from 'lucide';
+import { createElement, Heading, Heading1, Heading2, Heading3, Heading4, Heading5, Heading6, List, ListOrdered, SquareCheck, ListTree, Hash, Code, SquareCode, Terminal, Quote, Minus, Plus, Table2, Link, Unlink, Brackets, Sigma, Image, Bold, Italic, Strikethrough, Search, FileCode2, Undo2, Redo2, RotateCcw, Settings, Settings2, Check, ChevronRight, Ellipsis, Sun, Moon, SunMoon, Languages, Type, SlidersHorizontal, CircleQuestionMark, Heart, History, Info } from 'lucide';
 import { createCodicon } from './helpers/codicons';
 import { DocumentWidth } from './helpers/documentWidthIcon';
 import { createContentWidthControl } from './adapters/contentWidthControl';
@@ -1420,7 +1420,7 @@ const reportIssueAction = document.createElement('span');
 reportIssueAction.className = 'more-tools-navigation-action more-tools-feedback-action';
 const reportIssueLabel = document.createElement('span');
 reportIssueLabel.textContent = activeUiStrings.reportIssue;
-reportIssueAction.append(reportIssueLabel, createElement(ExternalLink, { width: 13, height: 13, 'aria-hidden': 'true' }));
+reportIssueAction.append(reportIssueLabel, createElement(ChevronRight, { width: 16, height: 16, 'aria-hidden': 'true' }));
 reportIssueButton.append(createMoreToolsControlHeading(CircleQuestionMark, feedbackPrompt), reportIssueAction);
 const sponsorProjectLabel = document.createElement('span');
 sponsorProjectLabel.className = 'more-tools-option-label';
@@ -1434,7 +1434,7 @@ const sponsorProjectAction = document.createElement('span');
 sponsorProjectAction.className = 'more-tools-navigation-action more-tools-sponsor-action';
 const sponsorActionLabel = document.createElement('span');
 sponsorActionLabel.textContent = activeUiStrings.sponsorAction;
-sponsorProjectAction.append(sponsorActionLabel, createElement(ArrowRight, { width: 13, height: 13, 'aria-hidden': 'true' }));
+sponsorProjectAction.append(sponsorActionLabel, createElement(ChevronRight, { width: 16, height: 16, 'aria-hidden': 'true' }));
 sponsorProjectButton.append(createMoreToolsControlHeading(Heart, sponsorProjectLabel), sponsorProjectAction);
 moreToolsPanel.append(
   quickSettingsHeading,
