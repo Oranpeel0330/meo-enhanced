@@ -116,10 +116,10 @@ import {
   AlignRight,
   ArrowDown,
   ArrowDownAZ,
+  ArrowDownZA,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  ArrowUpAZ,
   ChevronLeft,
   ChevronRight,
   Columns2,
@@ -6437,7 +6437,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const sortAscending = this.createContextButton(strings.sortTableAscending, 'sort-ascending', ArrowDownAZ, () => {
       this.requestTableCommand('sort-ascending', !sortAscending.disabled);
     });
-    const sortDescending = this.createContextButton(strings.sortTableDescending, 'sort-descending', ArrowUpAZ, () => {
+    const sortDescending = this.createContextButton(strings.sortTableDescending, 'sort-descending', ArrowDownZA, () => {
       this.requestTableCommand('sort-descending', !sortDescending.disabled);
     });
     alignColumnLeft.setAttribute('role', 'menuitemradio');
