@@ -1,22 +1,55 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
-import { decodeReadingPaint, readingPaintShift } from './reading-paint-test-helpers';
+import { decodeReadingPaint, readingPaintShift, readingFramesInPresentationOrder, type ReadingPaint } from './reading-paint-test-helpers';
+
+// Model separately encoded compositor frames with distinct, stable body ink.
+// Reordered delivery must not invent motion; a real reverse paint must survive.
+const orderPaint = (offset: number): ReadingPaint => {
+  const width = 640, height = 300, data = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let seed = Math.imul(x + 17, 1597334677) ^ Math.imul(y - offset + 971, 3812015801);
+    seed = Math.imul(seed ^ seed >>> 16, 2246822519);
+    data[y * width + x] = (seed ^ seed >>> 13) & 255;
+  }
+  return { data, width, height, scale: 1 };
+};
+const painted = [0, 40, 80].map((offset, index) => ({ time: index + 1, paint: orderPaint(offset) }));
+const reverse = (before: typeof painted[number], after: typeof painted[number]) => {
+  const shift = readingPaintShift(before.paint, after.paint);
+  assert.ok(shift, 'The ordering control must provide measurable body ink');
+  return shift.dy < -12 && shift.score < .35 && shift.margin > .08;
+};
+const delivered = [painted[1]!, painted[0]!, painted[2]!];
+assert.equal(reverse(delivered[0]!, delivered[1]!), true, 'Arrival order can falsely look like a reverse paint');
+const ordered = readingFramesInPresentationOrder(delivered);
+assert.equal(ordered.slice(1).some((frame, index) => reverse(ordered[index]!, frame)), false,
+  'Asynchronously encoded frames must be compared in presentation order');
+const actualReverse = readingFramesInPresentationOrder([
+  { time: 3, paint: painted[1]!.paint }, { time: 1, paint: painted[0]!.paint }, { time: 2, paint: painted[2]!.paint }
+]);
+assert.equal(actualReverse.slice(1).some((frame, index) => reverse(actualReverse[index]!, frame)), true,
+  'Presentation ordering must retain a real reverse movement at the original thresholds');
+assert.throws(() => readingFramesInPresentationOrder([{ time: NaN }]), /presentation timestamps/);
+assert.throws(() => readingFramesInPresentationOrder([{ time: 0 }]), /presentation timestamps/);
+console.log('Screencast presentation order and real reverse-paint negative controls passed');
+if (process.argv.includes('--order-only')) process.exit(0);
 
 const build = await Bun.build({ entrypoints: ['scripts/test-live-reading-paint-entry.ts'], target: 'browser', format: 'iife' });
 assert.ok(build.success, build.logs.map(String).join('\n'));
 process.env.MEO_TEST_NATIVE_SMOOTH_SCROLLING = '1';
 const browser = await launchTestBrowser();
-const directory = '.local/test-artifacts/live-reading-paint';
+const directory = `.local/test-artifacts/live-reading-paint/${Date.now()}`;
 fs.mkdirSync(directory, { recursive: true });
+console.log(`Reading paint artifacts: ${directory}`);
 let failure: unknown;
 try {
   for (const large of [false, true]) {
-    const page = await browser.newPage(), frames: { data: string; time: number }[] = [], errors: string[] = [];
+    const page = await browser.newPage(), arrivedFrames: { data: string; time: number; arrival: number }[] = [], errors: string[] = [];
     const client = await page.createCDPSession();
     page.on('pageerror', error => errors.push(String(error)));
     client.on('Page.screencastFrame', event => {
-      frames.push({ data: event.data, time: event.metadata.timestamp ?? 0 });
+      arrivedFrames.push({ data: event.data, time: event.metadata.timestamp ?? NaN, arrival: arrivedFrames.length });
       void client.send('Page.screencastFrameAck', { sessionId: event.sessionId });
     });
     try {
@@ -48,6 +81,7 @@ try {
       }
       await new Promise(resolve => setTimeout(resolve, 200));
       await client.send('Page.stopScreencast');
+      const frames = readingFramesInPresentationOrder(arrivedFrames);
       assert.ok(frames.length >= 20, 'Capture actual compositor frames before comparing reading motion');
       await page.screenshot({ path: `${directory}/${large ? 'large' : 'ordinary'}.png` });
       fs.writeFileSync(`${directory}/${large ? 'large' : 'ordinary'}-sample.jpg`, Buffer.from(frames[Math.floor(frames.length / 2)]!.data, 'base64'));
@@ -61,7 +95,7 @@ try {
       }
       const wrongWay = shifts.filter(shift => shift.dy < -12 && shift.score < .35 && shift.margin > .08);
       fs.writeFileSync(`${directory}/${large ? 'large' : 'ordinary'}.json`, JSON.stringify({ initial, final, reachedStart,
-        frames: frames.length, shifts, wrongWay, errors }, null, 2));
+        frames: frames.length, frameOrder: frames.map(({ time, arrival }) => ({ time, arrival })), shifts, wrongWay, errors }, null, 2));
       for (const shift of wrongWay.slice(0, 3)) for (const index of [shift.frame - 1, shift.frame, shift.frame + 1]) {
         if (frames[index]) fs.writeFileSync(`${directory}/${large}-frame-${index}.jpg`, Buffer.from(frames[index]!.data, 'base64'));
       }

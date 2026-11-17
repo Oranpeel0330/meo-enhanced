@@ -1,6 +1,15 @@
 import sharp from 'sharp';
 
 export type ReadingPaint = { data: Uint8Array; width: number; height: number; scale: number };
+// CDP encodes screenshots on independent ThreadPool tasks before delivering
+// them. Keep every frame and use its swap timestamp rather than receipt order.
+// https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/protocol/page_handler.cc
+export function readingFramesInPresentationOrder<T extends { time: number }>(frames: readonly T[]): T[] {
+  if (frames.some(frame => !Number.isFinite(frame.time) || frame.time <= 0)) {
+    throw new Error('Reading paint comparison requires compositor presentation timestamps');
+  }
+  return [...frames].sort((before, after) => before.time - after.time);
+}
 export async function decodeReadingPaint(jpeg: string): Promise<ReadingPaint> {
   const source = Buffer.from(jpeg, 'base64'), metadata = await sharp(source).metadata();
   const { data, info } = await sharp(source).resize({ width: 640 }).greyscale().raw().toBuffer({ resolveWithObject: true });
