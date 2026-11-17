@@ -2708,6 +2708,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   cleanupFns: (() => void)[];
   cellSelection: TableCellSelection;
   cellInteraction: TableCellInteraction;
+  private heldCellPresentation: { input: HTMLTextAreaElement; pointerId: number } | null = null;
   pendingCellAutoCommitTimer: number | null;
   readonly cellSymbolSnapshots = new Map<number, readonly AutomaticSymbolPair[]>();
   composingInput: HTMLTextAreaElement | null = null;
@@ -4160,6 +4161,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       if (event.key !== 'Escape') return;
       // A modal owns Escape while the cell selection is kept for focus return.
       if (event.target instanceof Element && event.target.closest('dialog[open]')) return;
+      this.releaseCellPresentation();
       if (this.domRefs && !this.domRefs.contextMenu.hidden) {
         event.preventDefault();
         event.stopPropagation();
@@ -4208,6 +4210,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
 
     const onDocumentPointerDown = (event: PointerEvent) => {
       if (!(event.target instanceof Node)) return;
+      if (this.heldCellPresentation) {
+        this.holdCellPresentation(event.pointerId);
+        pendingTableSwitchPointerId = event.pointerId;
+      }
       // Menu actions clear confirmation on click. Collapsing on pointerdown moves
       // trailing controls before pointerup and loses the original click target.
       if (!this.domRefs?.contextMenu.contains(event.target)) this.clearDeleteTableConfirmation();
@@ -4226,6 +4232,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         : null;
       if (isOutsideTable && targetTableShell) {
         pendingTableSwitchPointerId = event.pointerId;
+        this.holdCellPresentation(event.pointerId);
         this.transferTableInteraction(wrap);
         return;
       }
@@ -4252,16 +4259,22 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     };
 
     const onDocumentPointerMove = (event: PointerEvent) => {
+      if (event.buttons === 0 && this.heldCellPresentation?.pointerId === event.pointerId) {
+        this.releaseCellPresentation();
+        pendingTableSwitchPointerId = null;
+      }
       if (table.hasPointerCapture?.(event.pointerId)) return;
       if (event.target instanceof Node && table.contains(event.target)) return;
       onPointerMove(event);
     };
 
     const onDocumentPointerEnd = (event: PointerEvent) => {
-      if (event.pointerId === pendingTableSwitchPointerId) {
+      if (event.pointerId === pendingTableSwitchPointerId || this.heldCellPresentation?.pointerId === event.pointerId) {
         const pointerId = event.pointerId;
+        const presentation = this.heldCellPresentation;
         window.setTimeout(() => {
           if (pendingTableSwitchPointerId === pointerId) pendingTableSwitchPointerId = null;
+          this.releaseCellPresentation(presentation);
         }, 0);
       }
       const targetInsideTable = event.target instanceof Node && table.contains(event.target);
@@ -4300,6 +4313,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     document.addEventListener('pointercancel', onDocumentPointerEnd, true);
     const onExternalPresentation = (event: Event) => {
       if (!(event instanceof CustomEvent) || event.detail?.owner !== this.view?.dom) return;
+      this.releaseCellPresentation();
       this.discardPendingCellEdits();
       this.exitTableInteraction(getWrap(), 'external');
     };
@@ -4338,6 +4352,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       document.removeEventListener('meo-commit-table-edits', onCommitTableEdits);
       pendingOutsidePointerId = null;
       pendingTableSwitchPointerId = null;
+      this.heldCellPresentation = null;
       if (outsidePointerExitTimer !== null) {
         window.clearTimeout(outsidePointerExitTimer);
         outsidePointerExitTimer = null;
@@ -5985,11 +6000,14 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   setCellEditingState(input: HTMLTextAreaElement, isEditing: boolean) {
     const content = input?.parentElement;
     if (!(content instanceof HTMLElement)) return;
-    const wasEditing = content.classList.contains('is-editing');
     const target = this.parseCellCoords(input.dataset.tableRow, input.dataset.tableCol);
     if (isEditing && target) {
+      this.releaseCellPresentation();
       for (const widget of this.view ? mountedTableWidgets.get(this.view) ?? [] : []) {
-        if (widget !== this) widget.endCellEditing();
+        if (widget !== this) {
+          widget.releaseCellPresentation();
+          widget.endCellEditing();
+        }
       }
       const previous = this.cellInteraction.snapshot().editingTarget;
       if (previous && (previous.row !== target.row || previous.col !== target.col)) this.endCellEditing();
@@ -5998,7 +6016,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         this.cellInteraction.accept({ type: 'blur', target });
       }
     }
-    if (wasEditing === isEditing) return;
+    if (content.classList.contains('is-editing') === isEditing) return;
     if (isEditing) {
       // End the former cell first, including its latest preview and row sizing.
       // A same-row switch must not inherit the former source editor's height.
@@ -6013,13 +6031,37 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.scheduleLayout();
   }
 
+  private holdCellPresentation(pointerId: number) {
+    const target = this.cellInteraction.snapshot().editingTarget;
+    const input = target ? this.domRefs?.allRowInputs[target.row]?.[target.col] : this.heldCellPresentation?.input;
+    if (input?.parentElement?.classList.contains('is-editing')) this.heldCellPresentation = { input, pointerId };
+  }
+
+  private releaseCellPresentation(presentation = this.heldCellPresentation) {
+    if (!presentation || presentation !== this.heldCellPresentation) return;
+    this.heldCellPresentation = null;
+    if (!presentation.input.isConnected) {
+      const content = presentation.input.parentElement;
+      content?.classList.remove('is-editing');
+      content?.style.removeProperty('--meo-table-cell-edit-min-height');
+      for (const cell of content?.closest('tr')?.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content') ?? []) {
+        cell.style.removeProperty('min-height');
+      }
+      return;
+    }
+    this.refreshCellPreviewFromInput(presentation.input);
+    this.setCellEditingState(presentation.input, false);
+  }
+
   endCellEditing() {
     const target = this.cellInteraction.snapshot().editingTarget;
     this.cancelPendingCellAutoCommit();
     const input = target ? this.domRefs?.allRowInputs[target.row]?.[target.col] : null;
     if (input) {
       this.refreshCellPreviewFromInput(input);
-      this.setCellEditingState(input, false);
+      // Cross-table capture retires the logical owner immediately. Its source
+      // geometry stays until the new pointer target has accepted the gesture.
+      if (this.heldCellPresentation?.input !== input) this.setCellEditingState(input, false);
     }
     this.cellInteraction.accept({ type: 'exit' });
   }

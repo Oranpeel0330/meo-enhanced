@@ -271,6 +271,94 @@ async function checkSingleCellDrag(page: Page) {
   await page.evaluate(() => (window as any).__singleCellEditor.destroy());
 }
 
+async function checkCrossTablePointerTransfer(page: Page) {
+  const first = '.meo-md-html-table-shell[data-cross-table="0"] tbody td:first-child .meo-md-html-table-cell-preview';
+  const second = '.meo-md-html-table-shell[data-cross-table="1"] tbody td:first-child .meo-md-html-table-cell-preview';
+  for (const large of [false, true]) {
+    const text = '| A |\n| --- |\n| **bold &** <img src=x onerror=alert(1)> |\n\noutside\n\n| C |\n| --- |\n| c1 |'
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+    assert.equal(assessLargeDocument(text).boundedEditorWork, large);
+    await page.evaluate(text => {
+      (window as any).__crossTableEditor = (window as any).TableStabilityHarness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, text);
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('.meo-md-html-table-shell').length === 2);
+      await page.evaluate(() => document.querySelectorAll<HTMLElement>('.meo-md-html-table-shell')
+        .forEach((shell, index) => { shell.dataset.crossTable = String(index); }));
+      const readingHeight = await page.$eval(first, preview => preview.closest('tr')!.getBoundingClientRect().height);
+      await page.click(first);
+      const editingHeight = await page.$eval(first, preview => preview.closest('tr')!.getBoundingClientRect().height);
+      assert.ok(editingHeight > readingHeight + 10, 'The first cell must expand beyond its rendered reading height');
+      const point = await page.$eval(second, preview => {
+        const rect = preview.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, top: rect.top };
+      });
+      await page.mouse.move(point.x, point.y);
+      await page.mouse.down();
+      await page.keyboard.down('Shift');
+      await page.keyboard.up('Shift');
+      const heldTops = await page.evaluate(async selector => {
+        const tops: number[] = [];
+        for (let frame = 0; frame < 14; frame++) {
+          await new Promise(requestAnimationFrame);
+          tops.push(document.querySelector(selector)!.getBoundingClientRect().top);
+        }
+        return tops;
+      }, second);
+      assert.ok(heldTops.every(top => Math.abs(top - point.top) <= 1),
+        `Cross-table press must retain its actual target through release: ${JSON.stringify({ large, point, heldTops })}`);
+      await page.mouse.up();
+      await page.waitForFunction(() => {
+        const first = document.querySelector('.meo-md-html-table-shell[data-cross-table="0"]')!;
+        const second = document.querySelector('.meo-md-html-table-shell[data-cross-table="1"]')!;
+        return !first.querySelector('.is-editing') && second.querySelectorAll('.is-editing').length === 1
+          && document.activeElement instanceof HTMLTextAreaElement && second.contains(document.activeElement);
+      });
+      const retiredHeight = await page.$eval(first, preview => preview.closest('tr')!.getBoundingClientRect().height);
+      assert.ok(Math.abs(retiredHeight - readingHeight) <= 1, 'The old source height must retire after the gesture');
+      for (const boundary of ['cancel', 'keyboard', 'released-move'] as const) {
+        await page.click('#outside');
+        await page.click(first);
+        const point = await page.$eval(second, preview => {
+          const rect = preview.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        });
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        if (boundary === 'cancel') await page.$eval(second, preview => preview.dispatchEvent(new PointerEvent('pointercancel', {
+          pointerId: 1, pointerType: 'mouse', bubbles: true, cancelable: true
+        })));
+        if (boundary === 'keyboard') await page.keyboard.press('Escape');
+        if (boundary === 'released-move') await page.evaluate(() => {
+          // A native window can consume release before the Webview receives it.
+          window.addEventListener('pointerup', event => event.stopImmediatePropagation(), { once: true, capture: true });
+        });
+        await page.mouse.up();
+        if (boundary === 'released-move') {
+          assert.equal(await page.$$eval('.meo-md-html-table-shell[data-cross-table="0"] .is-editing', nodes => nodes.length), 1,
+            'The swallowed release must leave the former presentation held before a released move');
+          await page.mouse.move(point.x + 2, point.y);
+        }
+        await page.waitForFunction(() => !document.querySelector('.meo-md-html-table-shell[data-cross-table="0"] .is-editing'));
+        assert.equal(await page.$$eval('.meo-md-html-table-shell[data-cross-table="1"] .is-editing', nodes => nodes.length), 0,
+          `${boundary}: an unfinished or canceled gesture must not enter the new source editor`);
+        assert.ok(Math.abs(await page.$eval(first, preview => preview.closest('tr')!.getBoundingClientRect().height) - readingHeight) <= 1,
+          `${boundary}: the old presentation must not survive its pointer boundary`);
+        await page.keyboard.press('Escape');
+      }
+      assert.equal(await page.evaluate(() => (window as any).__crossTableEditor.getText()), text);
+      console.log(`Cross-table source-height handoff passed (${large ? 'optimized' : 'ordinary'}, 14 held frames)`);
+    } finally {
+      await page.evaluate(() => {
+        (window as any).__crossTableEditor.destroy();
+        document.getElementById('app')!.replaceChildren();
+      });
+    }
+  }
+}
+
 async function main() {
   const build = await Bun.build({
     entrypoints: [path.join(repoRoot, 'scripts', 'test-table-stability-entry.ts')],
@@ -288,6 +376,10 @@ async function main() {
     await page.setContent('<!doctype html><button id="outside">outside</button><div id="app"></div>');
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+    if (!process.argv.includes('--single-cell-only')) {
+      await checkCrossTablePointerTransfer(page);
+      if (process.argv.includes('--cross-table-only')) return;
+    }
     await checkSingleCellDrag(page);
     if (process.argv.includes('--single-cell-only')) return;
     await page.evaluate((text) => {
