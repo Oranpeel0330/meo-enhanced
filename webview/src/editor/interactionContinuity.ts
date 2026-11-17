@@ -337,6 +337,11 @@ export function createEditorInteractionContinuity(input: {
   };
 
   const captureScrollTopBeforeInput = (): void => {
+    // Chromium selects the current preedit range between compositionupdate and
+    // beforeinput. A forced CodeMirror measure here can restore its collapsed
+    // model caret and turn the next preedit replacement into an insertion.
+    // Retain the geometry captured before composition began instead.
+    if (view.compositionStarted) return;
     const canCapture = getMode() === 'live' && view.hasFocus;
     const position = view.state.selection.main.head;
     pendingScrollTopBeforeInput = canCapture ? view.scrollDOM.scrollTop : null;
@@ -364,6 +369,7 @@ export function createEditorInteractionContinuity(input: {
   // Observe from the document capture phase so CodeMirror's own keydown
   // handler cannot commit the command before the old geometry is sampled.
   view.dom.ownerDocument.addEventListener('keydown', captureKeyCommandInput, true);
+  view.dom.addEventListener('compositionstart', captureScrollTopBeforeInput, true);
   view.dom.addEventListener('beforeinput', captureScrollTopBeforeInput, true);
   view.scrollDOM.addEventListener('wheel', cancelOnInteraction, { capture: true, passive: true });
   view.scrollDOM.addEventListener('touchstart', cancelOnInteraction, { capture: true, passive: true });
@@ -429,6 +435,7 @@ export function createEditorInteractionContinuity(input: {
       disposed = true;
       cancel();
       view.dom.ownerDocument.removeEventListener('keydown', captureKeyCommandInput, true);
+      view.dom.removeEventListener('compositionstart', captureScrollTopBeforeInput, true);
       view.dom.removeEventListener('beforeinput', captureScrollTopBeforeInput, true);
       view.scrollDOM.removeEventListener('wheel', cancelOnInteraction, true);
       view.scrollDOM.removeEventListener('touchstart', cancelOnInteraction, true);

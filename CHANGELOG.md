@@ -7,6 +7,7 @@ Optimized project. New MEO Enhanced releases start from version 0.1.0.
 - Sized Live table rows by visible rendered content, removing blank space caused by hidden long link addresses.
 - Preserved the rendered row height when entering a cell editor, allowed longer source to expand, and restored the latest preview height after editing.
 - Kept cell switches and drag selections stable as source editors change height, including clicks between separate tables.
+- Preserved native IME composition ranges while retaining the editor's reading position.
 - Unified settings and support navigation icons, spacing, and descending-sort indicators.
 - Refreshed the English and Simplified Chinese README pages and product screenshots.
 

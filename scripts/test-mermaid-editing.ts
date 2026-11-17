@@ -437,13 +437,16 @@ try {
     }
     console.log('Mermaid side preview viewport contract passed');
   };
-  await assertSidePreviewViewport();
+  const inputOnly = process.argv.includes('--input-only');
+  if (!inputOnly) await assertSidePreviewViewport();
   assert.deepEqual(errors, []);
   if (!process.argv.includes('--preview-viewport-only')) {
   const boundaryOnly = process.argv.includes('--boundary-navigation-only');
-  if (!boundaryOnly && !process.argv.includes('--keyboard-navigation-only')) await assertNavigation();
-  if (!boundaryOnly) await assertKeyboardEntry();
-  await assertKeyboardBoundaryStability();
+  if (!inputOnly) {
+    if (!boundaryOnly && !process.argv.includes('--keyboard-navigation-only')) await assertNavigation();
+    if (!boundaryOnly) await assertKeyboardEntry();
+    await assertKeyboardBoundaryStability();
+  }
   if (process.argv.includes('--navigation-only') || process.argv.includes('--keyboard-navigation-only') || boundaryOnly) {
     assert.deepEqual(errors, []);
     console.log('Mermaid navigation contract passed');
@@ -538,7 +541,7 @@ try {
       await client.send('Input.insertText', { text: '新的' });
       await client.detach();
       await frames(12);
-      assert.ok((await read()).text.includes('A[新的]'));
+      assert.ok((await read()).text.includes('A[新的]'), `${c.name}/${width}: successive preedits replace the same native composition range`);
       assert.equal((await read()).focus, true);
       const beforeMode = await read();
       await page.evaluate(() => {
