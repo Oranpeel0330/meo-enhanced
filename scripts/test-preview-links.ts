@@ -10,6 +10,7 @@ const entryPath = path.join(tempDir, 'entry.ts');
 fs.writeFileSync(entryPath, `
 import ${JSON.stringify(path.join(repoRoot, 'scripts', 'test-preview-mermaid-runtime-entry.ts'))};
 import { bindTooltips } from ${JSON.stringify(path.join(repoRoot, 'webview', 'src', 'adapters', 'tooltip.ts'))};
+import { writePreviewFrame } from ${JSON.stringify(path.join(repoRoot, 'webview', 'src', 'helpers', 'previewFrameWriter.ts'))};
 import { initializeImageHandling, settleImageSrcRequest } from ${JSON.stringify(path.join(repoRoot, 'webview', 'src', 'helpers', 'images.ts'))};
 initializeImageHandling({ postMessage(message) {
   if (message.type === 'resolveImageSrc') queueMicrotask(() => settleImageSrcRequest({
@@ -17,6 +18,7 @@ initializeImageHandling({ postMessage(message) {
   }));
 } });
 bindTooltips(document.body);
+(window as any).__writePreviewLinkFrame = writePreviewFrame;
 `);
 const build = await Bun.build({
   entrypoints: [entryPath],
@@ -404,6 +406,41 @@ try {
     || wheel.events.length !== 1 || !wheel.events[0].trusted || wheel.events[0].prevented) {
     throw new Error(`Refreshed or disposed Preview retained duplicate listeners: ${JSON.stringify(wheel)}`);
   }
+  // The production streaming writer reuses the Document while replacing body
+  // and its event listeners. Establish the original binding before both writes.
+  await page.evaluate(() => {
+    const frame = document.createElement('iframe');
+    frame.id = 'rewritten-link-frame';
+    frame.style.cssText = 'position:fixed;inset:0;width:700px;height:350px;border:0';
+    document.body.append(frame);
+  });
+  const rewritten = await (await page.$('#rewritten-link-frame'))!.contentFrame();
+  await rewritten!.waitForSelector('[data-meo-tooltip-style]');
+  for (const target of ['first', 'second']) {
+    await page.evaluate(target => {
+      const scope = window as any, frame = document.querySelector<HTMLIFrameElement>('#rewritten-link-frame')!;
+      const doc = frame.contentDocument!;
+      scope.__previousLinkFrame = { doc, body: doc.body };
+      scope.__linkFrameWritten = false;
+      scope.__writePreviewLinkFrame(frame, '<!doctype html><html><head><style>body{margin:10px}</style></head><body>',
+        `<a id="rewritten-link" href="https://example.com/${target}">Rewritten ${target}</a>` + '<p>Padding</p>'.repeat(6000),
+        '</body></html>', () => true, () => { scope.__linkFrameWritten = true; });
+    }, target);
+    await page.waitForFunction(() => (window as any).__linkFrameWritten);
+    const identity = await page.evaluate(() => {
+      const scope = window as any, doc = document.querySelector<HTMLIFrameElement>('#rewritten-link-frame')!.contentDocument!;
+      return { sameDocument: doc === scope.__previousLinkFrame.doc, replacedBody: doc.body !== scope.__previousLinkFrame.body };
+    });
+    if (!identity.sameDocument || !identity.replacedBody) throw new Error('Streaming link fixture did not replace the bound body');
+    await page.mouse.move(750, 450);
+    await rewritten!.hover('#rewritten-link');
+    await rewritten!.waitForFunction(target => document.querySelector('.meo-tooltip.is-visible .meo-tooltip-label')?.textContent
+      === `Go to: https://example.com/${target}`, { timeout: 1500 }, target);
+    const counts = await rewritten!.evaluate(() => ({ styles: document.querySelectorAll('[data-meo-tooltip-style]').length,
+      visible: document.querySelectorAll('.meo-tooltip.is-visible').length }));
+    if (counts.styles !== 1 || counts.visible !== 1) throw new Error(`Streaming link binding duplicated its resources: ${JSON.stringify(counts)}`);
+  }
+  await page.$eval('#rewritten-link-frame', frame => frame.remove());
 } finally {
   await browser.close();
   fs.rmSync(tempDir, { recursive: true, force: true });

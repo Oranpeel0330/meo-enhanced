@@ -502,7 +502,7 @@ export function bindTooltips(root: HTMLElement, options: {
   const events = new view.AbortController();
   let current: { anchor: HTMLElement; hint: ReturnType<typeof createTooltip>; editableHref?: string } | undefined;
   const ariaOwned = new WeakSet<HTMLElement>();
-  const frames = new Map<HTMLIFrameElement, { doc: Document | null; dispose?: () => void }>();
+  const frames = new Map<HTMLIFrameElement, { doc: Document | null; body: HTMLElement | null; dispose?: () => void }>();
   const conflicts = new WeakSet<HTMLElement>();
   let pointer: { x: number; y: number } | undefined;
   let linkModifier = false;
@@ -634,13 +634,15 @@ export function bindTooltips(root: HTMLElement, options: {
   function bindFrame(frame: HTMLIFrameElement) {
     let state = frames.get(frame);
     if (!state) {
-      state = { doc: null }; frames.set(frame, state);
+      state = { doc: null, body: null }; frames.set(frame, state);
       frame.addEventListener('load', () => bindFrame(frame), { signal: events.signal });
     }
     let child: Document | null;
     try { child = frame.contentDocument; } catch { return; }
-    if (!child?.body || state.doc === child) return;
-    state.dispose?.(); state.doc = child;
+    // Streaming document.open/write keeps Document identity while replacing its
+    // body and listeners. The bound root, not only the Document, owns this lease.
+    if (!child?.body || state.doc === child && state.body === child.body) return;
+    state.dispose?.(); state.doc = child; state.body = child.body;
     const styles = child.createElement('style'); styles.dataset.meoTooltipStyle = '';
     // Keep tooltip UI appearance separate from Preview's own document theme and fonts.
     styles.textContent = sharedStyles(doc).replaceAll('data-editor-appearance', 'data-meo-tooltip-appearance'); child.head.append(styles);
