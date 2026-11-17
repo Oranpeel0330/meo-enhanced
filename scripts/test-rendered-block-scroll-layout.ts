@@ -43,8 +43,8 @@ try {
     const { metrics } = await cdp.send('Performance.getMetrics');
     return metrics.find(metric => metric.name === 'LayoutCount')!.value;
   };
-  // The first attached table must reserve its Markdown editor's wrapped height
-  // before the asynchronous table layout pass can expose a second geometry.
+  // The first attached table sizes its rendered labels. Entering the native
+  // editor must still fit the complete wrapped source without an inner scroll.
   await page.addStyleTag({ content: `
     .row-layout-contract table.meo-md-html-table { table-layout: fixed !important; width: 330px !important; }
     .row-layout-contract table.meo-md-html-table col { width: 165px !important; }
@@ -55,6 +55,7 @@ try {
       parent: document.getElementById('app'), initialMode: 'live', onApplyChanges() {},
       text: '| Label | Value |\n| --- | --- |\n| source | [x](https://example.invalid/' + 'long-path/'.repeat(24) + ') |\n'
     });
+    (window as any).__rowLayoutContractEditor = editor;
     editor.view.dom.classList.add('row-layout-contract');
     const row = editor.view.contentDOM.querySelector('tbody tr')!;
     const attached = row.getBoundingClientRect().height;
@@ -62,16 +63,27 @@ try {
     const settled = row.getBoundingClientRect().height;
     const cells = Array.from(row.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content'))
       .map(cell => cell.getBoundingClientRect().height);
-    const sourceFits = Array.from(row.querySelectorAll<HTMLTextAreaElement>('textarea'))
-      .every(input => input.scrollHeight <= input.clientHeight + 1);
-    editor.destroy();
-    return { attached, settled, cells, sourceFits };
+    return { attached, settled, cells };
   });
   assert.ok(Math.abs(firstRowLayout.attached - firstRowLayout.settled) <= 1,
     `Reading a newly mounted table must not gain a second row height: ${JSON.stringify(firstRowLayout)}`);
   assert.ok(Math.max(...firstRowLayout.cells) - Math.min(...firstRowLayout.cells) <= 1,
     'Native input and cell hit areas must still span the whole shared row height');
-  assert.equal(firstRowLayout.sourceFits, true, 'The native source editor must fit without an inner vertical scroll');
+  assert.ok(firstRowLayout.settled < 60, 'A hidden long address must not expand the single-line reading row');
+  await page.click('tbody td:nth-child(2) .meo-md-html-table-cell-preview');
+  const sourceFrames = await page.evaluate(async () => {
+    const input = document.querySelector<HTMLTextAreaElement>('tbody td:nth-child(2) textarea')!;
+    const frames: { active: boolean; height: number; scrollHeight: number }[] = [];
+    for (let frame = 0; frame < 14; frame++) {
+      await new Promise(requestAnimationFrame);
+      frames.push({ active: document.activeElement === input && input.isConnected,
+        height: input.clientHeight, scrollHeight: input.scrollHeight });
+    }
+    return frames;
+  });
+  assert.ok(sourceFrames.every(frame => frame.active && frame.height > 0 && frame.scrollHeight <= frame.height + 1),
+    `The active native source must fit without an inner vertical scroll: ${JSON.stringify(sourceFrames)}`);
+  await page.evaluate(() => (window as any).__rowLayoutContractEditor.destroy());
   const initial = await layoutCount();
   // Passive reading must not create caret mirrors for hidden, unfocused native
   // inputs. Those probes invalidate page layout and wake floating block chrome.

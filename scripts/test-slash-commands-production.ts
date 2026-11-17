@@ -679,11 +679,15 @@ try {
     if (!wrap.scrollLeft) throw new Error('The horizontal clipping fixture must actually overflow');
   }); await closed();
   await page.evaluate(() => { document.querySelector('.meo-md-html-table-wrap')!.scrollLeft = 0; }); await settlePosition(); await closed();
-  await prepareCell('word '.repeat(50));
+  await prepareCell('[x](https://example.invalid/' + 'long-path/'.repeat(80) + ') z');
   await page.evaluate(() => {
     const input = document.activeElement as HTMLTextAreaElement;
     input.style.height = '32px'; input.style.maxHeight = '32px'; input.style.overflowY = 'auto';
   }); await page.keyboard.type('/b'); await open();
+  assert.equal(await page.evaluate(() => {
+    const input = document.activeElement as HTMLTextAreaElement;
+    return input.scrollHeight > input.clientHeight && input.scrollTop > 0;
+  }), true, 'The compact reading label must produce a genuinely clipped source caret');
   await page.evaluate(() => { (document.activeElement as HTMLTextAreaElement).scrollTop = 0; }); await closed();
   assert.deepEqual(errors, []);
   console.log('Slash commands production contracts passed');
