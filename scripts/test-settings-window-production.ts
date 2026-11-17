@@ -211,25 +211,28 @@ try {
       });
       await page.keyboard.type('/'); await page.waitForSelector('.meo-input-suggestions:not([hidden])');
       const menu = await sample('.meo-suggestion-key kbd[data-key="Enter"]', '.meo-input-suggestions');
-      await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `menu-${language}-${appearance}.png`) });
-      await (await page.$('.meo-suggestion-guidance'))!.screenshot({ path: path.join(folder, `guidance-${language}-${appearance}.png`) });
+      // Beyond-viewport capture can transiently resize Chromium's layout viewport
+      // to 1x1 and legitimately dismiss a caret-anchored menu. These UI crops are
+      // already visible and must preserve the interactive page's viewport.
+      await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `menu-${language}-${appearance}.png`), captureBeyondViewport: false });
+      await (await page.$('.meo-suggestion-guidance'))!.screenshot({ path: path.join(folder, `guidance-${language}-${appearance}.png`), captureBeyondViewport: false });
       const documentLine = await page.$eval('.meo-md-kbd', key => key.closest('.cm-line')!.getBoundingClientRect().toJSON());
-      await page.screenshot({ path: path.join(folder, `document-${language}-${appearance}.png`), clip: {
+      await page.screenshot({ path: path.join(folder, `document-${language}-${appearance}.png`), captureBeyondViewport: false, clip: {
         x: Math.floor(documentLine.x) - 6, y: Math.floor(documentLine.y) - 4,
         width: Math.min(420, Math.ceil(documentLine.width) + 12), height: Math.ceil(documentLine.height) + 8
       } });
       await page.keyboard.press('Escape'); await page.hover('[data-action="find"]');
       await page.waitForSelector('.meo-tooltip.is-visible .meo-tooltip-shortcut:not([hidden])');
       const tooltip = await sample('.meo-tooltip.is-visible .meo-tooltip-shortcut', '.meo-tooltip');
-      await (await page.$('.meo-tooltip.is-visible'))!.screenshot({ path: path.join(folder, `tooltip-${language}-${appearance}.png`) });
+      await (await page.$('.meo-tooltip.is-visible'))!.screenshot({ path: path.join(folder, `tooltip-${language}-${appearance}.png`), captureBeyondViewport: false });
       await page.keyboard.press('Escape'); await page.mouse.move(2, 2);
       await page.locator('.more-tools-wrapper > .format-button').click(); await page.locator('.more-tools-settings-button').click();
       await page.locator('.settings-tab[data-tab="shortcuts"]').click();
       const settings = await sample('.settings-key', '.settings-window');
       await (await page.$('.settings-key'))!.evaluate(cap => cap.closest('.settings-item')!.setAttribute('data-keycap-sample', ''));
-      await (await page.$('[data-keycap-sample]'))!.screenshot({ path: path.join(folder, `settings-${language}-${appearance}.png`) });
+      await (await page.$('[data-keycap-sample]'))!.screenshot({ path: path.join(folder, `settings-${language}-${appearance}.png`), captureBeyondViewport: false });
       const keys = await page.$eval('.settings-shortcut-keys', group => group.getBoundingClientRect().toJSON());
-      await page.screenshot({ path: path.join(folder, `binding-${language}-${appearance}.png`), clip: {
+      await page.screenshot({ path: path.join(folder, `binding-${language}-${appearance}.png`), captureBeyondViewport: false, clip: {
         x: Math.floor(keys.x) - 6, y: Math.floor(keys.y) - 6, width: Math.ceil(keys.right) - Math.floor(keys.x) + 12, height: Math.ceil(keys.bottom) - Math.floor(keys.y) + 12
       } });
       assert.equal(tooltip.background, appearance === 'dark' ? 'rgba(255, 255, 255, 0.18)' : 'rgb(85, 85, 85)', 'tooltip shortcut keeps its original fill');
@@ -351,7 +354,7 @@ try {
         assert.deepEqual(layout.keys, ['↑↓', 'Enter', 'Esc']); assert.ok(layout.width >= (language === 'en' ? 304 : 288), label + ': widened fixed minimum');
         assert.equal(layout.centeredKeys && layout.arrowIcon && layout.unifiedGuidance && layout.insetSeparator, true, label + ': centered key contents, vector arrows, shared surface and an inset separator');
         assert.ok(above ? layout.footer.bottom <= layout.list.top + 1 : layout.footer.top >= layout.list.bottom - 1, label + ': guidance stays away from input');
-        if (mode === 'source') await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `${language}-${item.name ?? item.kind}.png`) });
+        if (mode === 'source') await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `${language}-${item.name ?? item.kind}.png`), captureBeyondViewport: false });
         await page.locator('.meo-suggestion-settings').click();
         await page.waitForSelector('.settings-window[open]');
         assert.equal(await page.$('.meo-input-suggestions:not([hidden])'), null, label + ': candidate popup closes');
