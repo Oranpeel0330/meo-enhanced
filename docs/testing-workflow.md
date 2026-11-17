@@ -1945,6 +1945,14 @@ checks the growing native text range before pointer release when entering a cell
 from the document body or another cell, then its accepted textarea selection.
 The complete contract remains in the table editing and browser release suites.
 
+The same owner supports `--height-only` for rendered/source row-height transitions.
+Ordinary and actually optimized documents check compact long-link previews,
+held-pointer and Tab handoffs within one row, stable cross-cell drags, taller/shorter source editors,
+image entry baselines, deletion without a historical height maximum, and accepting
+the old cell's latest preview before sizing its neighbor. Both native content
+sizing and the unsupported-feature measurement fallback use the production CSS
+and input owners. The default table-editing invocation includes these cases.
+
 `scripts/test-document-block-preview-idle.ts` exercises the production optional
 block adapter with small and many-code-block preview DOMs. Absent, panel-only and
 disabled renderers perform no code-block scans after DOM mutations; enabling a

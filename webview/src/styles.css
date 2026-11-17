@@ -7454,14 +7454,14 @@ html[data-editor-appearance='dark'] body.vscode-dark
 }
 
 .cm-editor .meo-md-html-table-cell-content.is-editing textarea {
+  min-height: var(--meo-table-cell-edit-min-height, 0px);
   opacity: 1;
   pointer-events: auto;
 }
 
 @supports (field-sizing: content) {
-  /* Both layers contribute their height before a virtual table is measured.
-     Only the preview contributes intrinsic column width; Markdown URLs must
-     wrap within those columns when the source textarea becomes editable. */
+  /* Reading rows only size their preview. The active source editor replaces
+     that layer and keeps the rendered row height captured on entry. */
   .cm-editor .meo-md-html-table-cell-content {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -7472,7 +7472,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
     min-width: 0;
   }
 
-  .cm-editor .meo-md-html-table textarea {
+  .cm-editor .meo-md-html-table-cell-content.is-editing textarea {
     position: relative;
     inset: auto;
     grid-area: 1 / 1;

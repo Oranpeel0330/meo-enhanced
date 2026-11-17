@@ -66,16 +66,27 @@ async function main(): Promise<void> {
       const input = preview.closest('td')?.querySelector<HTMLTextAreaElement>('textarea');
       return { row: input?.dataset.tableRow ?? null, col: input?.dataset.tableCol ?? null };
     });
-    const looseCenter = async (query: string) => page.$eval(query, (element) => {
-      const rect = element.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    const looseTextPoint = async (query: string) => page.$eval(query, (element) => {
+      // The compact link preview also contains its open button. Begin the
+      // rectangle on an actual glyph rather than the preview box's midpoint.
+      const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+      const range = document.createRange(); range.setStart(text, 0); range.setEnd(text, 1);
+      const rect = range.getBoundingClientRect();
+      return { x: Math.ceil(rect.left + 2), y: Math.round(rect.top + rect.height / 2) };
     });
-    const looseStart = await looseCenter(looseStartSelector);
-    const looseEnd = await looseCenter(looseEndSelector);
+    const looseStart = await looseTextPoint(looseStartSelector);
+    const looseEnd = await looseTextPoint(looseEndSelector);
     await page.mouse.move(looseStart.x, looseStart.y);
     await page.mouse.down();
     await page.mouse.move(looseEnd.x, looseEnd.y, { steps: 5 });
     await page.mouse.up();
+    const looseSelection = await page.evaluate(({ start, end }) => ({
+      selected: document.querySelectorAll('.meo-md-html-table-cell-selected').length,
+      start: document.elementFromPoint(start.x, start.y)?.outerHTML.slice(0, 250),
+      end: document.elementFromPoint(end.x, end.y)?.outerHTML.slice(0, 250),
+      active: document.activeElement?.outerHTML.slice(0, 150)
+    }), { start: looseStart, end: looseEnd });
+    if (looseSelection.selected !== 4) throw new Error(`Loose rectangle did not reach its four cells: ${JSON.stringify(looseSelection)}`);
     await page.keyboard.press('Delete');
     await page.waitForFunction(() => !(window as any).__selectionViewportEditor.getText().includes('VS Code'));
     await page.evaluate(() => {

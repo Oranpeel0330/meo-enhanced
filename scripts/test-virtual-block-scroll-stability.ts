@@ -338,14 +338,19 @@ async function main(): Promise<void> {
         scale = 100;
         const beforeChanged = calls.length;
         const changedHeight = estimate(request);
-        return { firstHeight, changedHeight, firstCalls, repeatedCalls, secondCalls: calls.length - beforeChanged };
+        const secondCalls = calls.length - beforeChanged;
+        const linkedHeight = estimate({ ...request, rows: [
+          ['same', `[same](https://example.test/${'long-address'.repeat(80)})`], ['same<br>same', 'same']
+        ] });
+        return { firstHeight, changedHeight, linkedHeight, firstCalls, repeatedCalls, secondCalls };
       } finally {
         prototype.measureText = original;
       }
     });
-    if (tableMeasurement.firstCalls !== 3 || tableMeasurement.repeatedCalls !== 0 || tableMeasurement.secondCalls !== 3
-      || tableMeasurement.firstHeight !== 123 || tableMeasurement.changedHeight !== 411) {
-      throw new Error(`Table height must measure each distinct line once per estimate and remeasure later: ${JSON.stringify(tableMeasurement)}`);
+    if (tableMeasurement.firstCalls !== 1 || tableMeasurement.repeatedCalls !== 0 || tableMeasurement.secondCalls !== 1
+      || tableMeasurement.firstHeight !== 123 || tableMeasurement.changedHeight !== 315
+      || tableMeasurement.linkedHeight !== tableMeasurement.changedHeight) {
+      throw new Error(`Table height must measure rendered lines once, ignore hidden URLs and remeasure fonts later: ${JSON.stringify(tableMeasurement)}`);
     }
     await page.evaluate((text) => {
       (window as any).__virtualBlockEditor = (window as any).EmbeddedInputViewportHarness.createEditor({

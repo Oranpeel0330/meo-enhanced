@@ -210,12 +210,7 @@ function projectTableLayout(
       const renderedLines = visualLineWidths(cell, measure).reduce((sum, width) => (
         sum + Math.max(1, Math.ceil(width / (contentWidths[column] ?? 32)))
       ), 0);
-      const sourceLines = cell.split(/\r?\n/).reduce((sum, line) => (
-        sum + Math.max(1, Math.ceil(measure(line) / (contentWidths[column] ?? 32)))
-      ), 0);
-      // A table row reserves enough room for both its rendered preview and the
-      // hidden Markdown textarea, so focusing a cell never changes row height.
-      return Math.max(maximum, renderedLines, sourceLines);
+      return Math.max(maximum, renderedLines);
     }, 1);
     return metrics.lineHeight * wrappedLines + cellVerticalInset;
   });

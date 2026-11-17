@@ -3599,7 +3599,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         continue;
       }
       if (effect.kind === 'cells') {
-        if (effect.focus === 'table' || effect.range.fromRow !== effect.range.toRow || effect.range.fromCol !== effect.range.toCol) {
+        const held = effect.pointerId !== null && this.cellSelection.ownsPointer(effect.pointerId);
+        if (!held && (effect.focus === 'table' || effect.range.fromRow !== effect.range.toRow || effect.range.fromCol !== effect.range.toCol)) {
+          // A rectangular drag can blur the native input before release. Keep
+          // its source geometry until the pointer has accepted the final range.
           runPrimary(() => this.endCellEditing());
         }
         runPrimary(clearNativeTextSelection);
@@ -5713,8 +5716,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   }
 
   resizeRows(entries: readonly RowEntry[]) {
-    // Native content sizing keeps preview and source heights in the same layout
-    // as attachment and column projection, without a later probe-driven growth.
+    // Only the current display layer sizes each cell. Active source editors
+    // retain their entry baseline without reserving space for hidden URLs.
     if (typeof CSS !== 'undefined' && CSS.supports('field-sizing', 'content')) {
       const rows = entries.map(({ row }) => Array.from(
         row.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content')
@@ -5734,10 +5737,11 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     }
     const rows = entries.map(({ row, inputs }) => {
       const contents = Array.from(row.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content'));
+      const editingInputs = inputs.filter(input => input.parentElement?.classList.contains('is-editing'));
       return {
         contents,
-        inputs,
-        widths: inputs.map((input) => input.getBoundingClientRect().width),
+        inputs: editingInputs,
+        widths: editingInputs.map((input) => input.getBoundingClientRect().width),
         // Editing keeps the previous preview DOM alive, but its stale height
         // must not keep a row from shrinking as the user deletes text.
         previewHeight: Math.max(0, ...contents.map((content) =>
@@ -5746,7 +5750,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
             : content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview')?.scrollHeight ?? 0
         ))
       };
-    }).filter(({ contents, inputs }) => contents.length > 0 && inputs.length > 0);
+    }).filter(({ contents }) => contents.length > 0);
     // A virtualized table can remount during a scroll. Attach all zero-height
     // probes before measuring so layout work is bounded per table, not per cell.
     const measurements = rows.map((row) => ({
@@ -5760,7 +5764,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
           inset: 'auto', top: '0', left: '0', height: '0px',
           width: `${row.widths[index]}px`, visibility: 'hidden', pointerEvents: 'none'
         });
-        (row.contents[index] ?? row.contents[0])!.appendChild(probe);
+        row.inputs[index]!.parentElement!.appendChild(probe);
         return probe;
       })
     }));
@@ -5981,6 +5985,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   setCellEditingState(input: HTMLTextAreaElement, isEditing: boolean) {
     const content = input?.parentElement;
     if (!(content instanceof HTMLElement)) return;
+    const wasEditing = content.classList.contains('is-editing');
     const target = this.parseCellCoords(input.dataset.tableRow, input.dataset.tableCol);
     if (isEditing && target) {
       for (const widget of this.view ? mountedTableWidgets.get(this.view) ?? [] : []) {
@@ -5993,7 +5998,19 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         this.cellInteraction.accept({ type: 'blur', target });
       }
     }
+    if (wasEditing === isEditing) return;
+    if (isEditing) {
+      // End the former cell first, including its latest preview and row sizing.
+      // A same-row switch must not inherit the former source editor's height.
+      content.style.setProperty('--meo-table-cell-edit-min-height', `${content.getBoundingClientRect().height}px`);
+    } else {
+      content.style.removeProperty('--meo-table-cell-edit-min-height');
+    }
     content.classList.toggle('is-editing', isEditing);
+    const row = content.closest('tr');
+    if (row) this.resizeRow(row);
+    this.stickyHeaderAdapter.update();
+    this.scheduleLayout();
   }
 
   endCellEditing() {
