@@ -12,6 +12,12 @@ const browser = await launchTestBrowser();
 let primaryError: unknown;
 try {
   const page = await browser.newPage();
+  const waitForMatchCount = (count: number) => page.waitForFunction(count => {
+    const status = document.querySelector('.find-status')?.textContent ?? '';
+    const current = /^(\d+)\/(\d+)$/.exec(status);
+    return status === `${count} matches` || !!current && Number(current[2]) === count
+      && Number(current[1]) >= 1 && Number(current[1]) <= count;
+  }, {}, count);
   await page.setViewport({ width: 1100, height: 650 });
   await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}</style><div id="app"></div>');
   await page.addStyleTag({ path: 'webview/src/styles.css' });
@@ -72,8 +78,7 @@ try {
         && (mode === 'preview' ? !preview?.hidden && Boolean(document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.querySelector('.meo-preview-search-match'))
           : !editor?.hidden && !editor?.inert && Boolean(editor?.querySelector(`.meo-mode-${mode}`)));
     }, {}, mode);
-    await page.waitForFunction(mode => document.querySelector('.find-status')?.textContent ===
-      (mode === 'preview' ? '6 matches' : '7 matches'), {}, mode);
+    await waitForMatchCount(mode === 'preview' ? 6 : 7);
     const state = await page.evaluate(mode => {
       const inputs = document.querySelectorAll<HTMLInputElement>('.find-input');
       return { replacement: inputs[1]!.value, replaceDisabled: inputs[1]!.disabled,
@@ -134,7 +139,7 @@ try {
   await mkdir('.local/search-view-continuity', { recursive: true });
   await page.screenshot({ path: '.local/search-view-continuity/preview-search.png' });
   await page.click('button[data-mode="source"]');
-  await page.waitForFunction(() => document.querySelector('.find-status')?.textContent === '7 matches');
+  await waitForMatchCount(7);
   await page.focus('.find-replace-row .find-input');
   await page.keyboard.press('Enter');
   await page.click('button[data-mode="preview"]');
