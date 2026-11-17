@@ -243,16 +243,25 @@ async function main() {
     ` });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
 
-    await waitForFrames(page, 4);
-    const preInitAppearance = await page.evaluate(() => ({
-      background: getComputedStyle(document.body).backgroundColor,
-      rootAppearance: document.documentElement.dataset.editorAppearance ?? null
-    }));
-    if (
-      preInitAppearance.background !== 'rgb(255, 255, 255)'
-      || preInitAppearance.rootAppearance !== 'light'
-    ) {
-      throw new Error(`Light VS Code startup painted a dark pre-init frame: ${JSON.stringify(preInitAppearance)}`);
+    const preInitFrames = await page.evaluate(async () => {
+      const frames = [];
+      for (let frame = 0; frame < 4; frame++) {
+        await new Promise(requestAnimationFrame);
+        const cover = document.querySelector<HTMLElement>('.meo-startup-loading')!;
+        const surface = document.querySelector<HTMLElement>('.editor-wrapper')!.getBoundingClientRect();
+        const bounds = cover.getBoundingClientRect(), style = getComputedStyle(cover);
+        const hit = document.elementFromPoint(surface.left + surface.width / 2, surface.top + surface.height / 2);
+        frames.push({ background: getComputedStyle(document.body).backgroundColor,
+          coverBackground: style.backgroundColor, opacity: style.opacity,
+          covered: bounds.left <= surface.left + 0.5 && bounds.top <= surface.top + 0.5
+            && bounds.right >= surface.right - 0.5 && bounds.bottom >= surface.bottom - 0.5,
+          ownsHit: !!hit && cover.contains(hit) });
+      }
+      return frames;
+    });
+    if (!preInitFrames.every(frame => frame.background === 'rgb(255, 255, 255)'
+      && frame.coverBackground === 'rgb(255, 255, 255)' && frame.opacity === '1' && frame.covered && frame.ownsHit)) {
+      throw new Error(`Light VS Code startup painted an uncovered or dark pre-init frame: ${JSON.stringify(preInitFrames)}`);
     }
     const pendingLanguageProjection = await page.evaluate(() => {
       const toolbar = document.querySelector<HTMLElement>('.mode-toolbar')!;

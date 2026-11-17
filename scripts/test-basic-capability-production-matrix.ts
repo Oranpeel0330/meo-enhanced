@@ -82,9 +82,12 @@ async function open(browser: Browser, text: string, mode: 'live' | 'source' | 'p
         const editor = document.querySelector<HTMLElement>('.cm-editor');
         const preview = document.querySelector<HTMLElement>('.preview-host');
         const loading = document.querySelector<HTMLElement>('.editor-loading');
+        const startupLoading = document.querySelector<HTMLElement>('.meo-startup-loading');
         const host = document.querySelector<HTMLElement>('.editor-host');
-        const editorCovered = covered(visible(host) ? host : wrapper, loading);
-        const previewCovered = covered(preview, document.querySelector<HTMLElement>('.preview-loading'));
+        const editorCovered = covered(visible(host) ? host : wrapper, loading)
+          || covered(visible(host) ? host : wrapper, startupLoading);
+        const previewCovered = covered(preview, document.querySelector<HTMLElement>('.preview-loading'))
+          || covered(preview, startupLoading);
         const editorExposed = visible(wrapper) && visible(host) && visible(editor) && !editorCovered;
         const previewExposed = visible(preview) && !previewCovered;
         const bounds = wrapper?.getBoundingClientRect();
@@ -99,7 +102,7 @@ async function open(browser: Browser, text: string, mode: 'live' | 'source' | 'p
           uncoveredEmptyEditor: rootMode !== 'preview' && visible(wrapper) && !editor && !editorCovered,
           loadingHidden: loading?.hidden ?? null, hostInert: host?.inert ?? null,
           hitClass: hit instanceof HTMLElement ? hit.className : hit?.tagName ?? null,
-          loadingOwnsHit: Boolean(loading && hit && loading.contains(hit))
+          loadingOwnsHit: Boolean(hit && (loading?.contains(hit) || startupLoading?.contains(hit)))
         });
         if ((window as any).__startupRecording) requestAnimationFrame(sample);
       };
@@ -109,6 +112,16 @@ async function open(browser: Browser, text: string, mode: 'live' | 'source' | 'p
   await page.evaluate((message) => window.dispatchEvent(new MessageEvent('message', { data: message })), init(pageId, text, mode, sourceLineNumbers));
   await page.waitForSelector('.editor-host > .cm-editor');
   await page.waitForSelector('.editor-wrapper:not(.meo-preload-editor-shell)');
+  const rootLayers = await page.evaluate(() => {
+    const root = document.querySelector('#app')!;
+    return { layers: [...root.children].slice(0, 4).map(element => element.className),
+      noticeCount: root.querySelectorAll('.editor-notice').length,
+      toolbarOwnsNotice: !!root.querySelector('.mode-toolbar .editor-notice') };
+  });
+  assert.deepEqual(rootLayers, {
+    layers: ['mode-toolbar', 'editor-notice', 'editor-wrapper', 'preview-options-panel'],
+    noticeCount: 1, toolbarOwnsNotice: false
+  }, 'Production notice must remain a root document-status layer between the toolbar and reading surface');
   if (mode !== 'preview') {
     await page.waitForFunction(() => !document.querySelector<HTMLElement>('.editor-host')!.inert
       && document.querySelector<HTMLElement>('.editor-loading')?.hidden !== false);
