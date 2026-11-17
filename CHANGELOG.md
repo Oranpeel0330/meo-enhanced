@@ -3,6 +3,13 @@
 This changelog retains the release history of the original Markdown Editor
 Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
+## 0.4.2
+- Sized Live table rows by visible rendered content, removing blank space caused by hidden long link addresses.
+- Preserved the rendered row height when entering a cell editor, allowed longer source to expand, and restored the latest preview height after editing.
+- Kept same-row cell handoffs and held cross-cell selections stable while source editors change height.
+- Unified settings and support navigation icons, spacing, and descending-sort indicators.
+- Refreshed the English and Simplified Chinese README pages and product screenshots.
+
 ## 0.4.1
 - Kept initial loading colors and document presentation stable until the editor is ready, with recoverable Preview loading failures.
 - Kept input suggestion menus aligned through indentation and layout changes, with keyboard guidance and a direct settings entry.
