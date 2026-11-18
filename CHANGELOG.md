@@ -8,6 +8,7 @@ Optimized project. New MEO Enhanced releases start from version 0.1.0.
 - Preserved the rendered row height when entering a cell editor, allowed longer source to expand, and restored the latest preview height after editing.
 - Kept cell switches and drag selections stable as source editors change height, including clicks between separate tables.
 - Prevented duplicate image previews after leaving a Live table cell.
+- Kept focus in menus and inputs when a wrapped editor cursor is measured after leaving the document.
 - Avoided premature Live-mode timeouts while valid background Markdown preparation is still in progress.
 - Preserved native IME composition ranges while retaining the editor's reading position.
 - Restored link hints after streamed Preview content replaces its reading body.

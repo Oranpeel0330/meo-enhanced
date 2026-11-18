@@ -1,0 +1,26 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index a75cdaf6caef51a98adee80a57536a9ca12a1e85..66bdc281fbe44f8b94ae112de10391c49fbe9b78 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -3185,7 +3185,7 @@ class DocView {
+             this.posFromDOM(sel.focusNode, sel.focusOffset) == cursor.head;
+     }
+     enforceCursorAssoc() {
+-        if (this.hasComposition)
++        if (this.hasComposition || !this.view.hasFocus)
+             return;
+         let { view } = this, cursor = view.state.selection.main;
+         let sel = getSelection(view.root);
+diff --git a/dist/index.js b/dist/index.js
+index bda68ef32c8741c3c3f85bcf877953496ccf6e20..be278f5955d009f7d1ac21b60c8ad3eee1b92c99 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3181,7 +3181,7 @@ class DocView {
+             this.posFromDOM(sel.focusNode, sel.focusOffset) == cursor.head;
+     }
+     enforceCursorAssoc() {
+-        if (this.hasComposition)
++        if (this.hasComposition || !this.view.hasFocus)
+             return;
+         let { view } = this, cursor = view.state.selection.main;
+         let sel = getSelection(view.root);

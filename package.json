@@ -874,6 +874,7 @@
     "vscode-uri": "3.0.8"
   },
   "patchedDependencies": {
-    "@shikijs/primitive@4.2.0": "patches/shiki-primitive-empty-lines.patch"
+    "@shikijs/primitive@4.2.0": "patches/shiki-primitive-empty-lines.patch",
+    "@codemirror/view@6.43.15": "patches/codemirror-view-cursor-focus.patch"
   }
 }

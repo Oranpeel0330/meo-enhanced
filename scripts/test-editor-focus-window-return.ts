@@ -7,7 +7,9 @@ const fixture = path.resolve(import.meta.dir, '../.local/focus-window-return-tes
 await mkdir(fixture, {recursive: true});
 const entry = path.join(fixture, 'entry.ts');
 await writeFile(entry, `import {createEditorFocusController} from '../../webview/src/adapters/editorFocusController';
-(window as any).FocusController = {createEditorFocusController};`);
+import {createEditor} from '../../scripts/test-editor-factory';
+import {EditorSelection} from '@codemirror/state';
+(window as any).FocusController = {createEditorFocusController, createEditor, EditorSelection};`);
 const bundle = await Bun.build({
   entrypoints: [entry], target: 'browser', format: 'iife'
 });
@@ -374,6 +376,49 @@ try {
   assert.deepEqual(disposed, {focused: false, pending: false}, 'disposal must cancel input recovery and paint guards');
   assert.deepEqual(errors, [], 'focus handlers must not throw');
   await page.close();
+  const wrappedPage = await browser.newPage();
+  await wrappedPage.setContent('<input id="control"><button id="button">Options</button><div id="editor" style="width:180px;height:300px"></div>');
+  await wrappedPage.addScriptTag({ content: await bundle.outputs[0]!.text() });
+  for (const mode of ['source', 'live']) for (const large of [false, true]) {
+    await wrappedPage.evaluate(({ mode, large }) => {
+      const scope = window as any;
+      const text = 'alpha beta gamma delta epsilon '.repeat(12) + (large ? '\n\nParagraph\n'.repeat(3000) : '');
+      const editor = scope.FocusController.createEditor({ parent: document.getElementById('editor'), text, initialMode: mode });
+      scope.wrapped = { editor, text };
+    }, { mode, large });
+    for (const selector of ['#control', '#button']) {
+      const boundary = await wrappedPage.evaluate(() => {
+        const scope = window as any, view = scope.wrapped.editor.view;
+        view.focus(); view.measure();
+        for (let pos = 1; pos < 200; pos++) {
+          const before = view.coordsAtPos(pos, -1), after = view.coordsAtPos(pos, 1);
+          if (before && after && before.bottom <= after.top) {
+            view.dispatch({ selection: scope.FocusController.EditorSelection.create([scope.FocusController.EditorSelection.cursor(pos, -1)]) });
+            return pos;
+          }
+        }
+        return null;
+      });
+      assert.notEqual(boundary, null, 'the fixture must put a real associated cursor on a wrapped line boundary');
+      await wrappedPage.click(selector);
+      await wrappedPage.waitForFunction(() => !document.querySelector('.cm-focused'));
+      await wrappedPage.evaluate(async () => { for (let n = 0; n < 8; n++) await new Promise(requestAnimationFrame); });
+      const result = await wrappedPage.evaluate(selector => {
+        const { editor, text } = (window as any).wrapped;
+        return { focused: document.activeElement === document.querySelector(selector), exact: editor.getText() === text,
+          cursor: editor.view.state.selection.main.head, history: editor.getHistoryDepth() };
+      }, selector);
+      assert.deepEqual(result, { focused: true, exact: true, cursor: boundary, history: { undo: 0, redo: 0 } },
+        mode + '/' + large + ': wrapped cursor measurement must retain the new input or button focus');
+    }
+    await wrappedPage.evaluate(() => (window as any).wrapped.editor.view.focus());
+    const beforeArrow = await wrappedPage.evaluate(() => (window as any).wrapped.editor.view.state.selection.main.head);
+    await wrappedPage.keyboard.press('ArrowRight');
+    assert.deepEqual(await wrappedPage.evaluate(() => { const {editor,text}=(window as any).wrapped; return {focused:editor.view.hasFocus, cursor:editor.view.state.selection.main.head, exact:editor.getText()===text, lines:editor.view.state.doc.lines}; }),
+      {focused:true, cursor:beforeArrow+1, exact:true, lines:large?9001:1}, 'returning to the wrapped editor retains normal cursor navigation');
+    await wrappedPage.evaluate(() => (window as any).wrapped.editor.destroy());
+  }
+  await wrappedPage.close();
 } finally {
   await closeTestBrowser(browser);
 }
