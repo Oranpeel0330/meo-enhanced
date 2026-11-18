@@ -175,30 +175,62 @@ exports.run = async function () {
       await frame.waitForSelector(selector, { visible: true });
       await frame.$eval(selector, input => { input.focus(); input.select(); });
       const value = `pending-${action}-${rounds}`;
-      const generationMarker = `${action}-${Date.now()}`;
-      await frame.evaluate(marker => { globalThis.__nativeDraftHandoffGeneration = marker; }, generationMarker);
-      await frame.page().keyboard.sendCharacter(value);
-      const before = await frame.evaluate(selector => ({
-        textareaValue: document.querySelector(selector)?.value,
-        editorText: document.querySelector('.editor-host .cm-content').cmTile.root.view.state.doc.toString()
-      }), selector);
-      const next = expected.replace(`| Alpha | ${cellValue} |`, `| Alpha | ${value} |`);
-      const receipt = { action, command, before, hostBefore: doc.getText(), diskBefore: fs.readFileSync(file, 'utf8'), passed: false };
+      const generationMarker = action + '-' + Date.now();
+      const next = expected.replace('| Alpha | ' + cellValue + ' |', '| Alpha | ' + value + ' |');
+      const receipt = { action, command, passed: false };
       report.pendingCellHandoffs.push(receipt);
-      assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab?.input?.uri?.toString(), uri.toString(), 'The real Workbench command must target the pending-cell document');
-      assert.equal(before.textareaValue, value, 'Real native input must reach the active cell');
-      assert.equal(before.editorText, expected, 'The native handoff must start with an uncommitted cell, not an already flushed edit');
-      assert.equal(receipt.hostBefore, expected, 'Host must not have accepted the pending cell before the handoff');
-      assert.equal(receipt.diskBefore, expected, 'Disk must still contain the previous revision before the handoff');
       const handoffDocument = doc;
       const previousDocuments = new Set(vscode.workspace.textDocuments.map(document => document.uri.toString()));
-      let timeout;
+      const inputPage = frame.page(), binding = '__nativePendingHandoff_' + action + '_' + Date.now();
+      let resolveHandoff, rejectHandoff, handoffAdmitted = false, timeout;
+      const handoffDone = new Promise((resolve, reject) => { resolveHandoff = resolve; rejectHandoff = reject; });
+      void handoffDone.catch(() => {});
+      await inputPage.exposeFunction(binding, before => {
+        try {
+          assert.equal(receipt.before, undefined, 'One real input event must initiate exactly one native handoff');
+          receipt.before = before; receipt.hostBefore = doc.getText(); receipt.diskBefore = fs.readFileSync(file, 'utf8');
+          receipt.handoffAt = Date.now(); receipt.inputToHandoffMs = receipt.handoffAt - before.at;
+          assert.equal(before.trusted, true, 'The handoff must follow real browser input');
+          assert.equal(before.generation, generationMarker, 'Only the prepared Webview generation may initiate the handoff');
+          assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab?.input?.uri?.toString(), uri.toString(), 'The real Workbench command must target the pending-cell document');
+          assert.equal(before.textareaValue, value, 'Real native input must reach the active cell');
+          assert.equal(before.editorText, expected, 'The native handoff must start with an uncommitted cell, not an already flushed edit');
+          assert.equal(receipt.hostBefore, expected, 'Host must not have accepted the pending cell before the handoff');
+          assert.equal(receipt.diskBefore, expected, 'Disk must still contain the previous revision before the handoff');
+          handoffAdmitted = true;
+          Promise.resolve(vscode.commands.executeCommand(command)).then(resolveHandoff, rejectHandoff);
+        } catch (error) { rejectHandoff(error); }
+        return true;
+      });
       try {
-        await Promise.race([
-          vscode.commands.executeCommand(command),
-          new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error(`Native ${action} command did not complete`)), 8000); })
-        ]);
-      } finally { clearTimeout(timeout); }
+        await frame.evaluate(({ selector, generationMarker, binding }) => {
+          globalThis.__nativeDraftHandoffGeneration = generationMarker;
+          const input = document.querySelector(selector);
+          const witness = event => {
+            const before = { textareaValue: input.value, editorText: document.querySelector('.editor-host .cm-content').cmTile.root.view.state.doc.toString(),
+              trusted: event.isTrusted, at: Date.now(), generation: globalThis.__nativeDraftHandoffGeneration };
+            void globalThis[binding](before).catch(() => {});
+          };
+          input.__nativePendingHandoffWitness = witness;
+          input.addEventListener('input', witness, { once: true });
+        }, { selector, generationMarker, binding });
+        timeout = setTimeout(() => rejectHandoff(new Error('Native ' + action + ' handoff did not complete')), 8000);
+        try { await inputPage.keyboard.sendCharacter(value); }
+        catch (error) {
+          if (!handoffAdmitted) throw error;
+          receipt.inputDispatchAfterHandoff = String(error);
+        }
+        await handoffDone;
+      } finally {
+        clearTimeout(timeout);
+        try {
+          if (!frame.detached) await frame.evaluate(selector => { const input = document.querySelector(selector); if (input?.__nativePendingHandoffWitness) {
+            input.removeEventListener('input', input.__nativePendingHandoffWitness); delete input.__nativePendingHandoffWitness;
+          } }, selector);
+        } catch (error) { if (!/detached Frame|Execution context was destroyed|Cannot find context|Target closed|Session closed/i.test(String(error))) throw error; }
+        try { if (!inputPage.isClosed()) await inputPage.removeExposedFunction(binding); }
+        catch (error) { if (!/detached Frame|Execution context was destroyed|Cannot find context|Target closed|Session closed/i.test(String(error))) throw error; }
+      }
       if (action === 'close') {
         await waitFor(() => vscode.window.tabGroups.activeTabGroup.activeTab?.input?.uri?.toString() !== uri.toString(), 'native editor close');
         await vscode.commands.executeCommand('vscode.openWith', uri, 'meoEnhanced.editor');
