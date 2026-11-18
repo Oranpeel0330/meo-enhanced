@@ -303,6 +303,62 @@ async function checkCellEntryRegressions(page: any) {
   }
 }
 
+async function checkCellBreakDeletion(page: import('puppeteer-core').Page) {
+  const cell = 'tbody td:first-child textarea';
+  const preview = 'tbody td:first-child .meo-md-html-table-cell-preview';
+  const table = (value: string) => `| Header |\n| --- |\n| ${value} |`;
+  const checkEdit = async (
+    before: string,
+    selection: [number, number],
+    key: 'Backspace' | 'Delete',
+    expected: { value: string; caret: number; source: string },
+  ) => {
+    await page.evaluate(text => {
+      (window as any).__tableCellEditor?.destroy();
+      (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, table(before.replaceAll('\n', '')));
+    await page.waitForSelector(preview, { visible: true });
+    await page.click(preview);
+    const initial = await page.$eval(cell, (input, [from, to]) => {
+      if (input !== document.activeElement) throw new Error('clicked cell must own native input');
+      input.setSelectionRange(from, to);
+      return input.value;
+    }, selection);
+    assert.equal(initial, before);
+    await page.keyboard.press(key);
+    const edited = await page.$eval(cell, input => ({
+      value: input.value, start: input.selectionStart, end: input.selectionEnd
+    }));
+    const label = `${key} at ${selection} in ${JSON.stringify(before)}`;
+    assert.deepEqual(edited, { value: expected.value, start: expected.caret, end: expected.caret }, label);
+    await page.keyboard.press('Escape');
+    const source = await page.evaluate(() => (window as any).__tableCellEditor.getText());
+    assert.equal(source, table(expected.source), `${label} commits the edited cell`);
+  };
+
+  const joined = { value: 'AB', caret: 1, source: 'AB' };
+  for (const tag of ['<br>', '<br/>', '<BR />']) {
+    const before = `A${tag}\nB`;
+    const lineEnd = 1 + tag.length;
+    await checkEdit(before, [lineEnd, lineEnd], 'Backspace', joined);
+    await checkEdit(before, [lineEnd + 1, lineEnd + 1], 'Backspace', joined);
+    await checkEdit(before, [lineEnd, lineEnd], 'Delete', joined);
+    await checkEdit(before, [1, lineEnd], 'Backspace', joined);
+  }
+  await checkEdit('A<br/>\nB', [5, 5], 'Backspace', { value: 'A<br>\nB', caret: 4, source: 'A<br>B' });
+  await checkEdit('A<br>\nB', [3, 3], 'Backspace', { value: 'A<r>B', caret: 2, source: 'A<r>B' });
+  await checkEdit('A<br>\nB<br>\nC', [4, 5], 'Delete', {
+    value: 'A<brB<br>\nC', caret: 4, source: 'A<brB<br>C'
+  });
+  await checkEdit('A<br>\nB<br>\nC<br>\nD', [6, 11], 'Delete', {
+    value: 'A<br>\nC<br>\nD', caret: 6, source: 'A<br>C<br>D'
+  });
+  await page.evaluate(() => (window as any).__tableCellEditor.destroy());
+  console.log('table cell break deletion passed');
+}
+
 async function main() {
   const build = await Bun.build({
     entrypoints: [path.join(repoRoot, 'scripts', 'test-table-stability-entry.ts')],
@@ -326,6 +382,8 @@ async function main() {
       await checkCellHeightFallback(page);
       return;
     }
+    await checkCellBreakDeletion(page);
+    if (process.argv.includes('--break-deletion-only')) return;
     await checkCellEntryRegressions(page);
     if (process.argv.includes('--entry-regressions-only') || process.argv.includes('--rapid-input-only') || process.argv.includes('--entry-drag-only')) return;
     await checkCellHeightTransitions(page);

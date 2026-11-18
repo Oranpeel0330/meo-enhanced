@@ -1113,7 +1113,26 @@ function tableCellCaretViewportBounds(input: HTMLTextAreaElement): { top: number
   });
 }
 
-function normalizeTableCellEditorInput(input: HTMLTextAreaElement) {
+function tableCellEditorBreakStart(value: string, newline: number, maxStart = newline): number | null {
+  if (value[newline] !== '\n' || value[newline - 1] !== '>') return null;
+  const from = value.lastIndexOf('<', newline);
+  if (from < 0 || from > maxStart
+      || tableCellBreakAtRe.exec(value.slice(from, newline))?.[0].length !== newline - from) return null;
+  return splitTableCellLogicalLines(value).some(line => line.breakText && line.from + line.text.length === from)
+    ? from
+    : null;
+}
+
+function normalizeTableCellEditorInput(input: HTMLTextAreaElement, breakSuffix: string | null) {
+  // An edit can change the tag and leave its display-only newline in the
+  // untouched suffix. Drop that newline before converting real input to source.
+  if (breakSuffix && input.value.endsWith(breakSuffix)) {
+    const newline = input.value.length - breakSuffix.length;
+    if (tableCellEditorBreakStart(input.value, newline) === null) {
+      input.setRangeText('', newline, newline + 1, 'preserve');
+    }
+  }
+
   const value = input.value;
   const selectionStart = tableCellEditorOffsetToSourceOffset(value, input.selectionStart ?? 0);
   const selectionEnd = tableCellEditorOffsetToSourceOffset(value, input.selectionEnd ?? input.selectionStart ?? 0);
@@ -1412,8 +1431,11 @@ function consumeTableInlineAngleSection(text: string, index: number) {
   if (text[index] !== '<' || isTableInlineEscaped(text, index)) return null;
   const close = text.indexOf('>', index + 1);
   if (close < 0) return null;
+  const content = text.slice(index + 1, close);
+  // An unfinished tag must leave the next tag available to the inline scanner.
+  if (content.includes('<') && content.replace(/"[^"]*"|'[^']*'/g, '').includes('<')) return null;
   return {
-    content: text.slice(index + 1, close),
+    content,
     nextIndex: close + 1
   };
 }
@@ -5475,6 +5497,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     let compositionEndedAt = Number.NEGATIVE_INFINITY;
     let scrollTopBeforeInput: number | null = null;
     let revealCaretAfterInput = false;
+    let breakSuffixBeforeInput: string | null = null;
     const refreshPreview = () => {
       if (this.destroyed || !this.view) return;
       this.renderCellPreview(
@@ -5503,13 +5526,24 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       scrollTopBeforeInput = caretIsVisible ? view.scrollDOM.scrollTop : null;
       revealCaretAfterInput = !caretIsVisible;
     };
-    input.addEventListener('beforeinput', captureInputViewportIntent);
+    input.addEventListener('beforeinput', event => {
+      captureInputViewportIntent();
+      const { value, selectionEnd } = input;
+      const newline = value.indexOf('\n', selectionEnd);
+      breakSuffixBeforeInput =
+        !event.isComposing && this.composingInput !== input
+        && tableCellEditorBreakStart(value, newline, selectionEnd) !== null
+          ? value.slice(newline)
+          : null;
+    }, { capture: true });
     input.addEventListener('input', () => {
       const preservedScrollTop = scrollTopBeforeInput;
       const shouldRevealCaret = revealCaretAfterInput;
+      const breakSuffix = breakSuffixBeforeInput;
       scrollTopBeforeInput = null;
       revealCaretAfterInput = false;
-      normalizeTableCellEditorInput(input);
+      breakSuffixBeforeInput = null;
+      normalizeTableCellEditorInput(input, breakSuffix);
       // Preedit belongs to the native textarea until the IME confirms it.
       // Save-triggered commits must not consume an unfinished candidate.
       if (this.composingInput !== input) {
@@ -5645,16 +5679,20 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         }
         return;
       }
-      if (event.key === 'Backspace' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-        const start = input.selectionStart ?? 0;
-        const end = input.selectionEnd ?? start;
-        const breakMatch = start === end ? /<br\s*\/?>\n$/i.exec(input.value.slice(0, start)) : null;
-        if (breakMatch) {
+      if (
+        (event.key === 'Backspace' || event.key === 'Delete')
+        && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+        && input.selectionStart === input.selectionEnd
+      ) {
+        const { value, selectionStart: caret } = input;
+        const newline = event.key === 'Backspace' && value[caret - 1] === '\n' ? caret - 1 : caret;
+        const breakStart = tableCellEditorBreakStart(value, newline);
+        if (breakStart !== null) {
           event.preventDefault();
           event.stopPropagation();
-          input.setSelectionRange(start - breakMatch[0].length, start);
+          captureInputViewportIntent();
+          input.setSelectionRange(breakStart, newline + 1);
           replaceTableCellEditorSelection(input, '');
-          return;
         }
       }
     });
