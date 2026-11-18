@@ -14,6 +14,7 @@ export type TableStickyHeaderElements = {
   readonly horizontalScroller: HTMLElement;
   readonly table: HTMLTableElement;
   readonly stickyChrome: HTMLElement;
+  readonly stickyShadow: HTMLElement;
   readonly stickyHeaderViewport: HTMLElement;
   readonly stickyTable: HTMLTableElement;
   readonly stickyHeaderRow: HTMLTableRowElement;

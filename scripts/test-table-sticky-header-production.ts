@@ -552,6 +552,7 @@ async function main(): Promise<void> {
       )));
       const chrome = document.querySelector<HTMLElement>('.meo-md-html-table-sticky-chrome')!;
       const stickyHeader = chrome.querySelector<HTMLElement>('.meo-md-html-table-sticky-header')!;
+      const shadow = chrome.parentElement!.querySelector<HTMLElement>('.meo-md-html-table-sticky-shadow')!;
       const controls = [chrome.getBoundingClientRect().top, stickyHeader.getBoundingClientRect().top];
       input.blur();
 
@@ -589,7 +590,9 @@ async function main(): Promise<void> {
           chromeBottom: chrome.getBoundingClientRect().bottom,
           headerBottom: stickyHeader.getBoundingClientRect().bottom,
           chromeShadow: getComputedStyle(chrome).boxShadow,
-          chromeAfterBackground: getComputedStyle(chrome, '::after').backgroundImage,
+          shadowTop: shadow.getBoundingClientRect().top,
+          shadowWidthDelta: shadow.getBoundingClientRect().width - chrome.getBoundingClientRect().width,
+          shadowBackground: getComputedStyle(shadow).backgroundImage,
           headerShadow: getComputedStyle(stickyHeader).boxShadow,
           headerAfterHeight: getComputedStyle(stickyHeader, '::after').height
         },
@@ -776,7 +779,9 @@ async function main(): Promise<void> {
     );
     assert.ok(result.domContract.firstColumnDelta <= 1);
     assert.ok(
-      Math.abs(result.domContract.boundary.chromeBottom - result.domContract.boundary.headerBottom) <= 0.5,
+      Math.abs(result.domContract.boundary.chromeBottom - result.domContract.boundary.headerBottom) <= 0.5 &&
+      Math.abs(result.domContract.boundary.chromeBottom - result.domContract.boundary.shadowTop) <= 0.5 &&
+      Math.abs(result.domContract.boundary.shadowWidthDelta) <= 0.5,
       `sticky-header divider and shadow must share one physical edge: ${JSON.stringify(result.domContract.boundary)}`
     );
     assert.equal(
@@ -785,9 +790,9 @@ async function main(): Promise<void> {
       'the sticky chrome box must not spread shadow around its sides'
     );
     assert.match(
-      result.domContract.boundary.chromeAfterBackground,
+      result.domContract.boundary.shadowBackground,
       /linear-gradient/,
-      'the sticky chrome must paint a downward-only gradient below the shared edge'
+      'the sticky shadow must paint a downward-only gradient below the shared edge'
     );
     assert.equal(
       result.domContract.boundary.headerShadow,

@@ -2,6 +2,7 @@ import { editorScrollIntoView } from '../editor/scrollEffects';
 import { isMarkdownTableDelimiter } from '../../../src/shared/markdownContentRules';
 import { markdownTaskMarkerPattern } from '../../../src/foundation/markdownTaskList';
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
+import { createTableColumnResizeHandle } from '../editor/tableColumnWidthAdapter';
 import { createTableRowWindow, type TableRowWindow } from '../editor/tableRowWindow';
 import { blockInsertion, type MarkdownInputContext } from '../editor/blockInsertion';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
@@ -181,6 +182,7 @@ interface DomRefs {
   rowEntries: RowEntry[];
   sourceBodyRowInputs: HTMLTextAreaElement[][];
   stickyChrome: HTMLDivElement;
+  stickyShadow: HTMLDivElement;
   stickyHeaderViewport: HTMLDivElement;
   stickyTable: HTMLTableElement;
   stickyHeaderRow: HTMLTableRowElement;
@@ -2971,6 +2973,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       wrap,
       table,
       stickyChrome,
+      stickyShadow,
       stickyHeaderViewport,
       stickyTable,
       stickyHeaderRow
@@ -2980,6 +2983,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       horizontalScroller: wrap,
       table,
       stickyChrome,
+      stickyShadow,
       stickyHeaderViewport,
       stickyTable,
       stickyHeaderRow
@@ -5720,14 +5724,6 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     });
   }
 
-  createColumnResizeHandle(column: number): HTMLSpanElement {
-    const handle = document.createElement('span');
-    handle.className = 'meo-md-html-table-column-resize-handle';
-    handle.dataset.tableResizeColumn = String(column);
-    handle.setAttribute('aria-hidden', 'true');
-    return handle;
-  }
-
   resizeRow(row: HTMLTableRowElement, rowInputs: HTMLTextAreaElement[] | null = null) {
     if (!row) return;
     this.resizeRows([{ row, inputs: rowInputs ?? Array.from(row.querySelectorAll('textarea')) }]);
@@ -6727,7 +6723,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       headerInputs.push(input);
       headerCells.push(th);
       th.appendChild(content);
-      th.appendChild(this.createColumnResizeHandle(col));
+      th.appendChild(createTableColumnResizeHandle(col));
 
       headerRow.appendChild(th);
     }
@@ -6769,7 +6765,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         inputs.push(input);
         bodyCells.push(td);
         td.appendChild(content);
-        td.appendChild(this.createColumnResizeHandle(col));
+        td.appendChild(createTableColumnResizeHandle(col));
 
         tr.appendChild(td);
       }
@@ -6785,6 +6781,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const stickyChrome = document.createElement('div');
     stickyChrome.className = 'meo-md-html-table-sticky-chrome';
     stickyChrome.setAttribute('aria-hidden', 'true');
+    const stickyShadow = document.createElement('div');
+    stickyShadow.className = 'meo-md-html-table-sticky-shadow';
+    stickyShadow.hidden = true;
+    stickyShadow.setAttribute('aria-hidden', 'true');
     const stickyHeaderViewport = document.createElement('div');
     stickyHeaderViewport.className = 'meo-md-html-table-sticky-header';
     stickyHeaderViewport.dataset.tooltipPositioning = 'pointer';
@@ -6814,7 +6814,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (diffGutter instanceof HTMLElement) diffGutter.appendChild(diffMarkerLayer);
     this.cleanupFns.push(() => diffMarkerLayer.remove());
     wrap.append(table);
-    shell.append(contextTrigger, contextMenu, wrap, stickyChrome);
+    shell.append(contextTrigger, contextMenu, wrap, stickyChrome, stickyShadow);
     this.domRefs = {
       shell,
       wrap,
@@ -6830,6 +6830,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       cellGrid,
       sourceBodyRowInputs: bodyRowInputs,
       stickyChrome,
+      stickyShadow,
       stickyHeaderViewport,
       stickyTable,
       stickyHeaderRow,

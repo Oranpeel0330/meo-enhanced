@@ -57,6 +57,7 @@ async function main(): Promise<void> {
         <div class="sticky" id="sticky-${id}"><button class="sticky-toolbar-button">Toolbar</button><div class="sticky-viewport" id="viewport-${id}">
           <table id="sticky-table-${id}"><thead><tr id="sticky-row-${id}"></tr></thead></table>
         </div></div>
+        <div id="shadow-${id}" hidden></div>
       </section>`).join('')}</main>`);
     await page.addScriptTag({ path: path.join(tempDir, 'candidate.js') });
 
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
         horizontalScroller: document.getElementById(`horizontal-${id}`)!,
         table: document.getElementById(`table-${id}`) as HTMLTableElement,
         stickyChrome: document.getElementById(`sticky-${id}`)!,
+        stickyShadow: document.getElementById(`shadow-${id}`)!,
         stickyHeaderViewport: document.getElementById(`viewport-${id}`)!,
         stickyTable: document.getElementById(`sticky-table-${id}`) as HTMLTableElement,
         stickyHeaderRow: document.getElementById(`sticky-row-${id}`) as HTMLTableRowElement
@@ -196,7 +198,7 @@ async function main(): Promise<void> {
         adapter1.mount();
         adapter2.mount();
       });
-      const initiallyHidden = !elements(1).stickyChrome.classList.contains('is-visible');
+      const initiallyHidden = !elements(1).stickyChrome.classList.contains('is-visible') && elements(1).stickyShadow.hidden;
       const passive = {
         ariaHidden: elements(1).stickyHeaderViewport.getAttribute('aria-hidden'),
         inputs: elements(1).stickyHeaderRow.querySelectorAll('input,button,textarea,select').length,
@@ -220,7 +222,7 @@ async function main(): Promise<void> {
           elements(id).scroller.dispatchEvent(new Event('scroll'));
         }
       });
-      const visible = elements(1).stickyChrome.classList.contains('is-visible');
+      const visible = elements(1).stickyChrome.classList.contains('is-visible') && !elements(1).stickyShadow.hidden;
       const headerBeforeBodyLayout = elements(1).stickyHeaderRow.firstElementChild;
       await settle(() => {
         const cell = elements(1).table.tBodies[0]!.rows[0]!.cells[0]!;
@@ -255,7 +257,7 @@ async function main(): Promise<void> {
         elements(1).horizontalScroller.dispatchEvent(new Event('scroll'));
         elements(1).horizontalScroller.dispatchEvent(new Event('scroll'));
       });
-      const transform = elements(1).stickyTable.style.transform;
+      const horizontalOffset = elements(1).stickyTable.style.left;
       const visibleHeight = Number.parseFloat(elements(1).stickyChrome.style.height);
 
       await settle(() => {
@@ -352,14 +354,14 @@ async function main(): Promise<void> {
         oldHorizontalScroller.remove();
         adapter1.update();
       });
-      const transformBeforeStaleScroll = elements(1).stickyTable.style.transform;
+      const offsetBeforeStaleScroll = elements(1).stickyTable.style.left;
       await settle(() => oldHorizontalScroller.dispatchEvent(new Event('scroll')));
-      const transformAfterStaleScroll = elements(1).stickyTable.style.transform;
+      const offsetAfterStaleScroll = elements(1).stickyTable.style.left;
       await settle(() => {
         elements(1).horizontalScroller.scrollLeft = 35;
         elements(1).horizontalScroller.dispatchEvent(new Event('scroll'));
       });
-      const transformAfterHorizontalReplacement = elements(1).stickyTable.style.transform;
+      const offsetAfterHorizontalReplacement = elements(1).stickyTable.style.left;
 
       const replacedStickyChrome = elements(1).stickyChrome;
       const replacedStickyViewport = elements(1).stickyHeaderViewport;
@@ -393,7 +395,7 @@ async function main(): Promise<void> {
       });
       const unmountedAfterLateEvents = publicChromeSnapshot(elements(1).stickyChrome);
       const styleAfterUnmount = elements(1).stickyTable.style.width;
-      const hiddenAfterUnmount = !elements(1).stickyChrome.classList.contains('is-visible');
+      const hiddenAfterUnmount = !elements(1).stickyChrome.classList.contains('is-visible') && elements(1).stickyShadow.hidden;
 
       await settle(() => adapter2.dispose());
       const disposedBeforeLateEvents = publicChromeSnapshot(elements(2).stickyChrome);
@@ -579,7 +581,7 @@ async function main(): Promise<void> {
         visible,
         headerRetainedOnBodyLayout,
         navigation,
-        transform,
+        horizontalOffset,
         visibleHeight,
         controls,
         updatedHeader,
@@ -590,9 +592,9 @@ async function main(): Promise<void> {
         visibleAfterRebuild,
         headerAfterDetachedMutation,
         headerAfterRebuiltMutation,
-        transformBeforeStaleScroll,
-        transformAfterStaleScroll,
-        transformAfterHorizontalReplacement,
+        offsetBeforeStaleScroll,
+        offsetAfterStaleScroll,
+        offsetAfterHorizontalReplacement,
         staleCloneObserverDetached,
         currentHeaderBeforeStaleCloneMutation,
         currentHeaderAfterStaleCloneMutation,
@@ -650,7 +652,7 @@ async function main(): Promise<void> {
       clickPrevented: true,
       count: 1
     });
-    assert.equal(result.transform, 'translateX(-45px)');
+    assert.equal(result.horizontalOffset, '-45px');
     assert.equal(result.controls.className, true);
     assert.equal(Number.parseFloat(result.controls.height) - result.visibleHeight, 24);
     assert.match(result.updatedHeader ?? '', /Updated header/);
@@ -671,9 +673,9 @@ async function main(): Promise<void> {
     assert.equal(result.visibleAfterRebuild, true);
     assert.doesNotMatch(result.headerAfterDetachedMutation ?? '', /Detached header/);
     assert.match(result.headerAfterRebuiltMutation ?? '', /Rebuilt header/);
-    assert.equal(result.transformAfterStaleScroll, result.transformBeforeStaleScroll,
+    assert.equal(result.offsetAfterStaleScroll, result.offsetBeforeStaleScroll,
       'a replaced horizontal scroller must not change current Sticky geometry');
-    assert.equal(result.transformAfterHorizontalReplacement, 'translateX(-35px)');
+    assert.equal(result.offsetAfterHorizontalReplacement, '-35px');
     assert.equal(result.staleCloneObserverDetached, true);
     assert.equal(result.currentHeaderAfterStaleCloneMutation, result.currentHeaderBeforeStaleCloneMutation);
     assert.equal(result.styleAfterUnmount, result.styleBeforeUnmount);

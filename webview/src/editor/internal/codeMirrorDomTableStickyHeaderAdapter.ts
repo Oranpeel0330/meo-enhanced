@@ -54,8 +54,10 @@ function suppressStickyInteraction(event: Event): void {
 
 function hide(elements: TableStickyHeaderElements): void {
   elements.stickyChrome.classList.remove('is-visible', 'has-sticky-controls');
+  elements.stickyShadow.hidden = true;
   for (const property of ['top', 'left', 'width', 'height']) {
     elements.stickyChrome.style.removeProperty(property);
+    elements.stickyShadow.style.removeProperty(property);
   }
 }
 
@@ -89,16 +91,21 @@ function applyLayout(
     hide(elements);
     return;
   }
-  const [tableWidth, translate, headerHeight] = projection.geometry.vectors;
+  const { rect, vectors: [tableWidth, translate, headerHeight] } = projection.geometry;
   elements.stickyChrome.classList.add('is-visible');
   elements.stickyChrome.classList.toggle('has-sticky-controls', layout.controlsHeight > 0);
-  elements.stickyChrome.style.top = `${projection.geometry.rect.top}px`;
-  elements.stickyChrome.style.left = `${projection.geometry.rect.left}px`;
-  elements.stickyChrome.style.width = `${projection.geometry.rect.width}px`;
-  elements.stickyChrome.style.height = `${projection.geometry.rect.height}px`;
+  elements.stickyChrome.style.top = `${rect.top}px`;
+  elements.stickyChrome.style.left = `${rect.left}px`;
+  elements.stickyChrome.style.width = `${rect.width}px`;
+  elements.stickyChrome.style.height = `${rect.height}px`;
+  elements.stickyShadow.style.top = `${rect.top + rect.height}px`;
+  elements.stickyShadow.style.left = `${rect.left}px`;
+  elements.stickyShadow.style.width = `${rect.width}px`;
+  elements.stickyShadow.hidden = false;
   elements.stickyHeaderViewport.style.height = `${headerHeight.y}px`;
   elements.stickyTable.style.width = `${tableWidth.x}px`;
-  elements.stickyTable.style.transform = `translateX(${translate.x}px)`;
+  // Keep resize handles above the viewport's bottom rule in the same stacking context.
+  elements.stickyTable.style.left = `${translate.x}px`;
 }
 
 function throwLifecycleErrors(
@@ -165,6 +172,7 @@ function areSameElements(
     left.horizontalScroller === right.horizontalScroller &&
     left.table === right.table &&
     left.stickyChrome === right.stickyChrome &&
+    left.stickyShadow === right.stickyShadow &&
     left.stickyHeaderViewport === right.stickyHeaderViewport &&
     left.stickyTable === right.stickyTable &&
     left.stickyHeaderRow === right.stickyHeaderRow;
@@ -304,7 +312,8 @@ export function createCodeMirrorDomTableStickyHeaderAdapter(
         .map((declaration) => declaration.trim())
         .filter((declaration) => declaration &&
           !declaration.startsWith('--meo-html-table-sticky-top:') &&
-          !declaration.startsWith('--meo-html-table-sticky-left:'))
+          !declaration.startsWith('--meo-html-table-sticky-left:') &&
+          !declaration.startsWith('--meo-table-resize-column-'))
         .sort()
         .join(';');
       const ancestorObserver = new MutationObserver((records) => {

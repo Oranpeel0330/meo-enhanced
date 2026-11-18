@@ -5397,20 +5397,6 @@ html[data-editor-appearance='light'] .meo-visual-control-btn {
   border-left: 1px solid var(--meo-semantic-tableBorder, var(--meo-content-panel-border));
 }
 
-.cm-editor .meo-mermaid-inline-separator::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -1px;
-  width: 4px;
-  pointer-events: none;
-}
-
-.cm-editor .meo-mermaid-inline-separator:is(:hover, :focus-visible)::before {
-  background: #316dca;
-}
-
 .cm-editor .meo-mermaid-inline-separator:focus-visible {
   outline: none;
 }
@@ -6973,6 +6959,17 @@ html[data-meo-ui-contrast='high'] .cm-editor .meo-md-html-table {
   touch-action: none;
 }
 
+.cm-editor .meo-md-html-table-column-resize-handle::after {
+  content: var(--meo-table-resize-highlight, none);
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: calc(50% - 1px);
+  width: 2px;
+  background: #316dca;
+  pointer-events: none;
+}
+
 .cm-editor .meo-md-html-table-wrap.is-table-overflowing {
   overflow-x: auto;
 }
@@ -6980,6 +6977,11 @@ html[data-meo-ui-contrast='high'] .cm-editor .meo-md-html-table {
 .cm-editor .meo-md-html-table :is(th, td):last-child > .meo-md-html-table-column-resize-handle {
   right: 0;
   width: 5px;
+}
+
+.cm-editor .meo-md-html-table :is(th, td):last-child > .meo-md-html-table-column-resize-handle::after {
+  right: 0;
+  left: auto;
 }
 
 .cm-editor.meo-table-column-resizing,
@@ -7229,11 +7231,10 @@ html[data-meo-ui-contrast='high'] .meo-preview-viewport-alignment {
   box-shadow: none;
 }
 
-.cm-editor .meo-md-html-table-sticky-chrome.is-visible::after {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  width: 100%;
+.cm-editor .meo-md-html-table-sticky-shadow {
+  position: fixed;
+  /* Above the table cells and below their column resize handles. */
+  z-index: 4;
   height: 8px;
   pointer-events: none;
   background: linear-gradient(
@@ -7242,11 +7243,10 @@ html[data-meo-ui-contrast='high'] .meo-preview-viewport-alignment {
     rgb(0 0 0 / 6%) 50%,
     transparent 100%
   );
-  content: '';
 }
 
 html[data-editor-appearance='dark'] body.vscode-dark
-  .cm-editor .meo-md-html-table-sticky-chrome.is-visible::after {
+  .cm-editor .meo-md-html-table-sticky-shadow {
   background: linear-gradient(
     to bottom,
     rgb(0 0 0 / 32%) 0%,
@@ -7279,7 +7279,8 @@ html[data-editor-appearance='dark'] body.vscode-dark
 .cm-editor .meo-md-html-table-sticky-header::after {
   content: '';
   position: absolute;
-  z-index: 2;
+  /* Above cell outlines and below column resize handles. */
+  z-index: 4;
   right: 0;
   bottom: 0;
   left: 0;
@@ -7293,6 +7294,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
 }
 
 .cm-editor .meo-md-html-table.meo-md-html-table-sticky-table {
+  position: relative;
   width: auto;
   max-width: none;
   min-width: 0;
@@ -8747,14 +8749,23 @@ html[data-meo-ui-contrast='normal'] .meo-input-suggestions:not(.meo-narrow-sugge
   border-right: 1px solid var(--meo-semantic-tableBorder, var(--meo-content-panel-border));
   pointer-events: auto;
 }
-/* Continue the separator highlight above the scroller's stacking context. */
+/* Anchor both highlights to the pane edge. The separator's border can round down at fractional zoom. */
+.cm-editor .meo-mermaid-inline-preview:has(> .meo-mermaid-inline-separator:is(:hover, :focus-visible))::after,
 .cm-editor:has(.meo-mermaid-inline-separator:is(:hover, :focus-visible)) .meo-block-sticky-header.is-mermaid-side::after {
   content: '';
   position: absolute;
-  inset: 0 auto 0 var(--meo-mermaid-source-width);
-  width: 4px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
   background: #316dca;
   pointer-events: none;
+}
+.cm-editor .meo-mermaid-inline-preview::after {
+  left: 0;
+  z-index: 3;
+}
+.cm-editor .meo-block-sticky-header.is-mermaid-side::after {
+  left: var(--meo-mermaid-source-width);
 }
 .cm-editor .meo-block-sticky-header .meo-native-source-preview-label {
   position: absolute;
