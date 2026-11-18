@@ -266,6 +266,40 @@
           },
           "additionalProperties": false,
           "properties": {
+            "customShortcuts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "name", "scope", "strokes", "actions"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]{1,80}$" },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+                  "scope": { "enum": ["global", "editor", "live", "source", "table"] },
+                  "strokes": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+                  },
+                  "actions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 12,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["type"],
+                      "properties": {
+                        "type": { "enum": ["command", "snippet", "mode"] },
+                        "command": { "type": "string" },
+                        "template": { "type": "string", "minLength": 1, "maxLength": 20000 },
+                        "mode": { "enum": ["live", "source", "preview"] }
+                      }
+                    }
+                  }
+                }
+              }
+            },
             "input": {
               "type": "object",
               "additionalProperties": false,

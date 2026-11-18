@@ -61,7 +61,7 @@ try {
   });
   const imagePages = new WeakSet<object>();
   const chord = async (key: string) => { await page.keyboard.down('Control'); await page.keyboard.press(key); await page.keyboard.up('Control'); };
-  const openFixture = async (text = 'hello\n\n# Heading\n\ntext', mode: 'source' | 'live' = 'source', stubMermaid = false, outline: 'left' | 'right' | 'hidden' = 'hidden', legacyStrongColoring = false) => {
+  const openFixture = async (text = 'hello\n\n# Heading\n\ntext', mode: 'source' | 'live' = 'source', stubMermaid = false, outline: 'left' | 'right' | 'hidden' = 'hidden', legacyStrongColoring = false, largeDocumentOptimizationEnabled = false) => {
     if (!imagePages.has(page)) {
       await page.exposeFunction('__imageLocationHost', (request: ImageLocationRequest) => imageHost.handle(request, 'settings-document'));
       await page.exposeFunction('__imageSaveHost', async (request: {requestId: string; imageData: string; extension: string}) => {
@@ -156,15 +156,109 @@ try {
     if (stubMermaid) await page.evaluate(() => { (window as any).mermaid = { initialize() {}, async render() { return { svg: '<svg viewBox="0 0 120 60"><text x="4" y="20">diagram</text></svg>' }; } }; });
     await page.addScriptTag({ content: await build.outputs[0].text() });
     assert.equal(await page.$('.settings-window'), null, 'The production shell must defer the closed settings window');
-    await page.evaluate(({ text, mode, outline, legacyStrongColoring }) => {
+    await page.evaluate(({ text, mode, outline, legacyStrongColoring, largeDocumentOptimizationEnabled }) => {
       const global = window as any; global.__preferences = { input: { ...global.EditingSettingsHarness.defaultInputAssistance }, shortcuts: {} };
       global.__initMessage = { type: 'init', documentId: 'file:///settings.md', text, version: 1, savedRevision: { version: 1, text }, diagnostics: [], mode, uiLanguage: 'zh-CN', uiLanguagePreference: 'zh-CN', automaticUiLanguage: 'zh-CN', sourceLineNumbers: 'on', previewAppearance: 'light', previewFontFamily: '', previewSourceColoring: true, previewShowComments: false, editorAppearance: 'dark', gitChangesGutter: false, gitDiffLineHighlights: false, gitDiffDetailsVisible: false, diffBaselineMode: 'current-edit', fixedBaselinePinned: false, fixedBaselineActive: false, contentMaxWidthEnabled: false, findOptions: { wholeWord: false, caseSensitive: false }, outlinePosition: 'right', outlineVisible: false, outlineWidth: 260, vscodeTheme: null, editingPreferences: global.__preferences, editingPreferencesRevision: 0 };
       global.__initMessage.outlinePosition = outline === 'left' ? 'left' : 'right';
       global.__initMessage.outlineVisible = outline !== 'hidden';
       global.__initMessage.liveStrongColoring = legacyStrongColoring;
+      global.__initMessage.largeDocumentOptimizationEnabled = largeDocumentOptimizationEnabled;
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
-    }, { text, mode, outline, legacyStrongColoring });
+    }, { text, mode, outline, legacyStrongColoring, largeDocumentOptimizationEnabled });
   };
+  if (process.argv.includes('--custom-shortcuts-only') || process.argv.length === 2) {
+    const bind = async (stroke: string) => {
+      await page.keyboard.down('Control');
+      await page.keyboard.down('Alt');
+      await page.keyboard.press(stroke);
+      await page.keyboard.up('Alt');
+      await page.keyboard.up('Control');
+    };
+    const ready = () => page.waitForFunction(() => document.querySelector('.cm-content')
+      && document.querySelector('.editor-loading')?.hasAttribute('hidden') && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+    const editorState = () => page.evaluate(() => {
+      const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      const { from, to } = view.state.selection.main;
+      return {
+        line: view.state.doc.line(1).text, selected: view.state.sliceDoc(from, to), from, to,
+        optimized: (window as any).EditingSettingsHarness.usesLargeDocumentDerivedWorkBudget(view.state)
+      };
+    });
+    const openShortcuts = async () => {
+      await page.locator('.more-tools-wrapper > .format-button').click();
+      await page.locator('.more-tools-settings-button').click();
+      await page.locator('[data-tab="shortcuts"]').click();
+    };
+    const focusStart = async () => {
+      await page.focus('.cm-content');
+      await page.keyboard.press('Home');
+    };
+    const fixture = 'target\n\n';
+    await openFixture(fixture);
+    await ready();
+    await openShortcuts();
+    await page.locator('[data-add-custom-shortcut]').click();
+    const form = '.settings-custom-shortcut-form';
+    await page.locator(form + ' input[name="name"]').fill('Meeting notes');
+    await page.select(form + ' select', 'source');
+    await page.select(form + ' select[name="action"]', '$' + 'snippet');
+    await page.locator(form + ' textarea').fill('[${1:Title}] ${TM_FILENAME} ${CURRENT_YEAR} $0');
+    const recorders = await page.$$(form + ' .settings-recorder');
+    await recorders[0].focus(); await bind('k');
+    await recorders[1].focus(); await page.keyboard.press('t');
+    assert.deepEqual(await page.$$eval(form + ' .settings-recorder', elements => elements.map(e => (e as HTMLInputElement).value)),
+      ['Ctrl + Alt + K', 'T']);
+    const screenshots = '.local/test-artifacts/custom-shortcuts';
+    await fs.mkdir(screenshots, { recursive: true });
+    await page.screenshot({ path: screenshots + '/settings-source.png' });
+    await page.locator(form + ' .settings-shortcut-controls > .settings-button:first-child').click();
+    await page.waitForSelector('[data-custom-shortcut]');
+    await page.locator('.settings-search').fill('Meeting notes');
+    await page.waitForSelector('[data-custom-shortcut]');
+    assert.equal(await page.$$eval('[data-custom-shortcut]', rules => rules.length), 1);
+    const saved = await page.evaluate(() => (window as any).__preferences);
+    await page.locator('.settings-close').click();
+    await focusStart();
+    await bind('k');
+    assert.equal((await editorState()).line, 'target', 'The prefix alone does not edit');
+    await page.keyboard.press('t');
+    const inserted = await editorState();
+    assert.match(inserted.line, /^\[Title\] settings\.md \d{4} target$/);
+    assert.equal(inserted.selected, 'Title');
+    await page.keyboard.press('Tab');
+    assert.equal((await editorState()).from, inserted.line.indexOf('target'), 'Tab reached the final stop');
+    await chord('z');
+    assert.equal((await editorState()).line, 'target', 'Snippet is undone in one step');
+    await page.locator('button[data-mode="live"]').click();
+    await ready();
+    await focusStart();
+    await bind('k');
+    const beforeModeGuard = (await editorState()).line;
+    assert.equal(beforeModeGuard, 'target', 'Source-only prefix cannot start the rule in Live');
+    await page.keyboard.press('t');
+    assert.equal((await editorState()).line, 'ttarget', 'Live receives the normal key when the rule is out of scope');
+
+    await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+    const largeText = 'target\n\n' + 'A paragraph for the large document shortcut test.\n\n'.repeat(4600);
+    assert.equal(assessLargeDocument(largeText).boundedEditorWork, true);
+    await openFixture(largeText, 'live', false, 'hidden', false, true);
+    await ready();
+    await page.evaluate(preferences => {
+      const global = window as any;
+      global.__preferences = preferences;
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences, revision: ++global.__revision } }));
+    }, { ...saved, customShortcuts: saved.customShortcuts.map((rule: { scope: string }) => ({ ...rule, scope: 'live' })) });
+    await focusStart();
+    assert.equal((await editorState()).optimized, true, 'Live uses the large-document work budget');
+    await bind('k'); await page.keyboard.press('t');
+    assert.match((await editorState()).line, /^\[Title\] settings\.md \d{4} target$/);
+    await chord('z');
+    assert.equal((await editorState()).line, 'target');
+    assert.deepEqual(errors, []);
+    console.log('Custom shortcuts: recording, settings search, Source and optimized Live snippets, tab stops and history passed');
+    if (process.argv.includes('--custom-shortcuts-only')) { await closeTestBrowser(browser); process.exit(0); }
+    await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+  }
   if (process.argv.includes('--keycaps-only') || process.argv.length === 2) {
     const folder = path.resolve('.local/test-artifacts/ui-keycaps'); await fs.mkdir(folder, { recursive: true });
     const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);

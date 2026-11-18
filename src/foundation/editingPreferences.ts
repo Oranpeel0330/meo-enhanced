@@ -33,13 +33,30 @@ export type InputAssistance = {
 export type InputSuggestionSetting = 'documentSuggestions' | 'slash' | 'emoji' | 'math' | 'html';
 /** Missing commands use platform defaults; an explicit empty array removes a binding. */
 export type ShortcutOverrides = Partial<Record<EditorCommandId, readonly string[]>>;
+export const customShortcutScopes = ['global', 'editor', 'live', 'source', 'table'] as const;
+export type CustomShortcutScope = typeof customShortcutScopes[number];
+export const shortcutTargetModes = ['live', 'source', 'preview'] as const;
+export type CustomShortcutAction =
+  | { readonly type: 'command'; readonly command: EditorCommandId }
+  | { readonly type: 'snippet'; readonly template: string }
+  | { readonly type: 'mode'; readonly mode: typeof shortcutTargetModes[number] };
+export type CustomShortcut = {
+  readonly id: string;
+  readonly name: string;
+  readonly scope: CustomShortcutScope;
+  readonly strokes: readonly string[];
+  readonly actions: readonly CustomShortcutAction[];
+};
 export type EditingPreferences = {
   readonly input: InputAssistance;
   readonly shortcuts: ShortcutOverrides;
+  readonly customShortcuts?: readonly CustomShortcut[];
 };
 export type EditingPreferencesChange =
   | { readonly type: 'input'; readonly key: keyof InputAssistance; readonly value: boolean | PairMode }
   | { readonly type: 'bind'; readonly command: EditorCommandId; readonly keys: readonly string[]; readonly replaceConflicts: boolean }
+  | { readonly type: 'saveCustomShortcut'; readonly shortcut: CustomShortcut; readonly replaceConflicts: boolean }
+  | { readonly type: 'deleteCustomShortcut'; readonly id: string }
   | { readonly type: 'resetShortcuts' };
 
 export const defaultInputAssistance: InputAssistance = {
@@ -65,15 +82,44 @@ export function isShortcutOverrides(value: unknown): value is ShortcutOverrides 
       && keys.length <= 4 && keys.every(key => typeof key === 'string' && key.length > 0 && key.length <= 80));
 }
 
+function isCustomShortcutId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(value);
+}
+
+function isCustomShortcutAction(value: unknown): value is CustomShortcutAction {
+  if (!value || typeof value !== 'object' || !('type' in value)) return false;
+  if (value.type === 'command') return 'command' in value && isEditorCommandId(value.command);
+  if (value.type === 'mode') return 'mode' in value && shortcutTargetModes.some(mode => mode === value.mode);
+  return value.type === 'snippet' && 'template' in value && typeof value.template === 'string'
+    && value.template.length > 0 && value.template.length <= 20_000;
+}
+
+export function isCustomShortcut(value: unknown): value is CustomShortcut {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const shortcut = value as Record<string, unknown>;
+  return isCustomShortcutId(shortcut.id) && typeof shortcut.name === 'string'
+    && shortcut.name.length <= 100 && Boolean(shortcut.name.trim())
+    && customShortcutScopes.some(scope => scope === shortcut.scope)
+    && Array.isArray(shortcut.strokes) && shortcut.strokes.length <= 2
+    && shortcut.strokes.every(stroke => typeof stroke === 'string' && stroke.length > 0 && stroke.length <= 80)
+    && Array.isArray(shortcut.actions) && shortcut.actions.length > 0 && shortcut.actions.length <= 12
+    && shortcut.actions.every(isCustomShortcutAction);
+}
+
 export function isEditingPreferences(value: unknown): value is EditingPreferences {
   return !!value && typeof value === 'object' && 'input' in value && 'shortcuts' in value
-    && isInputAssistance(value.input) && isShortcutOverrides(value.shortcuts);
+    && isInputAssistance(value.input) && isShortcutOverrides(value.shortcuts)
+    && (!('customShortcuts' in value) || value.customShortcuts === undefined
+      || Array.isArray(value.customShortcuts) && value.customShortcuts.every(isCustomShortcut));
 }
 
 export function isEditingPreferencesChange(value: unknown): value is EditingPreferencesChange {
   if (!value || typeof value !== 'object' || !('type' in value)) return false;
   const record = value as Record<string, unknown>;
   if (record.type === 'resetShortcuts') return true;
+  if (record.type === 'deleteCustomShortcut') return isCustomShortcutId(record.id);
+  if (record.type === 'saveCustomShortcut') return isCustomShortcut(record.shortcut)
+    && typeof record.replaceConflicts === 'boolean';
   if (record.type === 'bind') return isEditorCommandId(record.command)
     && typeof record.replaceConflicts === 'boolean'
     && isShortcutOverrides({ [record.command]: record.keys });

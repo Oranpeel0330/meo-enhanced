@@ -44,7 +44,7 @@ import { setGitDiffLineHighlightsEnabled } from './helpers/gitDiffLineHighlights
 import { applyBuiltInVisualBaseline, applyUiVisualBaseline } from './helpers/theme';
 import { setShikiTheme } from './helpers/shikiHighlighter';
 import { createFailureNoticeManager, getErrorMessage, isTransientMermaidRuntimeError, shouldAutoFallbackToSourceForLiveError, logWebviewRenderError, type EditorNoticeAction, type FailureNoticeManager } from './helpers/errors';
-import { isPrimaryModifier, isShortcutKey, handleEditorShortcut, type ShortcutHandlerContext } from './helpers/shortcuts';
+import { createCustomShortcutMatcher, isPrimaryModifier, isShortcutKey, handleEditorShortcut, type ShortcutHandlerContext } from './helpers/shortcuts';
 import { normalizeDocumentText } from '../../src/foundation/documentText';
 import { createFindPanel, createFindPanelController, type FindPanelController } from './helpers/findPanel';
 import { createSelectionMenu, createSelectionMenuController, type SelectionMenuController } from './helpers/selectionMenu';
@@ -3164,10 +3164,15 @@ for (const [button, direction] of [[undoBtn, 'undo'], [redoBtn, 'redo']] as cons
   });
 }
 
+const customShortcutMatcher = createCustomShortcutMatcher();
 const shortcutHandlerContext: ShortcutHandlerContext = {
   get editor() { return editor; },
   get editableMode() { return getActiveEditableMode(); },
   get shortcuts() { return editingPreferences.shortcuts; },
+  get customShortcuts() { return editingPreferences.customShortcuts; },
+  customShortcutMatcher,
+  insertSnippet: template => editor?.insertSnippet(template, imageDimensionDocumentId ?? '') ?? false,
+  setMode: mode => { void editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' }); },
   requestPreview: () => { void editorModeRuntime.dispatch({ type: 'requestMode', mode: getActiveEditorMode() === 'preview' ? getActiveEditableMode() : 'preview', source: 'user' }); },
   requestPlainPaste: () => { void pastePlainFromHost(); },
   requestTableCopy: format => { void copyTableToHost(format); },
@@ -4248,6 +4253,10 @@ window.addEventListener('keydown', (event) => {
   if (event.target instanceof HTMLIFrameElement && event.target.classList.contains('preview-frame')) return;
   handleEditorShortcut(event, shortcutHandlerContext);
 }, { capture: true });
+
+for (const type of ['blur', 'focusout', 'pointerdown', 'compositionstart']) {
+  window.addEventListener(type, customShortcutMatcher.cancel, { capture: true });
+}
 
 window.addEventListener('paste', async (event) => {
   if (!editor || getActiveEditorMode() === 'preview' || !(event.target instanceof Node) || !editor.view.dom.contains(event.target)) {

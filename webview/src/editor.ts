@@ -11,6 +11,7 @@ import { sourceLinePositionAtTarget } from './editor/domSourceLine';
 import { currentHeadingSuggestions } from './editor/headingSuggestions';
 import { markdownSyntaxContext, type MarkdownInputContext } from './editor/blockInsertion';
 import { createInputSuggestions, refreshInputSuggestions } from './editor/inputSuggestions';
+import { insertShortcutSnippet } from './editor/shortcutSnippet';
 import type { LinkCandidate } from '../../src/protocol/editorServices';
 import { sourceTableAt, createSourceTableCommandTarget, tableShortcutCommands } from './editor/sourceTableCommands';
 import { parseMarkdownTable, serializeDelimitedTable } from './application/delimitedTable';
@@ -4463,6 +4464,7 @@ export function createEditor({
       if (command === 'cellBreak') { if (getActiveTableInput()) return insertMountedTableCellBreak(view); return insertTableCellLineBreak(view); }
       return runEditorCommand(view, command);
     },
+    insertSnippet(template: string, documentId: string) { return insertShortcutSnippet(view, template, documentId); },
     pastePlainText(text: string) { return insertPlainClipboardText(view, text, (view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text)); },
     setInputAssistance(preferences: InputAssistance) {
       view.dispatch({ effects: inputAssistanceCompartment.reconfigure(inputAssistanceFacet.of(preferences)) });

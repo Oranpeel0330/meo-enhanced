@@ -8443,6 +8443,36 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
 .settings-item[data-command] { padding-block: 8px; }
 .settings-warning, .settings-shortcut-conflict, .settings-status { color: var(--meo-ui-danger, #be1100); }
 .settings-shortcut-conflict { flex-basis: 100%; margin: 0; font-size: 12px; }
+.settings-custom-shortcut-form, .settings-custom-actions, .settings-custom-action {
+  display: grid;
+  gap: 8px;
+}
+.settings-custom-shortcut-form {
+  margin-block: 8px;
+  padding: 12px;
+  border: 1px solid var(--meo-ui-border-control);
+  border-radius: 6px;
+}
+.settings-custom-action {
+  padding-block: 8px;
+  border-top: 1px solid var(--meo-ui-separator);
+}
+.settings-custom-strokes, .settings-custom-footer { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.settings-custom-footer { justify-content: space-between; }
+.settings-custom-field { display: grid; gap: 4px; min-width: 0; }
+.settings-custom-syntax > summary { cursor: pointer; }
+.settings-custom-input {
+  max-width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  color: var(--meo-ui-text);
+  background: var(--meo-ui-surface-field);
+  border: 1px solid var(--meo-ui-border-control);
+  border-radius: 5px;
+  font: inherit;
+}
+textarea.settings-custom-input { resize: vertical; font-family: var(--meo-ui-editor-font-family, monospace); }
+.settings-custom-input:focus-visible { outline: 1px solid var(--meo-ui-focus); outline-offset: -1px; }
 .settings-status { margin: 10px 24px 0; font-size: 12px; }
 .settings-empty { color: var(--meo-ui-text-muted); }
 .settings-preset-description { margin: 8px 0 12px; max-width: none; }

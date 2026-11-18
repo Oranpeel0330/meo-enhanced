@@ -41,6 +41,7 @@ export const settingsText = (language: UiLanguage, chinese: string, english: str
 export const typingSections = ['symbols', 'structure', 'paste', 'candidates'] as const;
 export type TypingSection = typeof typingSections[number];
 export const sectionTitles = {
+  customShortcuts: ['自定义快捷键', 'Custom shortcuts'],
   appearanceMode: ['界面模式', 'Interface mode'], appearanceTypography: ['文档排版', 'Document typography'], appearanceColors: ['基础颜色', 'Basic colors'], appearanceAdvanced: ['高级颜色', 'Advanced colors'],
   math: ['公式语法', 'Math syntax'],
   display: ['文档设置', 'Document settings'], opening: ['打开文档时', 'Opening documents'], interface: ['界面设置', 'Interface'],
@@ -49,6 +50,21 @@ export const sectionTitles = {
   symbols: ['符号与选区', 'Symbols and selections'], structure: ['列表与结构', 'Lists and structure'], paste: ['粘贴', 'Pasting'], candidates: ['输入候选', 'Suggestions'],
   document: ['文档与编辑', 'Document and editing'], format: ['文字格式', 'Text formatting'], blocks: ['段落与块', 'Paragraphs and blocks'],
   table: ['表格', 'Tables'], selection: ['选择与光标', 'Selections and cursors'], lines: ['行操作', 'Line operations'], navigation: ['模式与导航', 'Modes and navigation']
+} as const;
+export const customShortcutScopeTitles = {
+  global: ['编辑器全局', 'Editor-wide'],
+  editor: ['正文', 'Prose'],
+  live: ['仅 Live 正文', 'Live prose only'],
+  source: ['仅 Source 正文', 'Source prose only'],
+  table: ['表格内', 'In a table']
+} as const;
+export const customShortcutSearchKeywords = [
+  '快捷键 按键 绑定 多段按键 动作 命令 模板 片段 序列',
+  'shortcuts keybindings keyboard chord action command template snippet sequence'
+] as const;
+export const customShortcutActionTitles = {
+  snippet: ['插入片段', 'Insert snippet'],
+  mode: ['切换到指定模式', 'Switch to a specific mode']
 } as const;
 export const typingCatalog: readonly { key: keyof InputAssistance; section: TypingSection; title: readonly [string, string]; description: readonly [string, string] }[] = [
   { key: 'selectionToolbar', section: 'symbols', title: ['选区工具栏', 'Selection toolbar'], description: ['选中文字后显示常用格式工具栏。', 'Show common formatting actions when text is selected.'] },

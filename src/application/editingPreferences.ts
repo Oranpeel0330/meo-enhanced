@@ -1,6 +1,6 @@
 import {
-  defaultInputAssistance, editorCommandIds, type EditingPreferences,
-  type EditingPreferencesChange, type EditorCommandId, type ShortcutOverrides
+  defaultInputAssistance, editorCommandIds, isCustomShortcut, type CustomShortcut, type CustomShortcutAction,
+  type CustomShortcutScope, type EditingPreferences, type EditingPreferencesChange, type EditorCommandId, type ShortcutOverrides
 } from '../foundation/editingPreferences';
 
 export type ShortcutPlatform = 'mac' | 'other';
@@ -55,7 +55,7 @@ const namedKeys: Record<string, string> = {
   '↑': 'ArrowUp', '↓': 'ArrowDown', '←': 'ArrowLeft', '→': 'ArrowRight', plus: 'Plus'
 };
 
-export function normalizeShortcut(value: string): string | null {
+export function normalizeShortcut(value: string, secondStroke = false): string | null {
   const parts = value.trim().split(/\s*\+\s*/);
   const rawKey = parts.pop();
   if (!rawKey) return null;
@@ -68,12 +68,12 @@ export function normalizeShortcut(value: string): string | null {
   const key = namedKeys[rawKey.toLowerCase()] ?? (/^f(?:[1-9]|1\d|2[0-4])$/i.test(rawKey) ? rawKey.toUpperCase()
     : rawKey.length === 1 ? rawKey.toUpperCase() : null);
   if (!key || key === 'Tab' || key === 'Escape' && modifiers.size === 0) return null;
-  if (modifiers.size === 0 && !/^F\d+$/.test(key)) return null;
-  if (modifiers.size === 1 && modifiers.has('Shift') && key.length === 1) return null;
+  if (!secondStroke && modifiers.size === 0 && !/^F\d+$/.test(key)) return null;
+  if (!secondStroke && modifiers.size === 1 && modifiers.has('Shift') && key.length === 1) return null;
   return [...['Ctrl', 'Cmd', 'Alt', 'Shift'].filter(modifier => modifiers.has(modifier)), key].join(' + ');
 }
 
-export function shortcutFromStroke(stroke: ShortcutStroke): string | null {
+export function shortcutFromStroke(stroke: ShortcutStroke, secondStroke = false): string | null {
   if (stroke.composing || stroke.altGraph || ['Control', 'Meta', 'Alt', 'Shift', 'Process', 'Dead', 'Unidentified'].includes(stroke.key)) return null;
   let key = stroke.key === ' ' ? 'Space' : stroke.key === '+' ? 'Plus' : stroke.key;
   if (key === '／') key = '/';
@@ -85,7 +85,7 @@ export function shortcutFromStroke(stroke: ShortcutStroke): string | null {
   return normalizeShortcut([
     ...(stroke.ctrl ? ['Ctrl'] : []), ...(stroke.meta ? ['Cmd'] : []),
     ...(stroke.alt ? ['Alt'] : []), ...(shift ? ['Shift'] : []), key
-  ].join(' + '));
+  ].join(' + '), secondStroke);
 }
 
 export function effectiveShortcuts(overrides: ShortcutOverrides, platform: ShortcutPlatform): Record<EditorCommandId, readonly string[]> {
@@ -104,7 +104,7 @@ export function effectiveShortcuts(overrides: ShortcutOverrides, platform: Short
 }
 
 export function shortcutConflicts(command: EditorCommandId, keys: readonly string[], overrides: ShortcutOverrides, platform: ShortcutPlatform): EditorCommandId[] {
-  const wanted = new Set(keys.map(normalizeShortcut));
+  const wanted = new Set(keys.map(key => normalizeShortcut(key)));
   const context = commandContext(command);
   const bindings = effectiveShortcuts(overrides, platform);
   return editorCommandIds.filter(other => {
@@ -119,6 +119,72 @@ export function shortcutConflicts(command: EditorCommandId, keys: readonly strin
   });
 }
 
+export type CustomShortcutConflict =
+  | { readonly type: 'command'; readonly command: EditorCommandId; readonly fixed: boolean }
+  | { readonly type: 'custom'; readonly id: string; readonly name: string; readonly fixed: false };
+
+export function customShortcutActionFitsScope(action: CustomShortcutAction, scope: CustomShortcutScope): boolean {
+  if (action.type === 'snippet') return scope === 'editor' || scope === 'live' || scope === 'source';
+  if (action.type === 'mode') return true;
+  const context = commandContext(action.command);
+  return context === 'global' || context === 'table' && scope === 'table' || context === 'editor' && scope !== 'global';
+}
+
+// Actions that may open an input, hand off focus, or finish asynchronously
+// can be the final step. Other steps must leave the same edit target available.
+export function customShortcutActionCanContinue(action: CustomShortcutAction): boolean {
+  return action.type === 'snippet' || action.type === 'command'
+    && commandContext(action.command) === 'editor'
+    && !['undo', 'redo', 'plain', 'formatHtml', 'insertTable', 'convert', 'image'].includes(action.command);
+}
+
+function scopesOverlap(left: CustomShortcutScope, right: CustomShortcutScope): boolean {
+  return left === right || left === 'global' || right === 'global'
+    || left === 'editor' && (right === 'live' || right === 'source')
+    || right === 'editor' && (left === 'live' || left === 'source');
+}
+
+export function customShortcutConflicts(
+  shortcut: Pick<CustomShortcut, 'id' | 'scope' | 'strokes'>,
+  preferences: EditingPreferences,
+  platform: ShortcutPlatform
+): CustomShortcutConflict[] {
+  const [first, second] = shortcut.strokes;
+  if (!first) return [];
+  const bindings = effectiveShortcuts(preferences.shortcuts, platform);
+  const builtin = editorCommandIds.filter(command => {
+    const context = commandContext(command);
+    if (context === 'native' && !['copy', 'cut', 'paste'].includes(command)) return false;
+    return bindings[command].includes(first) && (context === 'editor' && shortcut.scope === 'table'
+      || context === 'native' || scopesOverlap(context, shortcut.scope));
+  });
+  const custom = (preferences.customShortcuts ?? []).filter(other => other.id !== shortcut.id
+    && first === other.strokes[0] && (!second || !other.strokes[1] || second === other.strokes[1])
+    && scopesOverlap(shortcut.scope, other.scope));
+  return [
+    ...builtin.map(command => ({ type: 'command' as const, command, fixed: !canBindCommand(command) })),
+    ...custom.map(other => ({ type: 'custom' as const, id: other.id, name: other.name, fixed: false as const }))
+  ];
+}
+
+export function builtinShortcutCustomConflicts(command: EditorCommandId, keys: readonly string[], preferences: EditingPreferences): readonly CustomShortcut[] {
+  const context = commandContext(command);
+  if (context === 'native') return [];
+  return (preferences.customShortcuts ?? []).filter(other => keys.includes(other.strokes[0])
+    && (scopesOverlap(context, other.scope) || context === 'editor' && other.scope === 'table'));
+}
+
+function normalizeCustomShortcut(value: unknown): CustomShortcut | null {
+  if (!isCustomShortcut(value) || !value.actions.every((action, index) => customShortcutActionFitsScope(action, value.scope)
+    && (index === value.actions.length - 1 || customShortcutActionCanContinue(action)))) return null;
+  const strokes = value.strokes.map((stroke, index) => normalizeShortcut(stroke, index === 1));
+  if (!strokes.every((stroke): stroke is string => stroke !== null)) return null;
+  const actions = value.actions.map((action): CustomShortcutAction => action.type === 'snippet'
+    ? { type: 'snippet', template: action.template.replace(/\r\n?/g, '\n') }
+    : action.type === 'mode' ? { type: 'mode', mode: action.mode } : { type: 'command', command: action.command });
+  return { id: value.id, name: value.name.trim(), scope: value.scope, strokes, actions };
+}
+
 export function normalizeEditingPreferences(value: unknown): EditingPreferences {
   const record = value && typeof value === 'object' ? value as Partial<EditingPreferences> : {};
   return {
@@ -129,23 +195,59 @@ export function normalizeEditingPreferences(value: unknown): EditingPreferences 
     })) },
     shortcuts: Object.fromEntries(Object.entries(record.shortcuts ?? {}).filter(([id, keys]) =>
       editorCommandIds.includes(id as EditorCommandId) && canBindCommand(id as EditorCommandId)
-      && Array.isArray(keys) && keys.length <= 4 && keys.every(key => typeof key === 'string' && key.length <= 80 && normalizeShortcut(key))).map(([id, keys]) => [id, [...new Set((keys as string[]).map(key => normalizeShortcut(key)!))]]))
+      && Array.isArray(keys) && keys.length <= 4 && keys.every(key => typeof key === 'string' && key.length <= 80 && normalizeShortcut(key))).map(([id, keys]) => [id, [...new Set((keys as string[]).map(key => normalizeShortcut(key)!))]])),
+    ...(Array.isArray(record.customShortcuts) ? {
+      customShortcuts: [...new Map(record.customShortcuts.flatMap(raw => {
+        const shortcut = normalizeCustomShortcut(raw);
+        return shortcut ? [[shortcut.id, shortcut] as const] : [];
+      })).values()]
+    } : {})
   };
 }
 
 export function changeEditingPreferences(current: EditingPreferences, change: EditingPreferencesChange, platform: ShortcutPlatform): EditingPreferences {
   if (change.type === 'input') return { ...current, input: { ...current.input, [change.key]: change.value } };
-  if (change.type === 'resetShortcuts') return { ...current, shortcuts: {} };
+  if (change.type === 'resetShortcuts') return { ...current, shortcuts: {}, ...(current.customShortcuts ? {
+    customShortcuts: current.customShortcuts.map(shortcut => ({ ...shortcut, strokes: [] }))
+  } : {}) };
+  if (change.type === 'deleteCustomShortcut') return {
+    ...current, customShortcuts: (current.customShortcuts ?? []).filter(shortcut => shortcut.id !== change.id)
+  };
+  if (change.type === 'saveCustomShortcut') {
+    const shortcut = normalizeCustomShortcut(change.shortcut);
+    if (!shortcut) throw new Error('Invalid shortcut rule');
+    const conflicts = customShortcutConflicts(shortcut, current, platform);
+    if (conflicts.length && (!change.replaceConflicts || conflicts.some(conflict => conflict.fixed))) {
+      throw new Error('Key combination is already assigned');
+    }
+    const shortcuts = { ...current.shortcuts };
+    const bindings = effectiveShortcuts(shortcuts, platform);
+    const customShortcuts = [...current.customShortcuts ?? []];
+    for (const conflict of conflicts) {
+      if (conflict.type === 'command') shortcuts[conflict.command] = bindings[conflict.command].filter(key => key !== shortcut.strokes[0]);
+      else {
+        const index = customShortcuts.findIndex(other => other.id === conflict.id);
+        customShortcuts[index] = { ...customShortcuts[index], strokes: [] };
+      }
+    }
+    const index = customShortcuts.findIndex(other => other.id === shortcut.id);
+    if (index === -1) customShortcuts.push(shortcut);
+    else customShortcuts[index] = shortcut;
+    return { ...current, shortcuts, customShortcuts };
+  }
   if (!canBindCommand(change.command)) throw new Error('This platform binding cannot be changed');
-  const keys = change.keys.map(normalizeShortcut);
-  if (keys.some(key => key === null) || new Set(keys).size !== keys.length) throw new Error('Invalid key combination');
-  const conflicts = shortcutConflicts(change.command, keys as string[], current.shortcuts, platform);
-  if (conflicts.length && (!change.replaceConflicts || conflicts.some(command => !canBindCommand(command)))) throw new Error('Key combination is already assigned');
+  const keys = change.keys.map(key => normalizeShortcut(key));
+  if (!keys.every((key): key is string => key !== null) || new Set(keys).size !== keys.length) throw new Error('Invalid key combination');
+  const conflicts = shortcutConflicts(change.command, keys, current.shortcuts, platform);
+  const customConflicts = new Set(builtinShortcutCustomConflicts(change.command, keys, current).map(shortcut => shortcut.id));
+  if ((conflicts.length || customConflicts.size) && (!change.replaceConflicts || conflicts.some(command => !canBindCommand(command)))) throw new Error('Key combination is already assigned');
   const shortcuts = { ...current.shortcuts };
   const bindings = effectiveShortcuts(shortcuts, platform);
-  for (const conflict of conflicts) shortcuts[conflict] = bindings[conflict].filter(key => !keys.includes(normalizeShortcut(key)));
-  shortcuts[change.command] = keys as string[];
-  return { ...current, shortcuts };
+  for (const conflict of conflicts) shortcuts[conflict] = bindings[conflict].filter(key => !keys.includes(key));
+  shortcuts[change.command] = keys;
+  return { ...current, shortcuts, ...(customConflicts.size ? {
+    customShortcuts: current.customShortcuts?.map(shortcut => customConflicts.has(shortcut.id) ? { ...shortcut, strokes: [] } : shortcut)
+  } : {}) };
 }
 
 export function resolveShortcut(stroke: ShortcutStroke, overrides: ShortcutOverrides, platform: ShortcutPlatform, context: 'global' | 'editor' | 'table'): EditorCommandId | null {

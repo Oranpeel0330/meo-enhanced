@@ -33,6 +33,30 @@ assert.ok(settingsSearchMatches('_', 'symbols * _ ~'));
 assert.equal(settingsSearchMatches('image theme', 'Image storage folder'), false, 'all query terms must match the same setting');
 assert.equal(settingsSearchMatches('csv table', 'CSV only'), false);
 const defaults = { input: { ...defaultInputAssistance }, shortcuts: {} };
+const shortcutRule = {
+  id: 'notes', name: 'Note template', scope: 'live', strokes: ['Ctrl + K', 'T'],
+  actions: [{ type: 'snippet', template: '## ${1:Title}\n$0' }, { type: 'command', command: 'save' }]
+} as const;
+const saveCustom = (shortcut: import('../src/foundation/editingPreferences').CustomShortcut, replaceConflicts = false) =>
+  ({ type: 'saveCustomShortcut', shortcut, replaceConflicts } as const);
+const custom = changeEditingPreferences(defaults, saveCustom(shortcutRule), 'other');
+assert.deepEqual(normalizeEditingPreferences(custom), custom);
+const sameKeysInSource = { ...shortcutRule, id: 'source-notes', scope: 'source' } as const;
+const disjoint = changeEditingPreferences(custom, saveCustom(sameKeysInSource), 'other');
+assert.deepEqual(disjoint.customShortcuts, [shortcutRule, sameKeysInSource]);
+const sharedPrefix = { ...shortcutRule, id: 'other-notes', strokes: ['Ctrl + K', 'O'] };
+assert.equal(changeEditingPreferences(disjoint, saveCustom(sharedPrefix), 'other').customShortcuts?.length, 3);
+assert.throws(() => changeEditingPreferences(disjoint, saveCustom({ ...shortcutRule, id: 'prefix', strokes: ['Ctrl + K'] }), 'other'), /already assigned/);
+assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, strokes: ['Ctrl + C'] }, true), 'other'), /already assigned/);
+assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, scope: 'table' }), 'other'), /Invalid shortcut rule/);
+assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, actions: [...shortcutRule.actions].reverse() }), 'other'), /Invalid shortcut rule/);
+const overlaps = changeEditingPreferences(disjoint, saveCustom({ ...shortcutRule, id: 'replacement', scope: 'editor' }, true), 'other');
+assert.deepEqual(overlaps.customShortcuts?.map(rule => rule.strokes), [[], [], ['Ctrl + K', 'T']]);
+const reassignBuiltin = changeEditingPreferences(overlaps,
+  { type: 'bind', command: 'bold', keys: ['Ctrl + K'], replaceConflicts: true }, 'other');
+assert.deepEqual(reassignBuiltin.customShortcuts?.map(rule => rule.strokes), [[], [], []]);
+assert.deepEqual(changeEditingPreferences(disjoint, { type: 'resetShortcuts' }, 'other').customShortcuts,
+  [shortcutRule, sameKeysInSource].map(rule => ({ ...rule, strokes: [] })));
 assert.equal(defaults.input.selectionToolbar, true, 'existing users keep the selection toolbar by default');
 assert.equal(defaults.input.pasteHtml, false, 'HTML paste formatting is disabled by default');
 assert.equal(normalizeEditingPreferences(undefined).input.pasteHtml, false);

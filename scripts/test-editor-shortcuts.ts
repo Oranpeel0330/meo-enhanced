@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import type { ShortcutOverrides } from '../src/foundation/editingPreferences';
+import type { CustomShortcut, ShortcutOverrides } from '../src/foundation/editingPreferences';
 
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
   value: { platform: 'Win32' }
 });
 
-const { handleEditorShortcut } = await import('../webview/src/helpers/shortcuts');
+const { createCustomShortcutMatcher, handleEditorShortcut } = await import('../webview/src/helpers/shortcuts');
 
 type ShortcutCase = {
   readonly name: string;
@@ -182,6 +182,8 @@ for (const testCase of cases) {
     editableMode: testCase.editableMode ?? 'source',
     editorSurfaceActive: testCase.editorSurfaceActive ?? true,
     shortcuts: testCase.shortcuts ?? {},
+    customShortcutMatcher: undefined,
+    customShortcuts: undefined,
     platform: testCase.platform ?? 'other',
     requestSave: () => effects.push('save'),
     requestSaveAs: () => effects.push('saveAs'),
@@ -217,5 +219,44 @@ for (const testCase of cases) {
     stopped: testCase.expectedHandled ? 1 : 0
   }, testCase.name);
 }
+
+const effects: string[] = [];
+const target = { closest: () => null, matches: () => false };
+const customShortcuts: readonly CustomShortcut[] = [
+  { id: 'meeting-notes', name: 'Meeting notes', scope: 'editor', strokes: ['Ctrl + K', 'T'],
+    actions: [{ type: 'snippet', template: '## Notes' }, { type: 'command', command: 'save' }] },
+  { id: 'to-source', name: 'Open Source', scope: 'global', strokes: ['Ctrl + Alt + J'],
+    actions: [{ type: 'mode', mode: 'source' }] }
+];
+const customShortcutMatcher = createCustomShortcutMatcher();
+const context = {
+  editor: { hasFocus: () => true, view: { hasFocus: true, contentDOM: { contains: (element: unknown) => element === target } } },
+  editableMode: 'live' as const,
+  editorSurfaceActive: true,
+  customShortcuts,
+  customShortcutMatcher,
+  insertSnippet: (template: string) => { effects.push('insert:' + template); return true; },
+  requestSave: () => { effects.push('save'); },
+  setMode: (mode: string) => { effects.push('mode:' + mode); },
+  openFindPanel: () => {},
+  requestMode: () => {}
+};
+const keydown = (key: string, timeStamp: number, extra: Partial<KeyboardEvent> = {}) => handleEditorShortcut({
+  key, code: 'Key' + key.toUpperCase(), timeStamp, target,
+  preventDefault() {}, stopPropagation() {}, ...extra
+} as KeyboardEvent, context);
+assert.equal(keydown('k', 0, { ctrlKey: true }), true);
+assert.deepEqual(effects, []);
+assert.equal(keydown('t', 200), true);
+assert.deepEqual(effects, ['insert:## Notes', 'save'], 'Actions dispatch in order');
+assert.equal(keydown('k', 300, { ctrlKey: true }), true);
+assert.equal(keydown('t', 2000), false, 'An expired prefix cannot consume a typed character');
+assert.equal(keydown('k', 2100, { ctrlKey: true }), true);
+assert.equal(keydown('t', 2200, { isComposing: true }), false, 'IME cancels a pending shortcut');
+assert.equal(keydown('t', 2300), false);
+assert.equal(keydown('j', 2400, { ctrlKey: true, altKey: true }), true);
+assert.equal(effects.at(-1), 'mode:source', 'The explicit mode argument reaches the command');
+assert.equal(keydown('j', 2500, { ctrlKey: true, altKey: true, repeat: true }), true);
+assert.deepEqual(effects, ['insert:## Notes', 'save', 'mode:source'], 'Repeating the key does not replay custom actions');
 
 console.log('Editor shortcut tests passed');
