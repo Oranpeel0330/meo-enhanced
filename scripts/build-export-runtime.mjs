@@ -22,18 +22,28 @@ const fallbackPlugin = { name: 'export-fallback-boundary', setup(build) {
   }));
 } };
 
+// Windowed Preview can open a code/prose band without rendering distant math.
+// Keep the already-lazy KaTeX require out of that worker's cold source read too.
+const previewMathPlugin = { name: 'preview-math-boundary', setup(build) {
+  build.onResolve({ filter: /^katex$/ }, () => ({
+    path: './preview-math.js', external: true
+  }));
+} };
+
 for (const [entry, output] of [
   ['runtime.ts', 'export-runtime.js'],
   ['previewRenderWorker.ts', 'preview-render-worker.js'],
+  ['katex', 'preview-math.js'],
   ['fallbackCodeHighlighter.ts', 'fallback-code-highlighter.js']
 ]) {
   const result = await Bun.build({
-    entrypoints: [resolve(root, 'src/export', entry)],
+    entrypoints: [entry === 'katex' ? createRequire(import.meta.url).resolve('katex') : resolve(root, 'src/export', entry)],
     target: 'node', format: 'cjs', minify: true,
     // A literal banner preserves the installed directory instead of Bun folding
     // a dependency's __dirname to the build checkout.
     banner: 'var __meoExportRuntimeDir = __dirname;',
-    plugins: [lucidePlugin, fallbackPlugin, sharedShikiWasmPlugin('node')]
+    plugins: [lucidePlugin, fallbackPlugin,
+      ...(output === 'preview-render-worker.js' ? [previewMathPlugin] : []), sharedShikiWasmPlugin('node')]
   });
   if (!result.success) throw new AggregateError(result.logs, `${output} build failed`);
   if (result.outputs.length !== 1) throw new Error(`${output} must be emitted as one bundle`);

@@ -9,7 +9,7 @@ try {
   const build = await Bun.build({ entrypoints: ['src/host/previewRenderWorker.ts'], target: 'node', format: 'cjs', minify: true });
   assert.ok(build.success, build.logs.map(String).join('\n'));
   await Bun.write(path.join(root, 'owner.cjs'), build.outputs[0]!);
-  for (const file of ['preview-render-worker.js', 'fallback-code-highlighter.js']) {
+  for (const file of ['preview-render-worker.js', 'preview-math.js', 'fallback-code-highlighter.js']) {
     fs.copyFileSync(path.join('dist', file), path.join(root, file));
   }
   fs.writeFileSync(path.join(root, 'run.cjs'), `

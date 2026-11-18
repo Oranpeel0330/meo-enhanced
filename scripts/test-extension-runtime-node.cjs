@@ -32,11 +32,22 @@ try {
     worker.on('message', receive); worker.on('error', fail);
     worker.postMessage({ id, kind: 'render', ...(options === undefined ? {} : { options }), ...operation });
   });
+  // The cold first code band needs neither fallback grammars nor distant math.
+  // Both assets are absent from this relocated, dependency-free installation.
+  const code = 'const value = "' + 'content'.repeat(16) + '";\n';
+  const coldBand = await request(100, { markdownText: '# Cold band\n\n```typescript\n'
+    + code.repeat(8500) + '```\n\n$$\nx^2\n$$', sourceDocumentPath: '/fixture/cold-band.md', uiLanguage: 'en' },
+  { kind: 'open', owner: 'cold', documentId: 'cold-1', anchorLine: 1 });
+  assert.ok(coldBand.value.document.blocks.length > 200);
+  assert.equal(coldBand.value.document.codeSources.length, 1);
+  await request(99, undefined, { kind: 'release', owner: 'cold' });
+  fs.copyFileSync(path.join(__dirname, '..', 'dist', 'preview-math.js'), path.join(installRoot, 'preview-math.js'));
   // A text-first reader must not load the fallback grammar bundle. Keep it
   // absent until the first real code block to exercise the installed boundary.
   const textFirst = await request(101, { markdownText: '# Text first\n\nOrdinary **prose** and $x^2$.',
     sourceDocumentPath: '/fixture/text-first.md', uiLanguage: 'en' });
   assert.match(textFirst.value.html, /<strong>prose<\/strong>/);
+  assert.match(textFirst.value.html, /class="katex"/, 'the installed formula asset must render actual inline math');
   const missingFallback = await request(102, { markdownText: '```js\nconst first = 1;\n```',
     sourceDocumentPath: '/fixture/text-first.md', uiLanguage: 'en' });
   assert.match(missingFallback.error, /fallback-code-highlighter/);
