@@ -19,6 +19,15 @@ const build = await Bun.build({ entrypoints: ['scripts/test-live-decoration-hist
         + '            if ((globalThis as any).__pauseSyntaxReceive) { (globalThis as any).__pauseSyntaxReceive = false; await new Promise<void>(resolve => { (globalThis as any).__releaseSyntaxReceive = resolve; }); }\n'
         + marker) };
     });
+    builder.onLoad({ filter: /webview[\\/]src[\\/]editor[\\/]liveSyntaxPreparation\.ts$/ }, async ({ path }) => {
+      const source = await Bun.file(path).text();
+      const wait = '      await new Promise(resolve => setTimeout(resolve, 16));';
+      assert.equal(source.split(wait).length, 2);
+      return { loader: 'ts', contents: source
+        .replaceAll('performance.now()', '(performance.now() + ((globalThis as any).__livePreparationClockOffset ?? 0))')
+        .replace(wait, '      (globalThis as any).__livePreparationWaitTicks = ((globalThis as any).__livePreparationWaitTicks ?? 0) + 1;\n' + wait)
+        .replace('    await yieldForPresentation();', '    (globalThis as any).__livePreparationForegroundTicks = ((globalThis as any).__livePreparationForegroundTicks ?? 0) + 1;\n    await yieldForPresentation();') };
+    });
     for (const [file, marker, guard] of [
       ['displayMathBlocks', '  const literalRanges = collectMarkdownLiteralRanges(state, tree, scope);', '!scope && excludedRanges.length === 0'],
       ['markdownLiteralRanges', '  const ranges: SourceRange[] = [];', '!scope'],
@@ -68,7 +77,8 @@ const build = await Bun.build({ entrypoints: ['scripts/test-live-decoration-hist
       const marker = '  if (!result.tree || !backend.canPublish(context.state.doc)) return ParseContext.getSkippingParser(result.ready).startParse(input, fragments, ranges);';
       assert.equal(source.split(marker).length, 2);
       return { loader: 'ts', contents: source.replace(marker,
-        '  if (!result.tree || !backend.canPublish(context.state.doc)) { (globalThis as any).__backgroundWaiterStarts = ((globalThis as any).__backgroundWaiterStarts ?? 0) + 1; return ParseContext.getSkippingParser(result.ready).startParse(input, fragments, ranges); }') };
+        '  if (!result.tree || !backend.canPublish(context.state.doc)) { (globalThis as any).__backgroundWaiterStarts = ((globalThis as any).__backgroundWaiterStarts ?? 0) + 1; return ParseContext.getSkippingParser(result.ready).startParse(input, fragments, ranges); }')
+        .replace("20_000);", "((globalThis as any).__markdownWorkerDeadlineMs ?? 20_000));") };
     });
     builder.onLoad({ filter: /webview[\\/]src[\\/]editor[\\/]markdownLanguageHosts\.ts$/ }, async ({ path }) => {
       const source = await Bun.file(path).text();
@@ -114,6 +124,7 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   if (path === '/bundle.js') return new Response(bundle, { headers: { 'content-type': 'text/javascript; charset=utf-8' } });
   if (path === '/worker.js') return new Response(workerBundle, { headers: { 'content-type': 'text/javascript' } });
   if (path === '/bad-worker.js') return new Response('throw new Error("deliberate parser fixture failure")', { headers: { 'content-type': 'text/javascript' } });
+  if (path === '/stall-worker.js') return new Response('self.onmessage = () => {};', { headers: { 'content-type': 'text/javascript' } });
   if (path === '/styles.css') return new Response(Bun.file('webview/src/styles.css'), { headers: { 'content-type': 'text/css' } });
   return new Response('<link rel="stylesheet" href="/styles.css"><style>html,body,#editor{height:100%;margin:0}</style>'
     + '<body data-meo-markdown-worker-src="/worker.js"><div id="editor"></div><script src="/bundle.js"></script></body>', { headers: {
@@ -463,6 +474,59 @@ try {
     }
   }
 
+  for (const part of ['syntax', 'blocks']) for (const cancel of [false, true]) {
+    stage = 'background ' + part + ' wait retains foreground budget' + (cancel ? ' and cancels' : '');
+    await page.evaluate(part => {
+      const scope = window as any;
+      scope.__holdParseReplies = part === 'syntax'; scope.__holdBlockReplies = part === 'blocks';
+      scope.__heldParseReplies = []; scope.__livePreparationClockOffset = 0; scope.__livePreparationWaitTicks = 0;
+      scope.__budgetCurrent = true; scope.__budgetOutcome = { status: 'pending' };
+      scope.__budgetEditor = scope.__liveHistory.create({ parent: document.getElementById('editor'), text: scope.__original, initialMode: 'source' });
+    }, part);
+    if (part === 'blocks') await page.waitForFunction(() => (window as any).__liveHistory.markdownReady((window as any).__budgetEditor));
+    await page.evaluate(() => {
+      const scope = window as any;
+      scope.__budgetTask = scope.__budgetEditor.prepareLiveSyntax(() => scope.__budgetCurrent).then(
+        (ready: boolean) => { scope.__budgetOutcome = { status: 'ready', ready }; },
+        (error: unknown) => { scope.__budgetOutcome = { status: 'failed', error: String(error) }; });
+    });
+    await page.waitForFunction(part => (window as any).__heldParseReplies.some((reply: any) => reply.data.kind === part), {}, part);
+    const ticks = await page.evaluate(() => {
+      const scope = window as any;
+      // Advance only Live's local clock. The worker's real deadline and the
+      // exact revision remain owned by the existing background service.
+      scope.__livePreparationClockOffset = 11_000;
+      return scope.__livePreparationWaitTicks;
+    });
+    await page.waitForFunction(ticks => (window as any).__budgetOutcome.status !== 'pending'
+      || (window as any).__livePreparationWaitTicks > ticks, {}, ticks);
+    assert.deepEqual(await page.evaluate(() => (window as any).__budgetOutcome), { status: 'pending' },
+      'waiting for valid background work must not exhaust the independent foreground parser budget');
+    if (cancel) {
+      await page.evaluate(() => { (window as any).__budgetCurrent = false; });
+      await page.waitForFunction(() => (window as any).__budgetOutcome.status !== 'pending');
+      assert.deepEqual(await page.evaluate(() => (window as any).__budgetOutcome), { status: 'ready', ready: false },
+        'a newer intent still cancels while the worker is held');
+    }
+    await page.evaluate(() => {
+      const scope = window as any;
+      scope.__holdParseReplies = scope.__holdBlockReplies = false;
+      for (const reply of scope.__heldParseReplies.splice(0)) reply.worker.dispatchEvent(new MessageEvent('message', { data: reply.data }));
+    });
+    await page.waitForFunction(() => (window as any).__budgetOutcome.status !== 'pending');
+    const settled = await page.evaluate(async cancel => {
+      const scope = window as any, editor = scope.__budgetEditor;
+      const outcome = scope.__budgetOutcome;
+      if (!cancel && outcome.ready) await editor.setMode('live');
+      const value = { outcome, exact: editor.getText() === scope.__original, history: editor.getHistoryDepth(),
+        mode: editor.view.dom.classList.contains('meo-mode-live') ? 'live' : 'source' };
+      editor.destroy(); delete scope.__livePreparationClockOffset;
+      return value;
+    }, cancel);
+    assert.deepEqual(settled, { outcome: { status: 'ready', ready: !cancel }, exact: true,
+      history: { undo: 0, redo: 0 }, mode: cancel ? 'source' : 'live' });
+  }
+
   for (const part of ['syntax', 'blocks']) {
     stage = 'reject mismatched ' + part + ' projection base';
     const invalid = await page.evaluate(async part => {
@@ -495,6 +559,23 @@ try {
   });
   assert.ok(invalidHosts.consumed && invalidHosts.exact, 'a rejected host index retains exact editable Source');
   assert.match(invalidHosts.error, /Invalid Markdown language hosts/);
+
+  stage = 'background worker retains its own deadline';
+  const stalled = await page.evaluate(async () => {
+    const scope = window as any;
+    document.body.dataset.meoMarkdownWorkerSrc = '/stall-worker.js';
+    scope.__markdownWorkerDeadlineMs = 40;
+    const editor = scope.__liveHistory.create({ parent: document.getElementById('editor'), text: scope.__original, initialMode: 'source' });
+    let error = '';
+    try { await editor.prepareLiveSyntax(() => true); } catch (reason) { error = String(reason); }
+    scope.__liveHistory.input(editor, 4, 'safe');
+    const exact = editor.getText() === 'EDITsafe' + scope.__original.slice(4);
+    editor.destroy(); delete scope.__markdownWorkerDeadlineMs;
+    document.body.dataset.meoMarkdownWorkerSrc = '/worker.js';
+    return { error, exact };
+  });
+  assert.match(stalled.error, /Markdown parser worker timed out/);
+  assert.ok(stalled.exact, 'an expired background request must still retain exact editable Source');
 
   const failure = await page.evaluate(async () => {
     const scope = window as any;
@@ -549,7 +630,34 @@ try {
     scope.__coldEditor.destroy();
     return exact;
   }), 'authoritative cold Live publication retains exact source');
-  console.log(`Background Markdown: CSP worker, no foreground full parse, ${requests.length} jobs/one snapshot, receipt-only prose updates, strict projection bases, CJK input, undo, modes, distant code palette, ${incrementalCodeSteps} incremental code LR steps, disposal, failure and authoritative cold Live passed`);
+  stage = 'foreground parser retains its own deadline';
+  await page.evaluate(() => {
+    const scope = window as any;
+    delete document.body.dataset.meoMarkdownWorkerSrc;
+    scope.__meoSyntaxParseControls = { backgroundLimit: 0, ensure: 'partial', force: 'false' };
+    scope.__livePreparationClockOffset = 0; scope.__livePreparationForegroundTicks = 0;
+    scope.__foregroundBudgetEditor = scope.__liveHistory.create({ parent: document.getElementById('editor'), text: scope.__original, initialMode: 'source' });
+    scope.__foregroundBudgetOutcome = { status: 'pending' };
+    scope.__foregroundBudgetTask = scope.__foregroundBudgetEditor.prepareLiveSyntax(() => true).then(
+      (ready: boolean) => { scope.__foregroundBudgetOutcome = { status: 'ready', ready }; },
+      (error: unknown) => { scope.__foregroundBudgetOutcome = { status: 'failed', error: String(error) }; });
+  });
+  await page.waitForFunction(() => (window as any).__livePreparationForegroundTicks > 0);
+  await page.evaluate(() => { (window as any).__livePreparationClockOffset = 11_000; });
+  await page.waitForFunction(() => (window as any).__foregroundBudgetOutcome.status !== 'pending');
+  const foregroundDeadline = await page.evaluate(() => {
+    const scope = window as any, editor = scope.__foregroundBudgetEditor;
+    scope.__liveHistory.input(editor, 4, 'safe');
+    const result = { outcome: scope.__foregroundBudgetOutcome, exact: editor.getText() === 'EDITsafe' + scope.__original.slice(4) };
+    editor.destroy(); delete scope.__livePreparationClockOffset; delete scope.__meoSyntaxParseControls;
+    document.body.dataset.meoMarkdownWorkerSrc = '/worker.js';
+    return result;
+  });
+  assert.deepEqual(foregroundDeadline, { outcome: { status: 'failed', error: 'Error: Live syntax preparation timed out' }, exact: true },
+    'foreground parsing still fails at its original local budget without discarding Source');
+  assert.deepEqual(errors, []);
+
+  console.log(`Background Markdown: CSP worker, no foreground full parse, ${requests.length} jobs/one snapshot, receipt-only prose updates, strict projection bases, CJK input, undo, modes, distant code palette, ${incrementalCodeSteps} incremental code LR steps, disposal, independent preparation deadlines, failure and authoritative cold Live passed`);
 } catch (error) {
   console.error(JSON.stringify({ stage, browserErrors, details: await activePage?.evaluate(() => {
     const scope = window as any;

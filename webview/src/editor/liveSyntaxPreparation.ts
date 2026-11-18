@@ -18,14 +18,17 @@ export function refreshLiveSyntax(view: EditorView, bounded: boolean): void {
 /** Finish the shared parser while the old surface remains mounted. Installing
  * Live first would build a partial presentation and rebuild it on publication. */
 export async function prepareLiveSyntax(view: EditorView, isCurrent: () => boolean): Promise<boolean> {
-  const deadline = performance.now() + PREPARATION_DEADLINE_MS;
+  let deadline = performance.now() + PREPARATION_DEADLINE_MS;
   while (isCurrent()) {
     const state = view.state;
     assertBackgroundMarkdownPreparation(state);
     const presentationReady = prepareBackgroundMarkdownPresentation(state);
     if (isBackgroundMarkdownPreparationPending(state) || !presentationReady) {
-      if (performance.now() >= deadline) throw new Error('Live syntax preparation timed out');
+      // The background loader/parser owns its existing failure deadlines.
+      // Waiting for that work must not spend the foreground parse budget.
+      const waitingAt = performance.now();
       await new Promise(resolve => setTimeout(resolve, 16));
+      deadline += performance.now() - waitingAt;
       continue;
     }
     if (isCompleteMarkdownStructure(syntaxTree(state), state.doc.length)) return true;
