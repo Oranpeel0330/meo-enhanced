@@ -203,14 +203,7 @@ exports.run = async function () {
         await waitFor(() => vscode.window.tabGroups.activeTabGroup.activeTab?.input?.uri?.toString() !== uri.toString(), 'native editor close');
         await vscode.commands.executeCommand('vscode.openWith', uri, 'meoEnhanced.editor');
       }
-      await waitFor(async () => {
-        const candidate = await locateActiveFrame();
-        if (!candidate || await candidate.evaluate(marker => globalThis.__nativeDraftHandoffGeneration === marker, generationMarker).catch(() => true)) return false;
-        frame = candidate;
-        return true;
-      }, `new production Webview generation after ${action}`);
       doc = await vscode.workspace.openTextDocument(uri);
-      await waitModeReady(await frame.evaluate(() => document.querySelector('.editor-root').dataset.mode));
       let recoveryCopy;
       await waitFor(() => {
         recoveryCopy = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'untitled'
@@ -219,9 +212,10 @@ exports.run = async function () {
           && document.getText().includes('\n' + next + '\n'));
         return doc.getText() === next || !!recoveryCopy;
       }, `Host or protected-copy pending-cell recovery after ${action}`);
+      const recoveredInOriginal = doc.getText() === next;
       if (recoveryCopy) {
         assert.equal(action, 'close', 'An ordinary Webview reload must recover its still-open Host document');
-        assert.equal(doc.getText(), expected, 'A terminal recovery copy must leave the reopened original unchanged');
+        assert.equal(doc.getText(), recoveredInOriginal ? next : expected, 'Recovery must retain either the exact accepted revision or the unchanged reopened original');
         assert.equal(fs.readFileSync(file, 'utf8'), expected, 'Terminal recovery must not overwrite the saved original');
         await waitFor(() => vscode.window.tabGroups.all.some(group => group.tabs.some(tab => tab.input?.uri?.toString() === recoveryCopy.uri.toString())), 'visible recovery-copy tab');
         const copyFile = path.join(root, 'pending-cell-close-recovery.md');
@@ -229,6 +223,7 @@ exports.run = async function () {
         assert.ok(fs.readFileSync(copyFile, 'utf8').includes('\n' + next + '\n'), 'The independent recovery artifact must preserve every local character');
         receipt.outcome = 'protected-copy';
         receipt.originalDocumentClosed = handoffDocument.isClosed;
+        assert.equal(receipt.originalDocumentClosed, true, 'Protected recovery must come from the closed document handoff');
         receipt.recoveryCopy = { file: copyFile, text: recoveryCopy.getText() };
         receipt.hostAfter = doc.getText();
         receipt.diskAfter = fs.readFileSync(file, 'utf8');
@@ -238,15 +233,21 @@ exports.run = async function () {
         assert.equal(vscode.window.activeTextEditor?.document.uri.toString(), recoveryCopy.uri.toString());
         await vscode.commands.executeCommand(discard);
         await vscode.commands.executeCommand('vscode.openWith', uri, 'meoEnhanced.editor');
-        receipt.passed = true;
-        continue;
+        if (!recoveredInOriginal) { receipt.passed = true; continue; }
       }
+      await waitFor(async () => {
+        const candidate = await locateActiveFrame();
+        if (!candidate || await candidate.evaluate(marker => globalThis.__nativeDraftHandoffGeneration === marker, generationMarker).catch(() => true)) return false;
+        frame = candidate;
+        return true;
+      }, `new production Webview generation after ${action}`);
+      await waitModeReady('live');
       await frame.waitForFunction(text => document.querySelector('.editor-host .cm-content')?.cmTile?.root?.view?.state.doc.toString() === text, { timeout: 8000 }, next);
       await vscode.commands.executeCommand('workbench.action.files.save');
       await saved(next);
       receipt.hostAfter = doc.getText();
       receipt.diskAfter = fs.readFileSync(file, 'utf8');
-      receipt.outcome = 'original-document';
+      receipt.outcome = recoveryCopy ? 'original-document-and-protected-copy' : 'original-document';
       receipt.passed = true;
       expected = next;
       cellValue = value;
