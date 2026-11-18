@@ -23,12 +23,23 @@ async function checkCellHeightTransitions(page: import('puppeteer-core').Page, s
     requestAnimationFrame(next);
   }));
   const clickCell = async (row: number, col: number) => {
-    const point = await page.$eval(inputAt(row, col), input => {
+    const pointAt = () => page.$eval(inputAt(row, col), input => {
       const rect = input.parentElement!.getBoundingClientRect();
       const viewport = input.closest('.cm-scroller')!.getBoundingClientRect();
       return { x: rect.left + 12, y: Math.max(rect.top, viewport.top) + 12 };
     });
-    await page.mouse.click(point.x, point.y);
+    let point = await pointAt(), stable = false;
+    // Native hit testing can clamp a short document after source shrinkage.
+    // Hover before accepting the final point, without repeating any press.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await page.mouse.move(point.x, point.y);
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const next = await pointAt();
+      if (Math.abs(point.x - next.x) < .5 && Math.abs(point.y - next.y) < .5) { stable = true; break; }
+      point = next;
+    }
+    assert(stable, 'the independent click target must settle before pressing');
+    await page.mouse.down(); await page.mouse.up();
     await settle();
     const state = await page.$eval(inputAt(row, col), input => ({
       active: input === document.activeElement,
@@ -36,7 +47,7 @@ async function checkCellHeightTransitions(page: import('puppeteer-core').Page, s
       viewport: input.closest('.cm-scroller')?.getBoundingClientRect().toJSON(),
       owner: document.activeElement?.outerHTML.slice(0, 250)
     }));
-    assert(state.active, `clicked cell ${row}/${col} owns native input: ${JSON.stringify({ point, ...state })}`);
+    assert(state.active, `clicked cell ${row}/${col} owns native input: ${JSON.stringify(state)}`);
   };
   for (const large of [false, true]) {
     const label = `${large ? 'optimized' : 'ordinary'}-${sizing}`;
