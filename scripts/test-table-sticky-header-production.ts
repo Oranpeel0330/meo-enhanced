@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { assessLargeDocument } from '../src/foundation/largeDocument';
 import { launchTestBrowser } from './browser-test-helpers';
 
 const root = path.resolve(import.meta.dir, '..');
@@ -15,6 +16,95 @@ async function main(): Promise<void> {
   if (!build.success) throw new Error(build.logs.map(String).join('\n'));
   const browser = await launchTestBrowser();
   try {
+    for (const large of [false, true]) {
+      const label = large ? 'large document' : 'ordinary document';
+      const prefix = Array.from({ length: large ? 2300 : 12 }, (_, i) => `Before ${i + 1}`);
+      const rows = Array.from({ length: 65 }, (_, i) => `| Row ${i + 1} | Cell ${i + 1} |`);
+      const suffix = Array.from({ length: 60 }, (_, i) => `After ${i + 1}`);
+      const text = [...prefix, '', '| Column | Content |', '| --- | --- |', ...rows, '', ...suffix].join('\n');
+      assert.equal(assessLargeDocument(text).boundedEditorWork, large, label);
+
+      const page = await browser.newPage();
+      try {
+        await page.setViewport({ width: 800, height: 600 });
+        await page.setContent('<!doctype html><div id="host"></div>');
+        await page.addStyleTag({ path: path.join(root, 'webview/src/styles.css') });
+        await page.addStyleTag({ content: `
+          :root{--meo-font-live:Arial;--meo-font-live-size:16px;--meo-line-height-live:1.6}
+          html,body{margin:0;height:100%}#host{height:540px}
+        ` });
+        await page.addScriptTag({ path: path.join(temp, 'bundle.js') });
+        const sourceHeader = '.meo-md-html-table:not(.meo-md-html-table-sticky-table) thead tr';
+        const floatingHeader = '.meo-md-html-table-sticky-chrome.is-visible .meo-md-html-table-sticky-table th';
+        const frames = (count: number) => page.evaluate(async count => {
+          for (let i = 0; i < count; i++) await new Promise(requestAnimationFrame);
+        }, count);
+        await page.evaluate((text) => {
+          const harness = (window as any).TableStickyHeaderProductionHarness;
+          harness.initializeImageHandling({ postMessage() {} });
+          const editor = harness.createEditor({
+            parent: document.getElementById('host')!, text, initialMode: 'live', onApplyChanges() {}
+          });
+          (window as any).__stickyNavigationEditor = editor;
+          editor.view.dispatch({ selection: { anchor: text.length }, scrollIntoView: true });
+          editor.view.focus();
+        }, text);
+        await frames(8);
+        await page.evaluate((headerLine) => {
+          const { view } = (window as any).__stickyNavigationEditor;
+          view.scrollDOM.scrollTop = view.lineBlockAt(view.state.doc.line(headerLine).from).top;
+        }, prefix.length + 2);
+        await page.waitForSelector(sourceHeader);
+        await page.mouse.move(400, 240);
+        await page.mouse.wheel({ deltaY: 730 });
+        await page.waitForSelector(floatingHeader, { visible: true });
+        await frames(16);
+
+        const snapshot = () => page.evaluate(({ sourceHeader, floatingHeader, text }) => {
+          const { view } = (window as any).__stickyNavigationEditor;
+          const header = document.querySelector(sourceHeader)?.getBoundingClientRect();
+          const viewport = view.scrollDOM.getBoundingClientRect();
+          const { anchor, head } = view.state.selection.main;
+          return {
+            scrollTop: view.scrollDOM.scrollTop as number,
+            headerTop: header ? header.top - viewport.top : null,
+            headerBottom: header ? header.bottom - viewport.bottom : null,
+            floating: Boolean(document.querySelector(floatingHeader)),
+            caret: { anchor, head },
+            editorFocused: document.activeElement === view.contentDOM,
+            unchanged: view.state.doc.toString() === text
+          };
+        }, { sourceHeader, floatingHeader, text });
+        const before = await snapshot();
+        assert.ok(before.floating && before.headerTop !== null && before.headerTop < -500,
+          `${label}: scrolled far below the real header ${JSON.stringify(before)}`);
+        assert.ok(before.editorFocused && before.caret.head === text.length,
+          `${label}: stale document caret at the end ${JSON.stringify(before)}`);
+        const clickPoint = await page.$eval(floatingHeader, element => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        });
+        await page.mouse.move(clickPoint.x, clickPoint.y);
+        await page.mouse.down();
+        await frames(2);
+        assert.equal((await snapshot()).scrollTop, before.scrollTop, `${label}: no navigation while held`);
+        await page.mouse.up();
+        await frames(16);
+
+        const after = await snapshot();
+        assert.ok(after.headerTop !== null && after.headerTop >= -1 &&
+          after.headerBottom !== null && after.headerBottom <= 1 && !after.floating,
+          `${label}: the real header must stay fully visible after release ${JSON.stringify(after)}`);
+        assert.ok(after.scrollTop < before.scrollTop, `${label}: navigation scrolls back to the table`);
+        assert.deepEqual(after.caret, before.caret, `${label}: original caret`);
+        assert.ok(after.editorFocused, `${label}: original editor focus`);
+        assert.ok(after.unchanged, `${label}: original document text`);
+        await page.evaluate(() => (window as any).__stickyNavigationEditor.destroy());
+      } finally {
+        await page.close();
+      }
+    }
+
     const runGeometryScenario = async (scenario: {
       dpr: number;
       zoom: number;

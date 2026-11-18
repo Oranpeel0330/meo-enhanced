@@ -322,7 +322,10 @@ export function tablePointerTarget(event: PointerEvent):
   const target = event.target;
   if (!(target instanceof Element)) return { kind: 'border' };
   if (target.closest('.meo-md-html-table-column-resize-handle')) return { kind: 'resize' };
-  if (isTableControlTarget(target)) return { kind: 'control' };
+  // The floating header owns navigation and must not start a cell selection gesture.
+  if (isTableControlTarget(target) || target.closest('.meo-md-html-table-sticky-header')) {
+    return { kind: 'control' };
+  }
   const cell = target.closest<HTMLTableCellElement>(tableCellSelector);
   if (!cell) return { kind: 'border' };
   // An absolutely positioned textarea can receive the collapsed grid's pixel
