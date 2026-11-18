@@ -2267,6 +2267,8 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           addTrimmedUrlLinkMark(ranges, node.from, node.to, rawUrl, href, !isActiveLine);
         }
       } else if (node.name === 'Image') {
+        // The table owns its cell previews, including the active source line.
+        if (tableDepth > 0) return;
         const line = state.doc.lineAt(node.from);
         const isActiveLine = activeLines.has(line.number);
         const imageSelection = overlapsSelection(state, node.from, node.to);

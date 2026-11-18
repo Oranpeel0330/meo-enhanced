@@ -134,6 +134,15 @@ async function checkCellHeightTransitions(page: import('puppeteer-core').Page, s
     await settle();
     await clickCell(2, 1);
     assert(Math.abs(await rowHeight(2) - imageReading) < 2, `${label}/image row does not shrink on entry`);
+    await page.keyboard.press('Escape'); await settle();
+    const imageOwners = await page.evaluate(() => ({
+      inTable: document.querySelectorAll('.cm-content table .meo-md-image').length,
+      outsideTable: [...document.querySelectorAll('.cm-content .meo-md-image')]
+        .filter(image => !image.closest('table')).length
+    }));
+    assert.deepEqual(imageOwners, { inTable: 1, outsideTable: 0 },
+      `${label}/leaving the image cell keeps its preview inside the table`);
+    await clickCell(2, 1);
     await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control');
     await page.keyboard.type('long '.repeat(110)); await settle();
     const grown = await rowHeight(2);
