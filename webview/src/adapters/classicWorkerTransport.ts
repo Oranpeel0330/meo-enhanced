@@ -1,7 +1,7 @@
 let source: { uri: string; promise: Promise<string> } | undefined;
 
 async function fetchSource(uri: string): Promise<string> {
-  const response = await fetch(uri, { signal: AbortSignal.timeout(5_000) });
+  const response = await fetch(uri, { signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error('Could not load parser worker');
   return response.text();
 }

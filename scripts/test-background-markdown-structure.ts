@@ -123,6 +123,11 @@ const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
   const path = new URL(request.url).pathname;
   if (path === '/bundle.js') return new Response(bundle, { headers: { 'content-type': 'text/javascript; charset=utf-8' } });
   if (path === '/worker.js') return new Response(workerBundle, { headers: { 'content-type': 'text/javascript' } });
+  if (path === '/cold-worker-headers.js') return Bun.sleep(100).then(() => new Response(workerBundle, { headers: { 'content-type': 'text/javascript' } }));
+  if (path === '/cold-worker-body.js' || path === '/cold-worker-stalled.js') return new Response(new ReadableStream({ start(controller) {
+    const encoder = new TextEncoder(); controller.enqueue(encoder.encode('/* cold worker source */'));
+    if (path.endsWith('body.js')) setTimeout(() => { try { controller.enqueue(encoder.encode(workerBundle)); controller.close(); } catch {} }, 100);
+  } }), { headers: { 'content-type': 'text/javascript' } });
   if (path === '/bad-worker.js') return new Response('throw new Error("deliberate parser fixture failure")', { headers: { 'content-type': 'text/javascript' } });
   if (path === '/stall-worker.js') return new Response('self.onmessage = () => {};', { headers: { 'content-type': 'text/javascript' } });
   if (path === '/styles.css') return new Response(Bun.file('webview/src/styles.css'), { headers: { 'content-type': 'text/css' } });
@@ -657,7 +662,45 @@ try {
     'foreground parsing still fails at its original local budget without discarding Source');
   assert.deepEqual(errors, []);
 
-  console.log(`Background Markdown: CSP worker, no foreground full parse, ${requests.length} jobs/one snapshot, receipt-only prose updates, strict projection bases, CJK input, undo, modes, distant code palette, ${incrementalCodeSteps} incremental code LR steps, disposal, independent preparation deadlines, failure and authoritative cold Live passed`);
+  for (const part of ['headers', 'body']) {
+    stage = 'cold worker ' + part + ' completes without losing Source input';
+    const cold = await page.evaluate(async part => {
+      const scope = window as any, nativeTimeout = AbortSignal.timeout, budgets: number[] = [];
+      AbortSignal.timeout = milliseconds => { budgets.push(milliseconds); return nativeTimeout(milliseconds === 5_000 ? 50 : milliseconds === 20_000 ? 500 : milliseconds); };
+      document.body.dataset.meoMarkdownWorkerSrc = '/cold-worker-' + part + '.js';
+      const editor = scope.__liveHistory.create({ parent: document.getElementById('editor'), text: scope.__original, initialMode: 'source' });
+      try {
+        scope.__liveHistory.input(editor, 4, 'safe');
+        let ready = false;
+        for (let attempt = 0; attempt < 1000; attempt++) {
+          const error = scope.__liveHistory.parseFailure(editor); if (error) throw new Error(error);
+          if (scope.__liveHistory.markdownReady(editor)) { ready = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        return { ready, exact: editor.getText() === 'EDITsafe' + scope.__original.slice(4), history: editor.getHistoryDepth(), budget: budgets[0] };
+      } finally { editor.destroy(); AbortSignal.timeout = nativeTimeout; document.body.dataset.meoMarkdownWorkerSrc = '/worker.js'; }
+    }, part);
+    assert.deepEqual(cold, { ready: true, exact: true, history: { undo: 1, redo: 0 }, budget: 20_000 },
+      'healthy packaged source can outlast the former loader cutoff while retaining the edited revision');
+  }
+  stage = 'stalled cold worker source retains a finite loading deadline';
+  const assetFailure = await page.evaluate(async () => {
+    const scope = window as any, nativeTimeout = AbortSignal.timeout, budgets: number[] = [];
+    AbortSignal.timeout = milliseconds => { budgets.push(milliseconds); return nativeTimeout(milliseconds === 5_000 ? 50 : milliseconds === 20_000 ? 500 : milliseconds); };
+    document.body.dataset.meoMarkdownWorkerSrc = '/cold-worker-stalled.js';
+    const editor = scope.__liveHistory.create({ parent: document.getElementById('editor'), text: scope.__original, initialMode: 'source' });
+    try {
+      let error = '';
+      for (let attempt = 0; attempt < 1000; attempt++) { error = scope.__liveHistory.parseFailure(editor) ?? ''; if (error) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+      scope.__liveHistory.input(editor, 4, 'safe');
+      return { error, exact: editor.getText() === 'EDITsafe' + scope.__original.slice(4), budget: budgets[0] };
+    } finally { editor.destroy(); AbortSignal.timeout = nativeTimeout; document.body.dataset.meoMarkdownWorkerSrc = '/worker.js'; }
+  });
+  assert.match(assetFailure.error, /AbortError|TimeoutError|aborted|timed out/i);
+  assert.ok(assetFailure.exact && assetFailure.budget === 20_000, 'loading failure keeps exact editable Source without an unlimited wait');
+  assert.deepEqual(errors, []);
+
+  console.log(`Background Markdown: CSP worker, no foreground full parse, ${requests.length} jobs/one snapshot, receipt-only prose updates, strict projection bases, CJK input, undo, modes, distant code palette, ${incrementalCodeSteps} incremental code LR steps, disposal, independent preparation deadlines, cold worker assets, failure and authoritative cold Live passed`);
 } catch (error) {
   console.error(JSON.stringify({ stage, browserErrors, details: await activePage?.evaluate(() => {
     const scope = window as any;

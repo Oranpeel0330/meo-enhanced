@@ -9,6 +9,7 @@ Optimized project. New MEO Enhanced releases start from version 0.1.0.
 - Kept cell switches and drag selections stable as source editors change height, including clicks between separate tables.
 - Prevented duplicate image previews after leaving a Live table cell.
 - Kept focus in menus and inputs when a wrapped editor cursor is measured after leaving the document.
+- Fixed missing syntax colors when opening large Source documents after a cold start.
 - Avoided premature Live-mode timeouts while valid background Markdown preparation is still in progress.
 - Preserved native IME composition ranges while retaining the editor's reading position.
 - Restored link hints after streamed Preview content replaces its reading body.
