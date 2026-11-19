@@ -89,8 +89,10 @@ body { margin: 0; background: ${background}; color: ${foreground}; }
 .markdown-body .meo-export-code-block-wrap pre > code { display: block; white-space: normal; }
 .markdown-body .meo-export-code-line { display: block; }
 .markdown-body .meo-export-code-line-source { white-space: pre; }
-.markdown-body .meo-export-task-item { list-style: none; }
+.markdown-body ul > .meo-export-task-item { list-style: none; }
 .markdown-body .meo-export-task-checkbox { margin: 0 .2em .25em -1.4em; vertical-align: middle; }
+.markdown-body ol > .meo-export-task-item > .meo-export-task-checkbox,
+.markdown-body ol > .meo-export-task-item > p > .meo-export-task-checkbox { margin-inline-start: 0; }
 .markdown-body .meo-export-alert { padding: 8px 16px; border-left: 4px solid var(--meo-alert-color); color: inherit; }
 .markdown-body .meo-export-alert-note { --meo-alert-color: ${appearance === 'light' ? '#0969da' : '#4493f8'}; }
 .markdown-body .meo-export-alert-tip { --meo-alert-color: ${appearance === 'light' ? '#1a7f37' : '#3fb950'}; }

@@ -15,7 +15,7 @@ import { blockStickyHeaderExtension } from './helpers/blockStickyHeader';
 import { livePointerSelectionActiveField, setLivePointerSelectionActiveEffect, sourcePresentationSelection } from './editor/livePointerSelection';
 import { blockReadingFocusAt, enterBlockSource, isBlockInteractionEffect } from './editor/blockInteraction';
 import { bindWidgetClick, disposeWidgetClick } from './editor/widgetPointer';
-import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection } from '@codemirror/state';
+import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, type Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { Language, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
@@ -61,12 +61,12 @@ import {
   isListMarkerDecoration,
   projectChangedListMarkerDecoration,
   CheckboxWidget,
-  continuedListMarker,
-  listMarkerDataInContainerLine,
+  isOrderedParagraphContinuation,
   listMarkerData,
   detectListIndentStylesByLine,
   nextOrderedSequenceNumber
 } from './helpers/listMarkers';
+import { readMarkdownContainerPrefixes } from '../../src/foundation/markdownListPrefix';
 import { addTableDecorations, addTableDecorationsForLineRange, parseTableInfo } from './helpers/tables';
 import {
   forEachYamlFrontmatterLayoutLine,
@@ -1802,6 +1802,7 @@ const parsedContainerCache = new WeakMap<EditorState['doc'], { tree: Tree; value
 function addListLineDecorations(
   builder: DecorationCollector,
   state: EditorState,
+  tree: Tree,
   indentSelectedLines: Set<number>,
   parsedContainers: ReturnType<typeof parsedListMarkersByLine>,
   frontmatter: FrontmatterInfo | null = null,
@@ -1823,10 +1824,10 @@ function addListLineDecorations(
     const style = stylesByLine.get(lineNo);
     const entries = parsedMarkers.get(lineNo) ?? [];
     if (!entries.length) {
-      // Preserve Live's existing rendering for list-like lines that CommonMark
-      // treats as paragraph continuations (for example, a non-1 ordered start).
+      // The accepted syntax can identify a paragraph before its sibling
+      // decorations are refreshed. A numbered continuation belongs to prose.
       let marker = listMarkerData(lineText, null, style);
-      if (!marker) {
+      if (!marker || isOrderedParagraphContinuation(state, line, marker, tree)) {
         legacyOrderedCountsByLevel.length = 0;
         continue;
       }
@@ -2565,7 +2566,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
         + liveTaskListIndentCssValue(taskIndent) + ');'
     } }).range(line.from));
   }
-  addListLineDecorations(ranges, state, indentSelectedLines, parsedContainers, frontmatter, literalBlockLines, scope);
+  addListLineDecorations(ranges, state, tree, indentSelectedLines, parsedContainers, frontmatter, literalBlockLines, scope);
   addMathDecorations(ranges, state, mathRanges, activeLines);
   addColorSwatchDecorations(
     ranges,
@@ -3424,70 +3425,52 @@ function projectListEnter(
   mapped: DecorationSet,
   transaction: Transaction
 ): DecorationSet {
-  const event = transaction.annotation(Transaction.userEvent);
-  if (event !== 'input.list' && event !== 'input') return mapped;
+  if (!transaction.isUserEvent('input.list.enter')) return mapped;
   const { startState, state, changes } = transaction;
-  if (state.doc.lines <= startState.doc.lines) return mapped;
-  const before = startState.selection;
-  const after = state.selection;
-  if (before.ranges.length !== 1 || after.ranges.length !== 1 || !before.main.empty || !after.main.empty) return mapped;
-  const source = startState.doc.lineAt(before.main.head);
+  if (state.doc.lines !== startState.doc.lines + 1) return mapped;
+  const source = startState.doc.lineAt(startState.selection.main.head);
   if (source.length > 4_096) return mapped;
-  const previous = listMarkerDataInContainerLine(source.text);
-  if (!previous) return mapped;
-  const split = before.main.head - source.from;
-  const above = split === previous.toOffset;
-  if (split < previous.toOffset || (above && event !== 'input.list')) return mapped;
-  const prefix = continuedListMarker(source.text, !above);
-  if (!prefix) return mapped;
 
-  const entered = state.doc.lineAt(after.main.head);
-  const first = state.doc.lineAt(changes.mapPos(source.from, -1));
-  const enteredOffset = after.main.head - entered.from;
-  const enteredPrefix = entered.text.slice(0, enteredOffset);
-  // Number normalization belongs to the input transaction. Validate the
-  // surrounding prefix, then render the ordinal from the accepted document.
-  if (enteredPrefix !== prefix) {
-    const withoutOrdinal = (value: string) => value.slice(0, previous.fromOffset) +
-      value.slice(previous.fromOffset).replace(/^\d+/, '');
-    if (!previous.orderedNumber || withoutOrdinal(enteredPrefix) !== withoutOrdinal(prefix)) return mapped;
-  }
-  if (entered.text.slice(enteredOffset) !== (above ? '' : source.text.slice(split))) return mapped;
-  if (above ? entered.number !== first.number || entered.number === state.doc.lines
-    : entered.number <= first.number || entered.number > first.number + 2) return mapped;
-  const last = above ? state.doc.line(entered.number + 1) : entered;
-  const retained = above ? last : first;
-  const retainedMarker = listMarkerDataInContainerLine(retained.text);
-  if (!retainedMarker || retainedMarker.fromOffset !== previous.fromOffset) return mapped;
-  const retainedBody = retained.text.slice(retainedMarker.toOffset);
-  const beforeBody = source.text.slice(previous.toOffset, above ? source.length : split);
-  if (above ? retainedBody !== beforeBody : retainedBody !== beforeBody && retainedBody !== beforeBody.trimEnd()) return mapped;
-
+  const unconfirmed = new Set(readMarkdownContainerPrefixes(source.text)
+    .flatMap(prefix => prefix.kind === 'list' ? [source.from + prefix.marker.fromOffset] : []));
   let layout: ListLineLayout | undefined;
-  let markerOffset: number | undefined;
-  const indents: Range<Decoration>[] = [];
   decorations.between(source.from, source.to, (from, to, value) => {
     if (from === to && from === source.from) layout = value.spec.listLineLayout ?? layout;
-    if (isListMarkerDecoration(value)) markerOffset = from - source.from;
-    if (value.spec.widget instanceof ListIndentWidget && to <= source.from + previous.fromOffset) {
-      indents.push(value.range(from - source.from, to - source.from));
-    }
+    if (isListMarkerDecoration(value)) unconfirmed.delete(from);
   });
-  if (!layout || markerOffset !== previous.fromOffset) return mapped;
+  if (!layout || unconfirmed.size) return mapped;
 
+  const first = state.doc.lineAt(changes.mapPos(source.from, -1));
+  if (first.number === state.doc.lines) return mapped;
+  const last = state.doc.line(first.number + 1);
   const style = { columns: layout.guideStepColumns, insert: ' '.repeat(layout.guideStepColumns) };
-  const prefixOffset = indents[0]?.from ?? markerOffset;
   const add: Range<Decoration>[] = [];
   for (const row of [first, last]) {
-    const marker = listMarkerData(row.text, null, style, prefixOffset);
-    if (!marker || marker.fromOffset !== markerOffset) return mapped;
-    const indent = countColumn(row.text, state.tabSize, marker.fromOffset)
-      - countColumn(row.text, state.tabSize, prefixOffset);
-    const content = countColumn(row.text, state.tabSize, marker.toOffset) + marker.displayExtraColumns;
-    for (const { from, to, value } of indents) add.push(value.range(row.from + from, row.from + to));
-    add.push(listLineDeco(content, indent, style.columns, false, marker.isTask,
-      marker.taskHiddenPrefixColumns, Boolean(marker.orderedNumber)).range(row.from));
-    addListMarkerDecoration(add, state, row.from, null, style, null, prefixOffset);
+    let deepest: ReturnType<typeof listMarkerData> = null;
+    let markerOffset = 0;
+    for (const prefix of readMarkdownContainerPrefixes(row.text)) {
+      if (prefix.kind === 'quote') {
+        // Match the syntax tree's QuoteMark, which excludes the following space.
+        markerOffset = prefix.markOffset + 1;
+        continue;
+      }
+      const marker = listMarkerData(row.text, null, style, markerOffset)!;
+      marker.indentColumns = countColumn(row.text, state.tabSize, marker.fromOffset)
+        - countColumn(row.text, state.tabSize, markerOffset);
+      marker.contentOffsetColumns = countColumn(row.text, state.tabSize, marker.toOffset) + marker.displayExtraColumns;
+      if (marker.indentColumns > 0
+        && (markerOffset > 0 || getLiveBlockIndent(startState, source.from).footnoteNumber === null)) {
+        add.push(Decoration.replace({ widget: listIndentWidget(marker.indentColumns), inclusive: false })
+          .range(row.from + markerOffset, row.from + marker.fromOffset));
+      }
+      addListMarkerDecoration(add, state, row.from, null, style, null, markerOffset);
+      deepest = marker;
+      markerOffset = prefix.to;
+    }
+    if (deepest) {
+      add.push(listLineDeco(deepest.contentOffsetColumns, deepest.indentColumns, style.columns,
+        false, deepest.isTask, deepest.taskHiddenPrefixColumns, Boolean(deepest.orderedNumber)).range(row.from));
+    }
   }
   return updateLivePresentationRanges(mapped, {
     filterFrom: first.from,

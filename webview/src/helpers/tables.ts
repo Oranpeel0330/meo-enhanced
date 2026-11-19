@@ -1,6 +1,6 @@
 import { editorScrollIntoView } from '../editor/scrollEffects';
 import { isMarkdownTableDelimiter } from '../../../src/shared/markdownContentRules';
-import { markdownTaskMarkerPattern } from '../../../src/foundation/markdownTaskList';
+import { markdownTaskContentPrefix } from '../../../src/foundation/markdownTaskList';
 import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
 import { createTableColumnResizeHandle } from '../editor/tableColumnWidthAdapter';
@@ -21,7 +21,7 @@ import { emptyMarkdownTable, markdownTableFromCells, serializeDelimitedTable, pa
 import { defaultInputAssistance, type EditorCommandId } from '../../../src/foundation/editingPreferences';
 import { countColumn, findClusterBreak, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, Text as CodeMirrorText, type Annotation, type ChangeDesc, type ChangeSpec, type Range, type SelectionRange as CodeMirrorSelectionRange } from '@codemirror/state';
 import { ensureSyntaxTree, indentUnit, syntaxTree } from '@codemirror/language';
-import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownLanguage } from '@codemirror/lang-markdown';
+import { deleteMarkupBackward, markdownLanguage } from '@codemirror/lang-markdown';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
 import type { SyntaxNode, SyntaxNodeRef, Tree } from '@lezer/common';
 import { isolateHistory } from '@codemirror/commands';
@@ -321,7 +321,6 @@ interface TableSearchMatchRange {
   end: number;
 }
 
-const taskContentPrefix = new RegExp(String.raw`^${markdownTaskMarkerPattern}[ \t]+`);
 const sourceTableHeaderLineDeco = Decoration.line({ class: 'meo-md-source-table-header-line' });
 const sourceTableHeaderCellDeco = Decoration.mark({ class: 'meo-md-source-table-header-cell' });
 const tableCellSelector = 'th[data-table-row][data-table-col], td[data-table-row][data-table-col]';
@@ -866,7 +865,6 @@ const tableInlineRawUrlRe = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|file:|www\.)[^\s
 const tableInlineTagRe = /^#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)/u;
 const tableInlineTagPrefixRe = /[\p{L}\p{N}_/-]/u;
 const tableCellBreakAtRe = /^<br\s*\/?>/i;
-const tableCellListItemRe = /^([ \t]*)(?:(?<bullet>[-+*])|(?<number>\d+)[.)])\s+(?<content>.*)$/;
 const tableCellQuotePrefixRe = /^([ \t]*)>[ \t]?/;
 const tableInlineEscapableChars = new Set(['\\', '*', '_', '~', '`', '[', ']', '(', ')', '!', '|', '<', '>']);
 const tableSearchStateEventName = 'meo-search-state-change';
@@ -1314,7 +1312,7 @@ function editTableCellMarkup(
   if (column > line.text.length && column !== line.text.length + line.breakText.length) return false;
   const marker = listMarkerDataInContainerLine(line.text);
   const quoted = /^[ \t]*>/.test(line.text);
-  if (!marker && (operation === 'backspace' || !quoted || column < line.text.length)) return false;
+  if (!marker && (operation === 'backspace' || !quoted)) return false;
 
   const doc = CodeMirrorText.of(lines.map(line => line.text));
   const state = EditorState.create({
@@ -1359,7 +1357,7 @@ function editTableCellMarkup(
     return handleBackspaceAtListContentStart(target)
       || (quoted && column === marker?.toOffset && deleteMarkupBackward(target));
   }
-  return handleEnterInList(target) || (!marker && quoted && insertNewlineContinueMarkup(target));
+  return handleEnterInList(target, true);
 }
 
 function insertTableCellEditorBreak(input: HTMLTextAreaElement, state?: EditorState, beforeEdit?: () => void) {
@@ -2117,16 +2115,15 @@ function tableCellIndentColumns(text: string): number {
 }
 
 function parseTableCellListItem(line: TableCellLogicalLine) {
-  const match = tableCellListItemRe.exec(line.text);
-  if (!match?.groups) return null;
-  const indentColumns = tableCellIndentColumns(match[1]);
-  const content = match.groups.content ?? '';
+  const marker = readMarkdownListPrefix(line.text);
+  if (!marker || marker.toOffset === marker.markerEndOffset) return null;
+  const contentOffset = marker.taskBracketStart ?? marker.toOffset;
   return {
-    indentColumns,
-    type: match.groups.bullet ? 'ul' : 'ol',
-    start: match.groups.number ? Number.parseInt(match.groups.number, 10) : 1,
-    content,
-    contentFrom: line.from + line.text.length - content.length
+    indentColumns: tableCellIndentColumns(marker.leadingWhitespace),
+    type: marker.bullet ? 'ul' : 'ol',
+    start: marker.orderedNumber ? Number.parseInt(marker.orderedNumber, 10) : 1,
+    content: line.text.slice(contentOffset),
+    contentFrom: line.from + contentOffset
   } as const;
 }
 
@@ -2145,8 +2142,9 @@ function parseTableCellQuotePrefix(line: TableCellLogicalLine, maxIndentColumns 
 }
 
 function hasTableCellLineStructure(text: string): boolean {
-  return tableCellListItemRe.test(text) || (tableCellQuotePrefixRe.test(text)
-    && parseTableCellQuotePrefix({ text, from: 0, breakText: '' }).indents.length > 0);
+  const line = { text, from: 0, breakText: '' };
+  return parseTableCellListItem(line) !== null || (tableCellQuotePrefixRe.test(text)
+    && parseTableCellQuotePrefix(line).indents.length > 0);
 }
 
 function canProjectTableCellLines(value: string): boolean {
@@ -2245,7 +2243,7 @@ function appendTableCellRenderedPreview(
   const appendTaskContent = (
     parent: HTMLElement, content: string, from: number, activeLine: TableCellLogicalLine | null
   ) => {
-    const task = taskContentPrefix.exec(content);
+    const task = markdownTaskContentPrefix.exec(content);
     if (task && parent instanceof HTMLLIElement) {
       const status = task[1].toLowerCase() === 'x' ? 'done' : 'todo';
       const checkbox = document.createElement('input');

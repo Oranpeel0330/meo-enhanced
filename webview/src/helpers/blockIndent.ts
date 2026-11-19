@@ -1,5 +1,5 @@
 import { countColumn, type EditorState } from '@codemirror/state';
-import { markdownTaskMarkerPattern } from '../../../src/foundation/markdownTaskList';
+import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
 import { parseFootnotes } from './footnotes';
@@ -11,10 +11,7 @@ export { getCodeContainerColumns, getCodeBlockLastLine, getCodeBlockSourceLines,
 export const liveBlockIndentProperty = '--meo-live-block-indent';
 
 export type TaskListIndent = MarkdownTaskIndent;
-const taskPrefixPadding = new RegExp(String.raw`^[ \t]+(?=${markdownTaskMarkerPattern}[ \t])`);
-
-/** A checkbox replaces the list marker as well as [ ]. Descendants must use
- * that same visual width without changing Markdown's source indentation. */
+/** Align descendants with the body after its checkbox and any retained number. */
 export function getLiveTaskListIndent(state: EditorState, from: number, node: SyntaxNode | null = null): TaskListIndent {
   const line = state.doc.lineAt(from);
   let checkboxes = 0;
@@ -25,13 +22,16 @@ export function getLiveTaskListIndent(state: EditorState, from: number, node: Sy
     if (!mark) continue;
     const markerLine = state.doc.lineAt(mark.from);
     if (markerLine.number === line.number) continue;
-    const end = mark.to - markerLine.from;
-    const padding = taskPrefixPadding.exec(markerLine.text.slice(end))?.[0];
-    if (!padding) continue;
+    const task = readMarkdownListPrefix(markerLine.text, mark.from - markerLine.from);
+    if (task?.taskBracketStart === undefined) continue;
     checkboxes += 1;
-    // One source column remains as the checkbox-to-body gap.
-    sourceColumns += countColumn(markerLine.text, state.tabSize, end + padding.length)
-      - countColumn(markerLine.text, state.tabSize, mark.from - markerLine.from) - 1;
+    // Both types add a checkbox and one column of gap. Only unordered tasks
+    // give up the source columns occupied by the list marker and its space.
+    sourceColumns -= 1;
+    if (task.orderedNumber === undefined) {
+      sourceColumns += countColumn(markerLine.text, state.tabSize, task.taskBracketStart)
+        - countColumn(markerLine.text, state.tabSize, task.fromOffset);
+    }
   }
   return { checkboxes, sourceColumns };
 }

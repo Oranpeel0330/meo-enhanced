@@ -1,10 +1,11 @@
 import { documentLines } from './documentLines';
-import { hasMarkdownListPrefix, readMarkdownListPrefix, type MarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
+import { hasMarkdownListPrefix, readMarkdownContainerPrefixes, readMarkdownListPrefix, type MarkdownContainerPrefix, type MarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 import type { ChangeDesc } from '@codemirror/state';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { sourcePresentationSelection } from '../editor/livePointerSelection';
 import { isolateHistory } from '@codemirror/commands';
-import { insertNewlineContinueMarkup } from '@codemirror/lang-markdown';
+import { syntaxTree } from '@codemirror/language';
+import type { SyntaxNode, Tree } from '@lezer/common';
 import { listHistoryFocusEffect } from '../adapters/codeMirrorListHistoryFocus';
 import {
   StateField,
@@ -12,6 +13,7 @@ import {
   EditorState,
   Transaction,
   Annotation,
+  countColumn,
   type Extension,
   type Line,
   type StateCommand,
@@ -343,7 +345,7 @@ function taskStatusCssClass(status: TaskStatus): string {
   return `is-${status}`;
 }
 
-function siblingListPrefix(lineText: string, marker: MarkdownListPrefix, advance: boolean): string | null {
+function siblingListPrefix(lineText: string, marker: MarkdownListPrefix, advance: boolean, keepTaskState = false): string | null {
   let number = marker.orderedNumber;
   if (advance && number !== undefined) {
     const next = Number.parseInt(number, 10) + 1;
@@ -351,7 +353,8 @@ function siblingListPrefix(lineText: string, marker: MarkdownListPrefix, advance
     number = String(next);
   }
   const markerText = marker.bullet ?? `${number}${marker.orderedSuffix}`;
-  return lineText.slice(0, marker.fromOffset) + markerText + (marker.taskMarker !== undefined ? ' [ ] ' : ' ');
+  const task = marker.taskMarker === undefined ? '' : `[${keepTaskState ? marker.taskMarker : ' '}] `;
+  return lineText.slice(0, marker.fromOffset) + markerText + ' ' + task;
 }
 
 export function listMarkerData(
@@ -399,19 +402,21 @@ export function listMarkerData(
   };
 
   if (taskMarker !== undefined) {
-    const hiddenTaskPrefixLength = Math.max(0, prefix.toOffset - prefix.fromOffset - 1);
+    const hiddenFrom = orderedNumber ? prefix.taskBracketStart! : prefix.fromOffset;
+    const hiddenTaskPrefixLength = Math.max(0, prefix.toOffset - hiddenFrom - 1);
     result.taskStatus = taskStatusFromMarker(taskMarker);
     result.isTask = true;
-    result.taskHiddenPrefixColumns = hiddenTaskPrefixLength + displayExtraColumns;
+    result.taskHiddenPrefixColumns = hiddenTaskPrefixLength;
   }
 
   return result;
 }
 
-function quotePrefixOffset(lineText: string): number {
+function quotePrefixOffset(lineText: string, allowContainerIndent = false): number {
   let offset = 0;
+  const quote = allowContainerIndent ? /^[ \t]*>[ \t]?/ : /^[ \t]{0,3}>[ \t]?/;
   while (true) {
-    const match = /^[ \t]{0,3}>[ \t]?/.exec(lineText.slice(offset));
+    const match = quote.exec(lineText.slice(offset));
     if (!match) return offset;
     offset += match[0].length;
   }
@@ -419,6 +424,18 @@ function quotePrefixOffset(lineText: string): number {
 
 export function listMarkerDataInContainerLine(lineText: string): ListMarkerData | null {
   return listMarkerData(lineText, null, defaultListIndentStyle, quotePrefixOffset(lineText));
+}
+
+export function isOrderedParagraphContinuation(
+  state: EditorState, line: Line, marker: MarkdownListPrefix, tree: Tree = syntaxTree(state)
+): boolean {
+  // An empty 1. can become a real item as soon as the user starts its body.
+  if (marker.orderedNumber === undefined || Number(marker.orderedNumber) === 1) return false;
+  for (let node: SyntaxNode | null = tree.resolveInner(line.from + marker.fromOffset, 1); node; node = node.parent) {
+    if (node.name === 'Paragraph') return node.from < line.from;
+    if (node.name === 'ListMark') return false;
+  }
+  return false;
 }
 
 class ListMarkerWidget extends WidgetType {
@@ -593,11 +610,17 @@ export function addListMarkerDecoration(
   if (marker.taskBracketStart !== undefined) {
     const bracketStart = line.from + marker.taskBracketStart;
     const taskStatus = marker.taskStatus ?? 'todo';
+    if (marker.orderedNumber) {
+      builder.push(Decoration.replace({
+        widget: new ListMarkerWidget(marker.markerText, marker.classes, bracketStart - indentEnd + marker.displayExtraColumns),
+        inclusive: false
+      }).range(indentEnd, bracketStart));
+    }
     builder.push(
       Decoration.replace({
         widget: new CheckboxWidget(taskStatus, bracketStart),
         inclusive: false
-      }).range(indentEnd, markerTo)
+      }).range(marker.orderedNumber ? bracketStart : indentEnd, markerTo)
     );
 
     if (taskStatus === 'done') {
@@ -667,45 +690,76 @@ export function continuedListMarker(lineText: string, advance = true): string | 
   return marker && lineText.slice(marker.toOffset).trim() ? siblingListPrefix(lineText, marker, advance) : null;
 }
 
-/** Empty items exit, body start inserts above, and body end continues below. */
-export const handleEnterInList: StateCommand = ({ state, dispatch }) => {
+function continuedContainerPrefix(text: string, prefixes: readonly MarkdownContainerPrefix[], tabSize: number): string {
+  let result = '';
+  for (const prefix of prefixes) {
+    if (prefix.kind === 'quote') {
+      result += text.slice(prefix.from, prefix.to);
+    } else {
+      const startColumn = countColumn(text, tabSize, prefix.marker.fromOffset);
+      const endColumn = countColumn(text, tabSize, prefix.to);
+      result += prefix.marker.leadingWhitespace + ' '.repeat(endColumn - startColumn);
+    }
+  }
+  return result;
+}
+
+/** Continue the innermost list or quote and keep its outer containers. */
+export function handleEnterInList({ state, dispatch }: Parameters<StateCommand>[0], tableCell = false): boolean {
   const selection = state.selection.main;
   if (state.readOnly || state.selection.ranges.length !== 1 || !selection.empty) return false;
   const line = state.doc.lineAt(selection.head);
-  const prefixOffset = quotePrefixOffset(line.text);
-  const marker = readMarkdownListPrefix(line.text, prefixOffset);
-  if (!marker) return false;
-  const contentStart = line.from + marker.toOffset;
-  if (!line.text.slice(marker.toOffset).trim()) {
+  const prefixes = readMarkdownContainerPrefixes(line.text);
+  // Wide indentation can belong to a surrounding list or be literal text.
+  // Only the syntax owner can distinguish the two.
+  for (const prefix of prefixes) {
+    if (prefix.kind !== 'quote') continue;
+    const indent = countColumn(line.text, state.tabSize, prefix.markOffset)
+      - countColumn(line.text, state.tabSize, prefix.from);
+    if (indent > 3 && syntaxTree(state).resolveInner(line.from + prefix.markOffset, 1).name !== 'QuoteMark') return false;
+  }
+  const inner = prefixes.at(-1);
+  if (!inner) return false;
+  if (!tableCell && inner.kind === 'list' && isOrderedParagraphContinuation(state, line, inner.marker)) return false;
+  const contentStart = line.from + inner.to;
+  if (!line.text.slice(inner.to).trim()) {
     if (selection.head !== contentStart && selection.head !== line.to) return false;
     dispatch(state.update({
-      changes: { from: line.from + prefixOffset, to: contentStart, insert: '' },
-      selection: { anchor: line.from + prefixOffset },
-      userEvent: 'input.list'
+      changes: { from: line.from + inner.from, to: line.to, insert: '' },
+      selection: { anchor: line.from + inner.from },
+      userEvent: 'input.list.enter'
     }));
     return true;
   }
+  if (selection.head < contentStart) return false;
+
+  const ancestors = continuedContainerPrefix(line.text, prefixes.slice(0, -1), state.tabSize);
   const atStart = selection.head === contentStart;
-  const insideBody = selection.head > contentStart && selection.head < line.to;
-  if (!atStart && selection.head !== line.to && !insideBody) return false;
-  const needsTaskPrefix = marker.taskMarker !== undefined &&
-    (marker.orderedNumber !== undefined || line.text.slice(marker.fromOffset, marker.toOffset).includes('\t'));
-  if (insideBody && !needsTaskPrefix) {
-    // Use the existing Markdown split semantics for nested containers, loose
-    // lists and spaces at the split. Cells pass their logical lines here too.
-    return insertNewlineContinueMarkup({ state, dispatch });
+  const sibling = inner.kind === 'list' ? siblingListPrefix(line.text, inner.marker, true, atStart) : line.text.slice(0, inner.to);
+  if (sibling === null) return false;
+  const continued = ancestors + sibling.slice(inner.from);
+  if (atStart) {
+    const empty = inner.kind === 'list' ? siblingListPrefix(line.text, inner.marker, false) : line.text.slice(0, inner.to);
+    if (empty === null) return false;
+    dispatch(state.update({
+      changes: { from: line.from, to: contentStart, insert: empty + '\n' + continued },
+      selection: { anchor: line.from + empty.length },
+      userEvent: 'input.list.enter'
+    }));
+    return true;
   }
-  const prefix = siblingListPrefix(line.text, marker, !atStart);
-  if (prefix === null) return false;
-  const to = atStart ? line.from : selection.head;
-  const from = insideBody ? contentStart + line.text.slice(marker.toOffset, to - line.from).trimEnd().length : to;
+
+  const split = selection.head - line.from;
+  const atEnd = selection.head === line.to;
+  const from = atEnd ? selection.head : contentStart + line.text.slice(inner.to, split).trimEnd().length;
+  const to = selection.head + (/^[ \t]*/.exec(line.text.slice(split))?.[0].length ?? 0);
   dispatch(state.update({
-    changes: { from, to, insert: atStart ? prefix + '\n' : '\n' + prefix },
-    selection: { anchor: from + prefix.length + (atStart ? 0 : 1) },
-    userEvent: 'input.list'
+    changes: { from, to, insert: '\n' + continued },
+    selection: { anchor: from + 1 + continued.length },
+    userEvent: 'input.list.enter'
   }));
   return true;
-};
+}
 
 export const handleBackspaceAtListContentStart: StateCommand = ({ state, dispatch }) => {
   const selection = state.selection.main;
@@ -847,33 +901,43 @@ export function handleArrowRightAtListLineStart(view: EditorView): boolean {
 interface ListLineRecord {
   readonly line: Line;
   readonly text: string;
+  readonly prefixOffset: number;
+  readonly quoteScope: string;
 }
 
-function readListLine(doc: Text, lineNumber: number): ListLineRecord {
+function readListLine(doc: Text, lineNumber: number, includeQuotes: boolean): ListLineRecord {
   const line = doc.line(lineNumber);
-  return { line, text: doc.sliceString(line.from, line.to) };
+  const text = line.text;
+  const prefixOffset = includeQuotes ? quotePrefixOffset(text, true) : 0;
+  const quoteScope = prefixOffset
+    ? text.slice(0, text.indexOf('>')) + text.slice(0, prefixOffset).replace(/[ \t]/g, '')
+    : '';
+  return { line, text, prefixOffset, quoteScope };
 }
 
 function collectContiguousListLines(
   doc: Text,
-  lineNumber: number
+  lineNumber: number,
+  includeQuotes: boolean
 ): ListLineRecord[] | null {
-  const current = readListLine(doc, lineNumber);
-  if (!isListLine(current.text)) {
+  const current = readListLine(doc, lineNumber, includeQuotes);
+  const inRun = (row: ListLineRecord) => row.quoteScope === current.quoteScope
+    && isListLine(row.text.slice(row.prefixOffset));
+  if (!inRun(current)) {
     return null;
   }
 
   const lines: ListLineRecord[] = [];
   for (let previousLine = lineNumber - 1; previousLine >= 1; previousLine -= 1) {
-    const previous = readListLine(doc, previousLine);
-    if (!isListLine(previous.text)) break;
+    const previous = readListLine(doc, previousLine, includeQuotes);
+    if (!inRun(previous)) break;
     lines.push(previous);
   }
   lines.reverse();
   lines.push(current);
   for (let nextLine = lineNumber + 1; nextLine <= doc.lines; nextLine += 1) {
-    const next = readListLine(doc, nextLine);
-    if (!isListLine(next.text)) break;
+    const next = readListLine(doc, nextLine, includeQuotes);
+    if (!inRun(next)) break;
     lines.push(next);
   }
   return lines;
@@ -884,11 +948,11 @@ function collectOrderedListRenumberChangesInLines(
   resetNestedStartsAtLines: ReadonlySet<number>
 ): ListTextChange[] {
   const changes: ListTextChange[] = [];
-  const style = inferListIndentStyle(lines.map(({ text }) => text));
+  const style = inferListIndentStyle(lines.map(({ text, prefixOffset }) => text.slice(prefixOffset)));
   const orderedCountsByLevel: Array<number | null> = [];
 
-  for (const { line, text } of lines) {
-    const marker = listMarkerData(text, null, style);
+  for (const { line, text, prefixOffset } of lines) {
+    const marker = listMarkerData(text, null, style, prefixOffset);
     if (!marker) {
       orderedCountsByLevel.length = 0;
       continue;
@@ -904,7 +968,7 @@ function collectOrderedListRenumberChangesInLines(
 
     const expectedText = String(expected);
     if (marker.orderedNumber !== expectedText) {
-      const from = line.from + marker.leadingWhitespace.length;
+      const from = line.from + marker.fromOffset;
       changes.push({ from, to: from + marker.orderedNumber.length, insert: expectedText });
     }
   }
@@ -938,7 +1002,7 @@ function collectOrderedListRenumberChangesForTransaction(
   const changes: ListTextChange[] = [];
   for (const lineNumber of [...candidateLines].sort((left, right) => left - right)) {
     if (handledLines.has(lineNumber)) continue;
-    const lines = collectContiguousListLines(doc, lineNumber);
+    const lines = collectContiguousListLines(doc, lineNumber, transaction.isUserEvent('input.list.enter'));
     if (!lines) continue;
     for (const { line } of lines) handledLines.add(line.number);
     changes.push(...collectOrderedListRenumberChangesInLines(lines, resetNestedStartsAtLines));

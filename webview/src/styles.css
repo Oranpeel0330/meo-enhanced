@@ -7365,7 +7365,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
   block-size: 75%;
 }
 
-.cm-editor .meo-md-html-table-cell-task {
+.cm-editor ul.meo-md-html-table-cell-list > .meo-md-html-table-cell-task {
   list-style: none;
 }
 
@@ -7386,7 +7386,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
 
 /* A task-only list needs no marker gutter. A child list under a task starts
    deeper than its parent's checkbox, which is inside the parent's grid. */
-.cm-editor .meo-md-html-table-cell-list:has(> .meo-md-html-table-cell-task):not(:has(> li:not(.meo-md-html-table-cell-task)), .meo-md-html-table-cell-task > *) {
+.cm-editor ul.meo-md-html-table-cell-list:has(> .meo-md-html-table-cell-task):not(:has(> li:not(.meo-md-html-table-cell-task)), .meo-md-html-table-cell-task > *) {
   padding-inline-start: 0;
 }
 

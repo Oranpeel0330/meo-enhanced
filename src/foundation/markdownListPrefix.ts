@@ -14,7 +14,7 @@ export type MarkdownListPrefix = {
 
 const markerPattern = String.raw`(?:([-+*])|(\d+)([.)]))`;
 const startPattern = new RegExp(String.raw`^(\s*)${markerPattern}(?:\s|$)`);
-const prefixPattern = new RegExp(String.raw`^(\s*)${markerPattern}(?:\s+(?:${markdownTaskMarkerPattern}\s+)?|$)`);
+const prefixPattern = new RegExp(String.raw`^(\s*)${markerPattern}(?:\s+(?:${markdownTaskMarkerPattern}(?:\s+|$))?|$)`);
 
 /** A line-local prefix check for list-run discovery, without a presentation object. */
 export function hasMarkdownListPrefix(lineText: string): boolean {
@@ -32,4 +32,29 @@ export function readMarkdownListPrefix(lineText: string, offset = 0): MarkdownLi
     bullet: match[2], orderedNumber: match[3], orderedSuffix: match[4], taskMarker: match[5],
     taskBracketStart: match[5] === undefined ? undefined : offset + match[0].indexOf('[', markerEndOffset - offset)
   };
+}
+
+export type MarkdownContainerPrefix =
+  | { kind: 'quote'; from: number; to: number; markOffset: number }
+  | { kind: 'list'; from: number; to: number; marker: MarkdownListPrefix };
+
+/** Consecutive container markers on one physical line. A task opens its body. */
+export function readMarkdownContainerPrefixes(lineText: string): MarkdownContainerPrefix[] {
+  const prefixes: MarkdownContainerPrefix[] = [];
+  let from = 0;
+  while (from < lineText.length) {
+    const quote = /^([ \t]*)>[ \t]?/.exec(lineText.slice(from));
+    if (quote) {
+      const to = from + quote[0].length;
+      prefixes.push({ kind: 'quote', from, to, markOffset: from + quote[1].length });
+      from = to;
+      continue;
+    }
+    const marker = readMarkdownListPrefix(lineText, from);
+    if (!marker) break;
+    prefixes.push({ kind: 'list', from, to: marker.toOffset, marker });
+    if (marker.taskMarker !== undefined) break;
+    from = marker.toOffset;
+  }
+  return prefixes;
 }

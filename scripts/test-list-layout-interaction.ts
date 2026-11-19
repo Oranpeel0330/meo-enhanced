@@ -286,6 +286,12 @@ async function assertListEnterRules(page: import('puppeteer-core').Page): Promis
     { source: '> - [X] body', head: 8, expected: '> - [ ] \n> - [X] body', after: 8 },
     { source: '- alpha', head: 4, expected: '- al\n- pha', after: 7 },
     { source: '3) [x] alpha', head: 9, expected: '3) [x] al\n4) [ ] pha', after: 17 },
+    { source: '- [ ] Before\n\n- [x] alpha', head: 21, expected: '- [ ] Before\n\n- [x] a\n- [ ] lpha', after: 28 },
+    { source: '- 1. [x] alpha', head: 11, expected: '- 1. [x] al\n  2. [ ] pha', after: 21 },
+    { source: '> alpha', head: 4, expected: '> al\n> pha', after: 7 },
+    { source: '> 7. Alpha\n> 8. Beta', head: 6, expected: '> 7. A\n> 8. lpha\n> 9. Beta', after: 12 },
+    { source: '100. > - [x] First\n     > - [ ] Alpha', head: 34,
+      expected: '100. > - [x] First\n     > - [ ] Al\n     > - [ ] pha', after: 48 },
     { source: '  - [ ] ', head: 8, expected: '', after: 0 },
     { source: '> - [X] ', head: 8, expected: '> ', after: 2 },
     { source: '-', head: 1, expected: '', after: 0 }
@@ -356,7 +362,8 @@ async function assertListContinuationFrames(page: import('puppeteer-core').Page)
     { first: '- Before', item: '- Child', prefix: '- ', split: 4 },
     { first: '98. Before', item: '99. Child', prefix: '100. ', split: 6 },
     { first: '> - Before', item: '> - [x] Child', prefix: '> - [ ] ', split: 10 },
-    { first: '98. Before', item: '99. [x] Child', prefix: '100. [ ] ', split: 10 }
+    { first: '98. Before', item: '99. [x] Child', prefix: '100. [ ] ', split: 10 },
+    { first: '- Before', item: '- 1. [x] Child word', prefix: '  2. [ ] ', split: 14, skip: 1 }
   ];
   for (const large of [false, true]) for (const [index, fixture] of fixtures.entries()) {
     const source = fixture.first + '\n' + fixture.item + '\n\nKEEP NODE'
@@ -368,7 +375,7 @@ async function assertListContinuationFrames(page: import('puppeteer-core').Page)
       ? source.slice(0, lineFrom) + fixture.prefix + '\n' + (fixture.successor ?? fixture.item)
         + source.slice(lineFrom + fixture.item.length)
       : source.slice(0, lineFrom) + (fixture.retained ?? source.slice(lineFrom, before))
-        + '\n' + (fixture.prefix ?? fixture.empty) + source.slice(before);
+        + '\n' + (fixture.prefix ?? fixture.empty) + source.slice(before + (fixture.skip ?? 0));
     const optimized = await page.evaluate(async ({ source, before }) => {
       const scope = window as any, harness = scope.ListEditingHarness;
       const editor = scope.__listContinueEditor = harness.createEditor({
@@ -526,7 +533,7 @@ async function assertOrderedMarkerWidths(page: import('puppeteer-core').Page): P
     { initial: '', prefix: '', start: 1, count: 12, suffix: '.', task: false, repeated: 1 },
     { initial: '', prefix: '> ', start: 98, count: 4, suffix: ')', task: false, repeated: 1 },
     { initial: '- parent\n\n', prefix: '  ', start: 98, count: 4, suffix: '.', task: false, repeated: 1 },
-    { initial: 'paragraph\n', prefix: '', start: 9, count: 4, suffix: '.', task: false, repeated: 9 },
+    { initial: 'paragraph\n', prefix: '', start: 9, count: 4, suffix: '.', task: false, repeated: 9, literal: true },
     { initial: '', prefix: '', start: 98, count: 4, suffix: '.', task: true, repeated: 1 }
   ];
   for (const fixture of fixtures) {
@@ -562,8 +569,9 @@ async function assertOrderedMarkerWidths(page: import('puppeteer-core').Page): P
       }
     }, { fixture, body: longText });
     assert.equal(result.text, result.original, 'display-width adjustment must preserve source numbers');
-    assert.equal(result.markers.length, fixture.task ? 0 : fixture.count);
+    assert.equal(result.markers.length, fixture.literal ? 0 : fixture.count);
     assert.equal(result.checkboxes, fixture.task ? fixture.count : 0);
+    if (fixture.literal) continue;
     for (const [index, marker] of result.markers.entries()) {
       assert.equal(marker.text, `${fixture.start + index}${fixture.suffix}`);
       assert.ok(marker.left >= marker.markerLeft - 0.5, `renumbered marker overflowed: ${JSON.stringify(marker)}`);

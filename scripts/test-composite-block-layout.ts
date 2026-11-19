@@ -79,7 +79,7 @@ async function verifyPreviewTaskContainerLayouts(browser: Awaited<ReturnType<typ
   try {
     await page.setViewport({ width: 900, height: 3000 });
     const markerProbe = renderMarkdownToHtml({
-      markdownText: '1. - [x] Body task\n\n| Tasks |\n| --- |\n| - [ ] Standalone task |\n| 1. - [x] Nested task |\n| Plain text |',
+      markdownText: '1. - [x] Body task\n\n| Tasks |\n| --- |\n| - [ ] Standalone task |\n| 1. - [x] Nested task |\n| - 1. [ ] Ordered task |\n| - [ ] |\n| Plain text |\n\n- 1. [ ] Ordered body task\n\n- > [ ] Literal status in quote',
       markdownFilePath: 'task-markers.md', target: 'html'
     });
     for (const styles of [buildPreviewStyles(), buildExportStyles()]) {
@@ -91,8 +91,10 @@ async function verifyPreviewTaskContainerLayouts(browser: Awaited<ReturnType<typ
           outer: outerItem && getComputedStyle(outerItem).listStyleType, left: box.getBoundingClientRect().left };
       }));
       assert.deepEqual(markers.map(({ marker, outer }) => [marker, outer]), [
-        ['none', 'decimal'], ['none', null], ['none', 'decimal']
-      ], 'Preview and HTML export render each task checkbox and retain outer numbering');
+        ['none', 'decimal'], ['none', null], ['none', 'decimal'],
+        ['decimal', 'disc'], ['none', null], ['decimal', 'disc']
+      ], 'Preview and HTML export keep numbering on every ordered task layer');
+      assert.equal(await page.$eval('li blockquote', quote => quote.textContent?.trim()), '[ ] Literal status in quote');
       const plainTextLeft = await page.$eval('tbody tr:last-child td', cell => {
         const text = document.createRange();
         text.selectNodeContents(cell);

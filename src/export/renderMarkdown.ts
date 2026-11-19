@@ -1,5 +1,5 @@
 import { markdownHeadingAnchor } from '../foundation/markdownHeadingAnchor';
-import { markdownTaskMarkerPattern } from '../foundation/markdownTaskList';
+import { markdownTaskContentPrefix } from '../foundation/markdownTaskList';
 import { normalizeLinkDestination, isLocalFileLinkDestination } from '../foundation/linkDestination';
 import { splitMarkdownTableRow } from '../foundation/markdownTableRow';
 import * as path from 'node:path';
@@ -45,7 +45,6 @@ import { installWikiReferenceTransform } from './wikiReferences';
 import type { ResolvedWikiResources } from '../foundation/wikiReference';
 import { addGithubDetailsSummary, createGithubHtmlSanitizer, githubHtmlAttributes, githubHtmlTags, installGithubInlineRules, isGithubImageSource, isGithubLink, linkifyGithubFilteredHtml, replaceGithubEmoji, stripGithubSelectMarkup } from './githubReadme';
 
-const taskContentPrefix = new RegExp(String.raw`^${markdownTaskMarkerPattern}\s+`);
 const OPENING_KBD_TAG_RE = /^<kbd\b[^>]*>$/i;
 const CLOSING_KBD_TAG_RE = /^<\/kbd\s*>$/i;
 const DEFERRED_IMAGE_ATTRIBUTE = 'data-meo-deferred-image-src';
@@ -1299,7 +1298,8 @@ function installTaskListTransform(md: MarkdownIt, github = false): void {
   md.core.ruler.after('inline', 'meo-task-list-transform', (state: any) => {
     const itemStack: Array<{ token: any; firstInlineHandled: boolean }> = [];
 
-    for (const token of state.tokens as any[]) {
+    const tokens = state.tokens as any[];
+    for (const [index, token] of tokens.entries()) {
       if (token.type === 'list_item_open') {
         itemStack.push({ token, firstInlineHandled: false });
         continue;
@@ -1320,7 +1320,11 @@ function installTaskListTransform(md: MarkdownIt, github = false): void {
       }
       current.firstInlineHandled = true;
 
-      const match = taskContentPrefix.exec(token.content ?? '');
+      // Only a list item's opening paragraph owns a task marker. The first
+      // inline token can instead be inside a nested quote or heading.
+      if (tokens[index - 1]?.type !== 'paragraph_open' || token.level !== current.token.level + 2
+        || current.token.map?.[0] !== token.map?.[0]) continue;
+      const match = markdownTaskContentPrefix.exec(token.content ?? '');
       if (!match) {
         continue;
       }

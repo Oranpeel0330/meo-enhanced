@@ -512,7 +512,7 @@ async function main(): Promise<void> {
       editor.destroy();
       return { items, wrappedAlignment };
     });
-    assert.deepEqual(sameLine.items.map((line) => line.markers), [2, 2, 3, 1, 2, 2, 1, 3, 0, 1, 0, 1, 0, 1],
+    assert.deepEqual(sameLine.items.map((line) => line.markers), [2, 2, 3, 2, 2, 2, 1, 4, 0, 1, 0, 2, 0, 1],
       `only non-task list items should display list markers: ${JSON.stringify(sameLine)}`);
     assert.equal(sameLine.items[3]?.checkboxes, 1);
     assert.equal(sameLine.items[6]?.checkboxes, 1);
@@ -673,7 +673,7 @@ async function main(): Promise<void> {
     });
     assert.equal(sameLineTable.listItems, 13, 'table cell must retain every parsed same-line nested list');
     assert.equal(sameLineTable.checkboxes, 3);
-    assert.deepEqual(sameLineTable.taskMarkerStyles, ['none', 'none', 'none'],
+    assert.deepEqual(sameLineTable.taskMarkerStyles, ['decimal', 'none', 'none'],
       'table task items should use a checkbox as their only marker');
     assert.ok(['forward', 'reverse', 'quoted', 'task first', 'list quote', 'reverse task']
       .every((text) => sameLineTable.text.includes(text)));

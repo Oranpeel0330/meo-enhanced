@@ -617,6 +617,9 @@ ol ol {
   --meo-export-task-inset: calc(17px + 0.55em);
   position: relative;
   padding-inline-start: var(--meo-export-task-inset);
+}
+
+ul > .meo-export-task-item {
   list-style: none;
 }
 
@@ -1027,7 +1030,7 @@ table kbd {
   padding-inline-start: 2em;
 }
 
-.meo-table-scroll :is(ul, ol):has(> .meo-export-task-item):not(:has(> li:not(.meo-export-task-item))) {
+.meo-table-scroll ul:has(> .meo-export-task-item):not(:has(> li:not(.meo-export-task-item))) {
   padding-inline-start: 0;
 }
 
