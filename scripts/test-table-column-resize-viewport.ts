@@ -15,6 +15,64 @@ async function frames(page: Page, count = 6): Promise<void> {
   }, count);
 }
 
+async function highlightedDividers(page: Page) {
+  return page.evaluate(() => {
+    const { table, anchor } = (window as any).__resizeProbe as { table: HTMLTableElement; anchor: HTMLElement };
+    const floatingRow = table.closest('.meo-md-html-table-shell')!
+      .querySelector('.meo-md-html-table-sticky-chrome.is-visible th')?.parentElement;
+    return [anchor.closest('tr'), floatingRow].map(row => Array.from(
+      row!.querySelectorAll<HTMLElement>('[data-table-resize-column]'), handle => {
+        const { content, width, backgroundColor } = getComputedStyle(handle, '::after');
+        return content === 'none' ? null : { column: handle.dataset.tableResizeColumn, width, backgroundColor };
+      }
+    ).filter(Boolean));
+  });
+}
+
+const firstDivider = { column: '0', width: '2px', backgroundColor: 'rgb(49, 109, 202)' };
+
+async function checkResizeHover(page: Page): Promise<void> {
+  const points = await page.evaluate(() => {
+    const { anchor } = (window as any).__resizeProbe as { anchor: HTMLElement };
+    const body = anchor.querySelector('[data-table-resize-column="0"]')!;
+    const sticky = document.querySelector('.meo-md-html-table-sticky-table [data-table-resize-column="0"]')!;
+    return [body, sticky].map(handle => {
+      const rect = handle.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+  });
+  await page.mouse.move(0, 0);
+  assert.deepEqual(await highlightedDividers(page), [[], []]);
+  for (const point of points) {
+    await page.mouse.move(point.x, point.y);
+    assert.deepEqual(await highlightedDividers(page), [[firstDivider], [firstDivider]],
+      'Hover highlights only the matching divider in the body and floating header');
+  }
+  const headerBottom = await page.$eval('.meo-md-html-table-sticky-chrome.is-visible .meo-md-html-table-sticky-header',
+    header => Math.round(header.getBoundingClientRect().bottom));
+  const screenshot = await page.screenshot({ encoding: 'base64' });
+  const blueRows = await page.evaluate(async ({ screenshot, x, headerBottom }) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${screenshot}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d')!;
+    context.drawImage(image, 0, 0);
+    const width = 5;
+    const height = 10;
+    const pixels = context.getImageData(Math.floor(x) - 2, headerBottom - 2, width, height).data;
+    return Array.from({ length: height }, (_, row) => Array.from({ length: width }, (_, col) => {
+      const offset = (row * width + col) * 4;
+      return pixels[offset] === 49 && pixels[offset + 1] === 109 && pixels[offset + 2] === 202;
+    }).some(Boolean));
+  }, { screenshot, x: points[1]!.x, headerBottom });
+  assert.ok(blueRows.every(Boolean), `The blue divider must keep its color across the floating header's border and shadow: ${blueRows}`);
+  await page.mouse.move(0, 0);
+  assert.deepEqual(await highlightedDividers(page), [[], []], 'Leaving the divider clears both highlights');
+}
+
 async function setup(page: Page, rowCount: number, editing: 'none' | 'visible' | 'offscreen' = 'none', readingRow = 20): Promise<void> {
   await page.evaluate(({ rowCount }) => {
     (window as any).__resizeEditor?.destroy();
@@ -85,6 +143,8 @@ async function drag(page: Page, deltas: number[], scrollDuringDrag = false): Pro
     for (const delta of deltas) {
       await page.mouse.move(point.x + delta, point.y);
       await frames(page, 3);
+      assert.deepEqual(await highlightedDividers(page), [[firstDivider], [firstDivider]],
+        'The dragged divider stays highlighted through pointer capture and reflow');
       if (delta === deltas[0]) await frames(page, 28);
     }
     if (scrollDuringDrag) {
@@ -97,6 +157,8 @@ async function drag(page: Page, deltas: number[], scrollDuringDrag = false): Pro
   } finally {
     await page.mouse.up();
   }
+  await page.mouse.move(0, 0);
+  assert.deepEqual(await highlightedDividers(page), [[], []], 'Releasing the drag and moving away clears the highlight');
   await frames(page, 28);
 }
 
@@ -138,6 +200,7 @@ async function main(): Promise<void> {
       { rows: 1200, editing: 'none', readingRow: 1190, deltas: [70, 150, 30, -60] }
     ] as const) {
       await setup(page, scene.rows, scene.editing, scene.readingRow);
+      if (scene.readingRow === 20 && scene.editing === 'none') await checkResizeHover(page);
       await drag(page, [...scene.deltas]);
       const observed = await result(page);
       console.log(JSON.stringify({ scene, observed }));

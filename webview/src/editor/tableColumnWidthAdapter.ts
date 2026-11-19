@@ -83,6 +83,21 @@ const handleSelector = '[data-table-resize-column]';
 const projectionEventName = 'meo-table-column-width-projected';
 const columnPermutationEventName = 'meo-table-column-permutation';
 const resizingClassName = 'meo-table-column-resizing';
+
+function columnHighlightProperty(column: string | number): string {
+  return `--meo-table-resize-column-${column}`;
+}
+
+export function createTableColumnResizeHandle(column: number): HTMLSpanElement {
+  const handle = document.createElement('span');
+  handle.className = 'meo-md-html-table-column-resize-handle';
+  handle.dataset.tableResizeColumn = String(column);
+  handle.setAttribute('aria-hidden', 'true');
+  // Cloned header cells and newly mounted rows inherit the same column highlight.
+  handle.style.setProperty('--meo-table-resize-highlight', `var(${columnHighlightProperty(column)}, none)`);
+  return handle;
+}
+
 const preferredDefaultColumnWidth = (table: HTMLTableElement): number => {
   const value = Number.parseFloat(table.dataset.tablePreferredColumnWidth ?? '');
   return Number.isFinite(value) && value > 0 ? value : 0;
@@ -603,6 +618,29 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
       && isCurrentEpoch(epoch)
       && table.isConnected
       && options.root.contains(table);
+    const handleRoot = table.closest<HTMLElement>('.meo-md-html-table-shell') ?? table;
+    let highlightedColumn: string | undefined;
+    const handleAt = (target: EventTarget | null) => {
+      const handle = target instanceof Element ? target.closest<HTMLElement>(handleSelector) : null;
+      return handle && handleRoot.contains(handle) ? handle : null;
+    };
+    const highlight = (column: string | undefined) => {
+      if (highlightedColumn === column) return;
+      if (highlightedColumn !== undefined) handleRoot.style.removeProperty(columnHighlightProperty(highlightedColumn));
+      highlightedColumn = column;
+      if (column === undefined) {
+        table.ownerDocument.removeEventListener('pointerover', updateHover, true);
+      } else {
+        handleRoot.style.setProperty(columnHighlightProperty(column), '""');
+        // A replaced floating header can lose its pointerout before it reaches the shell.
+        table.ownerDocument.addEventListener('pointerover', updateHover, true);
+      }
+    };
+    const updateHover = (event: PointerEvent) => {
+      if (dragPreviewActive || event.pointerType === 'touch') return;
+      const target = event.type === 'pointerout' ? event.relatedTarget : event.target;
+      highlight(handleAt(target)?.dataset.tableResizeColumn);
+    };
     const scheduleProjection = (entries: readonly ResizeObserverEntry[]) => {
       if (!isCurrentBinding()) return;
       // observe() always delivers the current size once. The binding was
@@ -619,9 +657,7 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
 
     const start = (event: PointerEvent): void => {
       if (!isCurrentBinding() || event.button !== 0) return;
-      const handle = event.target instanceof Element
-        ? event.target.closest<HTMLElement>(handleSelector)
-        : null;
+      const handle = handleAt(event.target);
       if (!handle) return;
       const column = Number(handle.dataset.tableResizeColumn);
       const cells = Array.from(table.querySelectorAll<HTMLElement>('thead th'));
@@ -705,11 +741,12 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
         pointerBoundary.removeEventListener('lostpointercapture', finish);
         options.root.classList.remove(resizingClassName);
         pointerBoundary.classList.remove(resizingClassName);
+        dragPreviewActive = false;
+        dragCleanup = null;
+        highlight(undefined);
         if (pointerBoundary.hasPointerCapture?.(event.pointerId)) {
           pointerBoundary.releasePointerCapture(event.pointerId);
         }
-        dragPreviewActive = false;
-        dragCleanup = null;
         options.onResizeEnd?.(table);
       };
       const finish = (finishEvent?: PointerEvent) => {
@@ -745,6 +782,7 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
 
       dragPreviewActive = true;
       dragCleanup = removeDragListeners;
+      highlight(handle.dataset.tableResizeColumn);
       options.root.classList.add(resizingClassName);
       pointerBoundary.classList.add(resizingClassName);
       options.onResizeStart?.(table);
@@ -760,10 +798,16 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
       }
     };
 
-    const handleRoot = table.closest<HTMLElement>('.meo-md-html-table-shell') ?? table;
     // Capture before the passive Sticky Header layer can consume cloned-cell events.
     handleRoot.addEventListener('pointerdown', start, true);
-    cleanups.push(() => handleRoot.removeEventListener('pointerdown', start, true));
+    handleRoot.addEventListener('pointerover', updateHover);
+    handleRoot.addEventListener('pointerout', updateHover);
+    cleanups.push(() => {
+      handleRoot.removeEventListener('pointerdown', start, true);
+      handleRoot.removeEventListener('pointerover', updateHover);
+      handleRoot.removeEventListener('pointerout', updateHover);
+      highlight(undefined);
+    });
 
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(scheduleProjection);

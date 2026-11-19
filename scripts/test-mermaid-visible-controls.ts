@@ -348,6 +348,42 @@ try {
     assert.ok(layout.hittable, `${context}: all five actions remain visible and clickable`);
   };
   await assertSplitHeader('scrolled split');
+  await page.setViewport({ width: 1580, height: 800, deviceScaleFactor: 1 });
+  await page.evaluate(() => { document.documentElement.style.zoom = '1.8'; });
+  await settle();
+  await page.evaluate(() => { (window as any).controlsEditor.view.scrollDOM.scrollTop = 600; });
+  await settle();
+  const splitHighlight = await page.evaluate(() => {
+    const divider = document.querySelector('.meo-mermaid-inline-separator')!.getBoundingClientRect();
+    const header = document.querySelector('.meo-block-sticky-header.is-mermaid-side:not([hidden])')!.getBoundingClientRect();
+    return { x: divider.left, headerY: Math.round(header.top + header.height / 2), bodyY: Math.round(header.bottom + 20) };
+  });
+  await page.mouse.move(splitHighlight.x + 4, splitHighlight.bodyY);
+  const highlightScreenshot = await page.screenshot({ encoding: 'base64' });
+  const blueColumns = await page.evaluate(async ({ highlightScreenshot, splitHighlight }) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${highlightScreenshot}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d')!;
+    context.drawImage(image, 0, 0);
+    const startX = Math.floor(splitHighlight.x) - 2;
+    return [splitHighlight.headerY, splitHighlight.bodyY].map(y => {
+      const pixels = context.getImageData(startX, y, 10, 1).data;
+      return Array.from({ length: 10 }, (_, column) => column).filter(column => {
+        const offset = column * 4;
+        return pixels[offset] === 49 && pixels[offset + 1] === 109 && pixels[offset + 2] === 202;
+      });
+    });
+  }, { highlightScreenshot, splitHighlight });
+  assert.ok(blueColumns[0]!.length >= 3, 'The sticky highlight is visible at 180% zoom');
+  assert.deepEqual(blueColumns[1], blueColumns[0], 'The blue divider occupies the same pixel columns in the sticky header and the body at 180% zoom');
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => { document.documentElement.style.zoom = ''; });
+  await page.setViewport({ width: 1050, height: 650 });
+  await settle();
   await page.evaluate(() => {
     const view = (window as any).controlsEditor.view;
     const closing = view.state.doc.toString().indexOf('\n```', view.state.doc.toString().indexOf('```mermaid')) + 1;
