@@ -1945,6 +1945,12 @@ checks the growing native text range before pointer release when entering a cell
 from the document body or another cell, then its accepted textarea selection.
 The complete contract remains in the table editing and browser release suites.
 
+`scripts/test-table-cell-editing-production.ts --line-presentation-only` checks
+that single-line lists, tasks and quotes follow the same marker visibility rules
+as multiline cells. Both document sizes exercise pointer entry, body selection,
+caret movement into the marker, visual wrapping, whole-cell source editing and
+undo. A plain single-line cell witnesses the native editing path.
+
 The same owner supports `--height-only` for rendered/source row-height transitions.
 Ordinary and actually optimized documents check compact long-link previews,
 held-pointer and Tab handoffs within one row, stable cross-cell drags, taller/shorter source editors,

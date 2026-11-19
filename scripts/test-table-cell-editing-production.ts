@@ -581,6 +581,135 @@ async function checkCellLinePresentation(page: import('puppeteer-core').Page) {
   console.log('table active source line checks passed');
 }
 
+async function checkSingleLineCellPresentation(page: import('puppeteer-core').Page) {
+  const preview = 'td .meo-md-html-table-cell-preview';
+  const active = '.meo-md-table-active-source-line';
+  const layout = await page.addStyleTag({ content: `
+    .cm-editor .meo-md-html-table { width: 190px !important; table-layout: fixed !important; }
+    .cm-editor .meo-md-html-table :is(th, td) { width: 190px !important; max-width: 190px !important; }
+  ` });
+  const examples = [
+    { prefix: '42. ', body: 'Ordered body across several visual lines in a narrow column', marker: 'ol[start="42"] > li' },
+    { prefix: '- ', body: 'Bullet', marker: 'ul > li' },
+    { prefix: '- [X] ', body: 'Task', marker: 'input[type="checkbox"]:checked' },
+    { prefix: '> ', body: 'Quote', marker: 'blockquote' },
+    { prefix: '', body: 'Plain', marker: '' }
+  ];
+  try {
+    for (const large of [false, true]) {
+      const label = large ? 'optimized' : 'ordinary';
+      const table = '| Item |\n| --- |\n' + examples.map(({ prefix, body }) => `| ${prefix}**${body}** |`).join('\n');
+      const markdown = table + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+      assert.equal(assessLargeDocument(markdown).boundedEditorWork, large, `${label}/policy`);
+      await page.evaluate(text => {
+        (window as any).__tableCellEditor?.destroy();
+        (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
+          parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+        });
+      }, markdown);
+      await page.waitForSelector(`tbody ${preview} strong`, { visible: true });
+      await page.waitForFunction(large => (window as any).TableStabilityHarness
+        .usesLargeDocumentDerivedWorkBudget((window as any).__tableCellEditor.view.state) === large, {}, large);
+      for (const [index, { prefix, body, marker }] of examples.entries()) {
+        const row = `tbody tr:nth-child(${index + 1})`;
+        const state = `${row} ${preview}`;
+        const editor = `${row} td textarea`;
+        const glyphAt = (offset: number) => page.$eval(`${state} strong`, (element, offset) => {
+          const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+          const range = document.createRange();
+          range.setStart(node, offset);
+          range.setEnd(node, offset + 1);
+          const rect = range.getBoundingClientRect();
+          return { x: rect.left + rect.width / 5, y: (rect.top + rect.bottom) / 2 };
+        }, offset);
+        const point = await glyphAt(1);
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down();
+        assert.equal(await page.$(`${state} ${active}`), null, `${label}/${body}: holding the pointer retains the preview`);
+        await page.mouse.up();
+        const value = prefix + `**${body}**`;
+        assert.deepEqual(await page.$eval(editor, input => ({ value: input.value, active: input === document.activeElement,
+          start: input.selectionStart, end: input.selectionEnd })), {
+          value, active: true, start: prefix.length + 3, end: prefix.length + 3
+        }, `${label}/${body}: the visible click lands on the corresponding source character`);
+        if (marker) {
+          const markerState = () => page.$eval(`${state} ${active}`, (element, selector) => {
+            const prefix = element.querySelector('.meo-md-table-source-prefix')!;
+            const marker = element.closest('.meo-md-html-table-cell-preview')!.querySelector(selector)!;
+            return {
+              prefix: getComputedStyle(prefix).visibility,
+              marker: getComputedStyle(marker, marker instanceof HTMLLIElement ? '::marker' : null).visibility,
+              markerColor: getComputedStyle(marker, '::marker').color,
+              wrapped: element.getBoundingClientRect().height > parseFloat(getComputedStyle(element).lineHeight) * 1.5
+            };
+          }, marker);
+          assert.ok(await page.$(`${state} ${active}`), `${label}/${body}: the single logical line uses the source presentation`);
+          assert.equal(await page.$eval(`${state} ${active}`, element => element.textContent), value);
+          const readingMarker = await markerState();
+          assert.equal(readingMarker.prefix, 'hidden');
+          assert.equal(readingMarker.marker, 'visible');
+          if (index === 0) assert.ok(readingMarker.wrapped, `${label}: the ordered item spans multiple visual lines`);
+          await page.keyboard.down('Shift');
+          await page.keyboard.press('ArrowRight');
+          await page.keyboard.up('Shift');
+          assert.equal(await page.$eval(editor, input => input.value.slice(input.selectionStart, input.selectionEnd)), body[1]);
+          assert.equal((await markerState()).prefix, 'hidden', `${label}/${body}: selecting body text keeps the marker rendered`);
+          if (!large && index === 2 && process.env.MEO_TEST_SCREENSHOTS) {
+            fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+            await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-single-line-task.png') });
+          }
+          await page.$eval(editor, (input, offset) => input.setSelectionRange(offset, offset), prefix.length);
+          await page.keyboard.press('ArrowLeft');
+          const editingMarker = await markerState();
+          assert.equal(editingMarker.prefix, 'visible', `${label}/${body}: moving into the marker reveals its source`);
+          if (index < 2) assert.equal(editingMarker.markerColor, 'rgba(0, 0, 0, 0)', 'the rendered list marker is hidden');
+          if (index === 2) assert.equal(editingMarker.marker, 'hidden', 'the checkbox is hidden while editing its source');
+          await page.keyboard.press('ArrowRight');
+          assert.equal((await markerState()).prefix, 'hidden', `${label}/${body}: leaving the marker restores its rendering`);
+          if (index === 0) {
+            await page.keyboard.down('Shift');
+            await page.keyboard.press('F10');
+            await page.keyboard.up('Shift');
+            await page.click('.meo-md-html-table-context-next');
+            await page.click('button[aria-label="Edit entire cell"]');
+            assert.equal(await page.$(`${state} ${active}`), null, 'the whole-cell action allows raw editing');
+            assert.equal(await page.$eval(editor, input => input === document.activeElement && input.selectionStart), prefix.length);
+          }
+          if (index === 1) {
+            await page.keyboard.type('x');
+            assert.equal(await page.$eval(`${state} ${active}`, element => element.textContent), `${prefix}x**${body}**`);
+            assert.equal((await markerState()).prefix, 'hidden', 'typing in the body keeps the rendered marker');
+            await page.keyboard.press('Escape');
+            assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.undo()), true);
+          }
+          if (index === 2) {
+            await page.keyboard.press('Escape');
+            const start = await glyphAt(1), end = await glyphAt(3);
+            await page.mouse.move(start.x, start.y);
+            await page.mouse.down();
+            await page.mouse.move(end.x, end.y, { steps: 5 });
+            assert.equal(await page.evaluate(() => document.getSelection()?.toString()), body.slice(1, 3));
+            assert.equal(await page.$(`${state} ${active}`), null, 'dragging retains the reading presentation');
+            await page.mouse.up();
+            assert.equal(await page.$eval(editor, input => input.value.slice(input.selectionStart, input.selectionEnd)), body.slice(1, 3));
+            assert.equal((await markerState()).marker, 'visible', 'releasing the text drag keeps the checkbox visible');
+          }
+        } else {
+          assert.equal(await page.$(`${state} ${active}`), null, `${label}: ordinary prose uses the native input`);
+        }
+        await page.keyboard.press('Escape');
+      }
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), markdown,
+        `${label}: marker presentation and selection do not edit the document`);
+      console.log(`Single-line table cell markers passed (${label}, actual derived-work budget)`);
+    }
+  } finally {
+    await page.evaluate(() => (window as any).__tableCellEditor?.destroy());
+    await layout.evaluate(element => element.remove());
+    await layout.dispose();
+  }
+}
+
 async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
   const layout = await page.addStyleTag({ content: `
     #app { height: 400px; }
@@ -1282,8 +1411,12 @@ async function checkCellKeyboardViewport(page: import('puppeteer-core').Page) {
     const nativeWrap = 'abcdefghijk '.repeat(90) + 'Tail';
     await open(['| First | Before |', `| Native wrap | ${nativeWrap} |`]);
     await focus(2, 2);
+    // Set the starting viewport after the focused row's layout has settled.
+    await settle();
     await position(2, 125);
     const beforeSelection = await state();
+    assert.ok(beforeSelection.cellBottom > beforeSelection.viewport.bottom + 1,
+      'the native selection fixture starts with the end of the wrapped cell out of view');
     await page.keyboard.down('Control');
     await page.keyboard.down('Shift');
     await page.keyboard.press('End');
@@ -1357,6 +1490,7 @@ async function main() {
     }
     if (process.argv.includes('--line-presentation-only')) {
       await checkCellLinePresentation(page);
+      await checkSingleLineCellPresentation(page);
       return;
     }
     if (process.argv.includes('--structure-editing-only')) {
@@ -1367,6 +1501,7 @@ async function main() {
     if (process.argv.includes('--break-deletion-only')) return;
     await checkCellEditingKeys(page, 'structure');
     await checkCellLinePresentation(page);
+    await checkSingleLineCellPresentation(page);
     await checkCellLineGeometry(page);
     await checkCellSourcePointerGeometry(page);
     await checkCellEditingAudit(page);

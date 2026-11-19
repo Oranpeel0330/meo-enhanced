@@ -2133,6 +2133,15 @@ function parseTableCellQuotePrefix(line: TableCellLogicalLine, maxIndentColumns 
   return { line: { text, from, breakText: line.breakText }, indents };
 }
 
+function hasTableCellLineStructure(text: string): boolean {
+  return tableCellListItemRe.test(text) || (tableCellQuotePrefixRe.test(text)
+    && parseTableCellQuotePrefix({ text, from: 0, breakText: '' }).indents.length > 0);
+}
+
+function canProjectTableCellLines(value: string): boolean {
+  return value.includes('\n') || hasTableCellLineStructure(value);
+}
+
 function tableCellPrefixMarkers(prefix: string): TableCellRange[] {
   // The rendered prefix can contain several markers, such as "> 2. ".
   // Keep their shared edges out of the editable interior of either marker.
@@ -3568,7 +3577,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (!this.domRefs) return;
     const { contextButtons } = this.domRefs;
     const input = this.domRefs.allRowInputs[this.activeTarget.row]?.[this.activeTarget.col];
-    contextButtons.editEntireCell.hidden = !input?.value.includes('\n') || this.wholeCellInput === input;
+    contextButtons.editEntireCell.hidden = !input || this.wholeCellInput === input || !canProjectTableCellLines(input.value);
     contextButtons.editEntireCell.disabled = contextButtons.editEntireCell.hidden;
     const targetRow = this.cellSelection.snapshot().anchor?.row ?? this.activeTarget.row;
     const rows = this.selectedBodyRows();
@@ -6784,7 +6793,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (!content?.classList.contains('is-editing')) return false;
     const phase = this.cellSelection.snapshot().phase;
     if (this.composingInput === input || phase === 'text-candidate' || phase === 'dragging') return !!current;
-    if (!current && (!input.value.includes('\n') || input === this.wholeCellInput)) return false;
+    if (!current && (input === this.wholeCellInput || !canProjectTableCellLines(input.value))) return false;
     const preview = content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
     if (!preview) return false;
     const resize = () => {
@@ -6797,7 +6806,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const coords = this.parseCellCoords(input.dataset.tableRow, input.dataset.tableCol);
     const diagnostics = coords ? this.cellDiagnostics(coords.row, coords.col) : [];
     const sourceRange = coords ? this.cellSourceRange(coords.row, coords.col) : null;
-    if (lines.length < 2 || input === this.wholeCellInput || shouldExpandTableCellForSearch(source, this.searchState)) {
+    if ((lines.length === 1 && !hasTableCellLineStructure(lines[0]!.text))
+      || input === this.wholeCellInput || shouldExpandTableCellForSearch(source, this.searchState)) {
       if (current) {
         this.clearCellLinePresentation(input);
         this.renderCellPreview(preview, source, diagnostics, sourceRange);
