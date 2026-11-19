@@ -323,6 +323,7 @@ const sourceTableHeaderLineDeco = Decoration.line({ class: 'meo-md-source-table-
 const sourceTableHeaderCellDeco = Decoration.mark({ class: 'meo-md-source-table-header-cell' });
 const tableCellSelector = 'th[data-table-row][data-table-col], td[data-table-row][data-table-col]';
 const tableCellCaretNavigationKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+const tableCellTextSelectingClass = 'meo-md-html-table-cell-text-selecting';
 const tableControlSelector = '.meo-md-html-table-context-trigger, .meo-md-html-table-context-menu, .meo-md-html-table-context-btn, .meo-md-link-open-btn, .meo-md-color-swatch-interactive, .meo-md-html-table-column-resize-handle';
 const tableCellAutoCommitDelayMs = 250;
 // Chromium reports fractional caret bounds while scrollTop is effectively
@@ -2994,7 +2995,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   tableCommandEnvironment: TableCommandEnvironment;
   tableCommandTargetId: string;
   tableCommandTargetRegistration: TableCommandTargetRegistration | null;
-  selectionDomAnchor: { node: Node; offset: number } | null;
+  private selectionDomAnchor: { node: Node; offset: number; cell: HTMLTableCellElement | undefined } | null = null;
   selectionDomHead: { node: Node; offset: number } | null = null;
   measuredHeightCache: RenderedBlockPreviewHeight;
   pendingContextMenuRestore: boolean;
@@ -3026,7 +3027,6 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.tableCommandEnvironment = tableCommandEnvironment;
     this.tableCommandTargetId = '';
     this.tableCommandTargetRegistration = null;
-    this.selectionDomAnchor = null;
     this.measuredHeightCache = measuredHeightCache;
     this.pendingContextMenuRestore = false;
     this.contextPage = 'structure';
@@ -3789,7 +3789,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   applySelection(range: TableSelectionRange | null) {
     if (!this.domRefs) return;
     const showSelectionStyle = this.cellSelection.selectedCellRange() !== null;
-    const { cellGrid } = this.domRefs;
+    const { table, cellGrid } = this.domRefs;
+    table.classList.toggle('has-table-cell-selection', range !== null && showSelectionStyle);
     for (let row = 0; row < cellGrid.length; row++) {
       const cells = cellGrid[row];
       for (let col = 0; col < cells.length; col++) {
@@ -3843,6 +3844,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
     };
     const clearNativeTextSelection = (onlyOwned = false) => {
+      this.selectionDomAnchor?.cell?.classList.remove(tableCellTextSelectingClass);
       this.selectionDomAnchor = null;
       this.selectionDomHead = null;
       const selection = document.getSelection();
@@ -3925,14 +3927,15 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         runPrimary(clearNativeTextSelection);
         runPrimary(() => this.applySelection(null));
         runPrimary(() => {
-          this.selectionDomAnchor = context.domCaret ?? null;
+          const cell = this.domRefs?.cellGrid[effect.cell.row]?.[effect.cell.col];
+          this.selectionDomAnchor = context.domCaret ? { ...context.domCaret, cell } : null;
           if (effect.anchorCaret === effect.headCaret) return;
           const input = this.cellInput(effect.cell.row, effect.cell.col);
           const preview = input?.parentElement?.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
           if (!input || !preview) return;
           const anchor = tableCellEditorOffsetToSourceOffset(input.value, effect.anchorCaret);
           const range = inlineSourceSelectionRanges(preview, anchor, anchor + 1)[0];
-          if (range) this.selectionDomAnchor = { node: range.startContainer, offset: range.startOffset };
+          if (range) this.selectionDomAnchor = { node: range.startContainer, offset: range.startOffset, cell };
         });
         runPrimary(() => {
           const active = document.activeElement;
@@ -3989,16 +3992,18 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   }
 
   projectPointerTextSelection(domHead: { node: Node; offset: number } | null | undefined) {
-    if (!this.selectionDomAnchor || !domHead) return;
+    const anchor = this.selectionDomAnchor;
+    if (!anchor || !domHead) return;
     this.selectionDomHead = domHead;
     const selection = document.getSelection();
     try {
-      selection?.setBaseAndExtent(
-        this.selectionDomAnchor.node, this.selectionDomAnchor.offset, domHead.node, domHead.offset
-      );
+      selection?.setBaseAndExtent(anchor.node, anchor.offset, domHead.node, domHead.offset);
     } catch {
       selection?.removeAllRanges();
     }
+    // Once text has been selected, keep the stroke on this cell even if the
+    // pointer returns to the starting character before the gesture ends.
+    if (selection && !selection.isCollapsed) anchor.cell?.classList.toggle(tableCellTextSelectingClass, true);
   }
 
   setSingleCellSelection(coords: CellCoords, origin: 'focus' | 'command') {

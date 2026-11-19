@@ -271,6 +271,117 @@ async function checkSingleCellDrag(page: Page) {
   await page.evaluate(() => (window as any).__singleCellEditor.destroy());
 }
 
+async function checkSelectionOutlines(page: Page) {
+  const cell = '.meo-md-html-table:not(.meo-md-html-table-sticky-table) tbody tr';
+  const original = `${cell}:first-child td:first-child`;
+  const textTarget = `${cell}:first-child td:nth-child(2)`;
+  const rangeEnd = `${cell}:nth-child(2) td:nth-child(2)`;
+  const preview = ' .meo-md-html-table-cell-preview';
+  const outlines = () => page.$$eval(`${cell} td`, cells => cells.flatMap((cell, index) => {
+    const outline = getComputedStyle(cell, '::after');
+    return outline.content !== 'none' && outline.visibility === 'visible' && outline.boxShadow !== 'none'
+      ? [index] : [];
+  }));
+  const textPoint = (selector: string, offset: number) => page.$eval(selector + preview, (preview, offset) => {
+    const text = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(text, offset - 1);
+    range.setEnd(text, offset);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.right, y: rect.top + rect.height / 2 };
+  }, offset);
+  const screenshot = async (name: string) => {
+    const directory = process.env.MEO_TEST_SCREENSHOTS;
+    if (!directory) return;
+    fs.mkdirSync(directory, { recursive: true });
+    await (await page.$('.meo-md-html-table-shell'))!.screenshot({
+      path: path.join(directory, `table-outline-${name}.png`)
+    });
+  };
+
+  for (const large of [false, true]) {
+    const appearance = large ? 'dark' : 'light';
+    const text = '| A | B |\n| --- | --- |\n| original cell | alpha bravo |\n| third cell | final cell |'
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+    await page.evaluate(({ text, appearance }) => {
+      const harness = (window as any).TableStabilityHarness;
+      const root = document.getElementById('app')!;
+      // Model the stable focus feedback the VS Code host applies to Live.
+      root.classList.add('editor-root', 'meo-editor-focus-owned');
+      harness.applyBuiltInVisualBaseline(appearance);
+      (window as any).__outlineEditor = harness.createEditor({
+        parent: root, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, { text, appearance });
+    try {
+      await page.waitForSelector(original + preview);
+      await page.waitForFunction(large => (window as any).TableStabilityHarness
+        .usesLargeDocumentDerivedWorkBudget((window as any).__outlineEditor.view.state) === large, {}, large);
+      await page.click(original + preview);
+      assert.deepEqual(await outlines(), [0], `${appearance}/click outlines the active cell`);
+      await screenshot(`${appearance}-editing`);
+
+      const start = await textPoint(textTarget, 1);
+      const end = await textPoint(textTarget, 7);
+      const bottom = await textPoint(rangeEnd, 3);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(end.x, end.y, { steps: 4 });
+      const heldText = await page.evaluate(() => document.getSelection()?.toString());
+      const heldTextOutlines = await outlines();
+      await screenshot(`${appearance}-text`);
+      await page.mouse.move(start.x, start.y, { steps: 4 });
+      const collapsedTextOutlines = await outlines();
+      await page.mouse.move(end.x, end.y, { steps: 4 });
+      await page.mouse.up();
+      const releasedText = await page.$eval(`${textTarget} textarea`, input => ({
+        focused: document.activeElement === input,
+        text: input.value.slice(input.selectionStart, input.selectionEnd)
+      }));
+      const releasedTextOutlines = await outlines();
+      await page.keyboard.press('ArrowRight');
+      assert.deepEqual(await outlines(), [1], `${appearance}/collapsing the text range keeps the active outline`);
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('ArrowLeft');
+      await page.keyboard.up('Shift');
+      assert.deepEqual(await outlines(), [1], `${appearance}/keyboard text selection keeps the active outline`);
+
+      await page.click(original + preview);
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(end.x, end.y, { steps: 4 });
+      await page.mouse.move(bottom.x, bottom.y, { steps: 4 });
+      const heldRangeOutlines = await outlines();
+      const heldRangeCells = await page.$$eval('.meo-md-html-table-cell-selected', cells => cells.length);
+      assert.equal(await page.evaluate(() => document.getSelection()?.toString()), '', `${appearance}/crossing a cell boundary clears the text highlight`);
+      await screenshot(`${appearance}-range`);
+      await page.mouse.move(start.x, start.y, { steps: 4 });
+      assert.deepEqual(await outlines(), [1], `${appearance}/returning to the first cell keeps a one-cell range`);
+      assert.equal(await page.$$eval('.meo-md-html-table-cell-selected', cells => cells.length), 1,
+        `${appearance}/one-cell range remains distinct from a text selection`);
+      await page.mouse.move(bottom.x, bottom.y, { steps: 4 });
+      await page.mouse.up();
+      const releasedRangeOutlines = await outlines();
+      await page.click(original + preview);
+      assert.deepEqual(await outlines(), [0], `${appearance}/click replaces the range with the active outline`);
+
+      assert.equal(heldText, 'lpha b', `${appearance}/held text selection`);
+      assert.deepEqual(releasedText, { focused: true, text: 'lpha b' }, `${appearance}/released native text selection`);
+      assert.equal(heldRangeCells, 2, `${appearance}/held column range`);
+      assert.deepEqual({ heldTextOutlines, collapsedTextOutlines, releasedTextOutlines, heldRangeOutlines, releasedRangeOutlines }, {
+        heldTextOutlines: [1], collapsedTextOutlines: [1], releasedTextOutlines: [1],
+        heldRangeOutlines: [1, 3], releasedRangeOutlines: [1, 3]
+      }, `${appearance}/the current text cell or range owns the outline`);
+      console.log(`Table selection outlines passed (${appearance}, ${large ? 'optimized' : 'ordinary'})`);
+    } finally {
+      await page.evaluate(() => {
+        (window as any).__outlineEditor.destroy();
+        document.getElementById('app')!.classList.remove('editor-root', 'meo-editor-focus-owned');
+      });
+    }
+  }
+}
+
 async function checkCrossTablePointerTransfer(page: Page) {
   const first = '.meo-md-html-table-shell[data-cross-table="0"] tbody td:first-child .meo-md-html-table-cell-preview';
   const second = '.meo-md-html-table-shell[data-cross-table="1"] tbody td:first-child .meo-md-html-table-cell-preview';
@@ -376,6 +487,10 @@ async function main() {
     await page.setContent('<!doctype html><button id="outside">outside</button><div id="app"></div>');
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+    if (!process.argv.includes('--single-cell-only') && !process.argv.includes('--cross-table-only')) {
+      await checkSelectionOutlines(page);
+      if (process.argv.includes('--outline-only')) return;
+    }
     if (!process.argv.includes('--single-cell-only')) {
       await checkCrossTablePointerTransfer(page);
       if (process.argv.includes('--cross-table-only')) return;
