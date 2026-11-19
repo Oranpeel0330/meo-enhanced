@@ -44,7 +44,6 @@ interface ListIndentStyle {
 
 interface ListMarkerDecorationOptions {
   useSourceStyleLiteral?: boolean;
-  showTaskListMarker?: boolean;
 }
 
 interface ListTextChange {
@@ -593,21 +592,11 @@ export function addListMarkerDecoration(
   if (marker.taskBracketStart !== undefined) {
     const bracketStart = line.from + marker.taskBracketStart;
     const taskStatus = marker.taskStatus ?? 'todo';
-    if (options?.showTaskListMarker) {
-      builder.push(Decoration.replace({
-        widget: new ListMarkerWidget(
-          marker.markerText,
-          marker.classes,
-          marker.taskBracketStart - marker.fromOffset + marker.displayExtraColumns
-        ),
-        inclusive: false
-      }).range(indentEnd, bracketStart));
-    }
     builder.push(
       Decoration.replace({
         widget: new CheckboxWidget(taskStatus, bracketStart),
         inclusive: false
-      }).range(options?.showTaskListMarker ? bracketStart : indentEnd, markerTo)
+      }).range(indentEnd, markerTo)
     );
 
     if (taskStatus === 'done') {
@@ -666,8 +655,7 @@ export function projectChangedListMarkerDecoration(
     || next.orderedSuffix !== previous.orderedSuffix) return;
   const ranges: Array<Range<Decoration>> = [];
   const line = transaction.newDoc.lineAt(nextFrom);
-  addListMarkerDecoration(ranges, transaction.state, nextFrom, null, defaultListIndentStyle,
-    { showTaskListMarker: !(decoration.spec.widget instanceof CheckboxWidget) }, nextFrom - line.from);
+  addListMarkerDecoration(ranges, transaction.state, nextFrom, null, defaultListIndentStyle, null, nextFrom - line.from);
   return ranges.find(range => range.from === nextFrom && range.to === nextTo
     && isListMarkerDecoration(range.value)
     && (range.value.spec.widget instanceof CheckboxWidget) === (decoration.spec.widget instanceof CheckboxWidget));

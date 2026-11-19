@@ -2232,8 +2232,7 @@ function appendTableCellRenderedPreview(
   };
 
   const appendTaskContent = (
-    parent: HTMLElement, content: string, from: number, nestedListOnLine: boolean,
-    activeLine: TableCellLogicalLine | null
+    parent: HTMLElement, content: string, from: number, activeLine: TableCellLogicalLine | null
   ) => {
     const task = taskContentPrefix.exec(content);
     if (task && parent instanceof HTMLLIElement) {
@@ -2245,7 +2244,6 @@ function appendTableCellRenderedPreview(
       checkbox.className = `meo-task-checkbox meo-md-html-table-cell-task-checkbox is-${status}`;
       setInlineSourceRange(checkbox, { from, to: from + task[0].length }, { atomic: true });
       parent.classList.add('meo-md-html-table-cell-task', `is-${status}`);
-      if (nestedListOnLine) parent.classList.add('meo-md-html-table-cell-task-show-marker');
       const taskBodyFrom = from + task[0].length;
       const row = document.createElement('div');
       row.className = 'meo-md-table-task-content';
@@ -2266,8 +2264,7 @@ function appendTableCellRenderedPreview(
 
   const appendItemContent = (
     parent: HTMLLIElement, content: string, from: number,
-    baseQuoteDepth: number, nestedListOnLine = false, contentColumn = 0,
-    activeLine: TableCellLogicalLine | null = null
+    baseQuoteDepth: number, contentColumn: number, activeLine: TableCellLogicalLine | null
   ): ListEntry[] => {
     if (activeLine) parent.classList.add('meo-md-table-active-list-item');
     const nestedQuote = parseTableCellQuotePrefix({ text: content, from, breakText: '' });
@@ -2283,7 +2280,7 @@ function appendTableCellRenderedPreview(
     const nestedItem = parseTableCellListItem(nestedQuote.line);
     if (!nestedItem) {
       if (activeLine || !appendAlertContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from)) {
-        appendTaskContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from, nestedListOnLine, activeLine);
+        appendTaskContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from, activeLine);
       }
       return [];
     }
@@ -2295,7 +2292,7 @@ function appendTableCellRenderedPreview(
     const column = nestedQuote.indents.length ? 0 : contentColumn;
     const nextContentColumn = countColumn(' '.repeat(column) + prefix, 4);
     const descendants = appendItemContent(child, nestedItem.content, nestedItem.contentFrom,
-      baseQuoteDepth + nestedQuote.indents.length, true, nextContentColumn, activeLine);
+      baseQuoteDepth + nestedQuote.indents.length, nextContentColumn, activeLine);
     appendListItem(list, child);
     quoteParent.appendChild(list);
     const entry: ListEntry = {
@@ -2414,7 +2411,7 @@ function appendTableCellRenderedPreview(
     const listItem = document.createElement('li');
     const contentColumn = countColumn(line.text.slice(0, item.contentFrom - line.from), 4);
     const descendants = appendItemContent(listItem, item.content, item.contentFrom,
-      quoted.indents.length, false, contentColumn, activeLine);
+      quoted.indents.length, contentColumn, activeLine);
     appendListItem(entry.list, listItem);
     entry.lastItem = listItem;
     listStack.length = level + 1;

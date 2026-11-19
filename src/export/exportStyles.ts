@@ -618,11 +618,6 @@ ol ol {
   position: relative;
   padding-inline-start: var(--meo-export-task-inset);
   list-style: none;
-  margin-left: -0.1em;
-}
-
-.meo-export-task-item.meo-export-task-show-marker {
-  list-style: inherit;
 }
 
 .meo-export-task-checkbox {
@@ -1030,6 +1025,10 @@ table kbd {
 .meo-table-scroll ul,
 .meo-table-scroll ol {
   padding-inline-start: 2em;
+}
+
+.meo-table-scroll :is(ul, ol):has(> .meo-export-task-item):not(:has(> li:not(.meo-export-task-item))) {
+  padding-inline-start: 0;
 }
 
 td:empty::before,

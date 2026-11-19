@@ -480,7 +480,8 @@ async function main(): Promise<void> {
         '> > - two quote levels',
         '> > nested quote paragraph',
         '- 1. [ ] composite task alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu',
-        '> > > three quote levels'
+        '> > > three quote levels',
+        '1. - [x] ordered then task'
       ].join('\n');
       const editor = (window as any).ListEditingHarness.createEditor({
         parent: document.getElementById('host')!, text: source,
@@ -492,7 +493,7 @@ async function main(): Promise<void> {
         markers: line.querySelectorAll('.meo-md-list-marker').length,
         checkboxes: line.querySelectorAll('.meo-task-checkbox').length,
         quoteDepthIndicator: String(getComputedStyle(line, '::before').backgroundPositionX.split(',').length),
-        markerRects: Array.from(line.querySelectorAll<HTMLElement>('.meo-md-list-marker'))
+        markerRects: Array.from(line.querySelectorAll<HTMLElement>('.meo-md-list-marker, .meo-task-checkbox'))
           .map((marker) => ({ left: marker.getBoundingClientRect().left, right: marker.getBoundingClientRect().right }))
       }));
       const wrappedLine = Array.from(document.querySelectorAll<HTMLElement>('#host .cm-line'))
@@ -511,13 +512,14 @@ async function main(): Promise<void> {
       editor.destroy();
       return { items, wrappedAlignment };
     });
-    assert.deepEqual(sameLine.items.map((line) => line.markers), [2, 2, 3, 2, 2, 2, 2, 4, 0, 1, 0, 2, 0],
-      `same-line list markers must all render: ${JSON.stringify(sameLine)}`);
+    assert.deepEqual(sameLine.items.map((line) => line.markers), [2, 2, 3, 1, 2, 2, 1, 3, 0, 1, 0, 1, 0, 1],
+      `only non-task list items should display list markers: ${JSON.stringify(sameLine)}`);
     assert.equal(sameLine.items[3]?.checkboxes, 1);
     assert.equal(sameLine.items[6]?.checkboxes, 1);
     assert.equal(sameLine.items[7]?.checkboxes, 1);
     assert.equal(sameLine.items[8]?.checkboxes, 1);
     assert.equal(sameLine.items[11]?.checkboxes, 1);
+    assert.equal(sameLine.items[13]?.checkboxes, 1);
     assert.ok(Number.parseFloat(sameLine.items[9]?.quoteDepthIndicator ?? '') > 0
       && Number.parseFloat(sameLine.items[10]?.quoteDepthIndicator ?? '') > 0,
       'the second quote level needs a visible depth indicator');
@@ -558,7 +560,7 @@ async function main(): Promise<void> {
         .map((line) => {
           const rect = line.getBoundingClientRect();
           const before = getComputedStyle(line, '::before');
-          const markers = Array.from(line.querySelectorAll<HTMLElement>('.meo-md-list-marker'))
+          const markers = Array.from(line.querySelectorAll<HTMLElement>('.meo-md-list-marker, .meo-task-checkbox'))
             .map((marker) => ({ left: marker.getBoundingClientRect().left, right: marker.getBoundingClientRect().right }));
           const quoteLeft = line.classList.contains('meo-md-quote-source-order')
             ? rect.left + Number.parseFloat(before.left)
@@ -588,7 +590,7 @@ async function main(): Promise<void> {
       const activeQuoteLeft = activeLine.getBoundingClientRect().left + Number.parseFloat(activeBefore.left);
       const activeQuoteBarPositions = activeBefore.backgroundPositionX.split(',')
         .map((position) => Number.parseFloat(position));
-      const activeMarkerRects = Array.from(activeLine.querySelectorAll<HTMLElement>('.meo-md-list-marker'))
+      const activeMarkerRects = Array.from(activeLine.querySelectorAll<HTMLElement>('.meo-md-list-marker, .meo-task-checkbox'))
         .map((marker) => ({ left: marker.getBoundingClientRect().left, right: marker.getBoundingClientRect().right }));
       const alertLine = Array.from(document.querySelectorAll<HTMLElement>('#order-host .cm-line'))
         .find((line) => line.innerText.includes('alert quote'))!;
@@ -671,8 +673,8 @@ async function main(): Promise<void> {
     });
     assert.equal(sameLineTable.listItems, 13, 'table cell must retain every parsed same-line nested list');
     assert.equal(sameLineTable.checkboxes, 3);
-    assert.deepEqual(sameLineTable.taskMarkerStyles, ['decimal', 'none', 'disc'],
-      'same-line nested tasks must retain their ordered or bullet list marker');
+    assert.deepEqual(sameLineTable.taskMarkerStyles, ['none', 'none', 'none'],
+      'table task items should use a checkbox as their only marker');
     assert.ok(['forward', 'reverse', 'quoted', 'task first', 'list quote', 'reverse task']
       .every((text) => sameLineTable.text.includes(text)));
     assert.equal(sameLineTable.source, '| Items |\n| --- |\n| - 1. forward<br>1. - reverse<br>> - 1. quoted<br>- 1. [ ] task<br>- [ ] 1. task first<br>- > 1. list quote<br>1. - [x] reverse task |');
@@ -686,8 +688,8 @@ async function main(): Promise<void> {
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const cell = document.querySelector<HTMLElement>('#table-host tbody td .meo-md-html-table-cell-preview')!;
       const result = {
-        listThenQuote: Boolean(cell.querySelector('ol > li > blockquote > ul > li > input[type=checkbox]')),
-        quoteThenList: Boolean(cell.querySelector('blockquote > ol > li > ul > li > input[type=checkbox]')),
+        listThenQuote: Boolean(cell.querySelector('ol > li > blockquote > ul > li > .meo-md-table-task-content > input[type=checkbox]')),
+        quoteThenList: Boolean(cell.querySelector('blockquote > ol > li > ul > li > .meo-md-table-task-content > input[type=checkbox]')),
         source: editor.getText()
       };
       editor.destroy();

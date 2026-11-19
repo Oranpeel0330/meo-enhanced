@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 import { renderMarkdownToHtml } from '../src/export/renderMarkdown';
-import { buildPreviewStyles } from '../src/export/exportStyles';
+import { buildExportStyles, buildPreviewStyles } from '../src/export/exportStyles';
 
 const root = path.resolve(import.meta.dir, '..');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-composite-blocks-'));
@@ -78,6 +78,29 @@ async function verifyPreviewTaskContainerLayouts(browser: Awaited<ReturnType<typ
   let count = 0;
   try {
     await page.setViewport({ width: 900, height: 3000 });
+    const markerProbe = renderMarkdownToHtml({
+      markdownText: '1. - [x] Body task\n\n| Tasks |\n| --- |\n| - [ ] Standalone task |\n| 1. - [x] Nested task |\n| Plain text |',
+      markdownFilePath: 'task-markers.md', target: 'html'
+    });
+    for (const styles of [buildPreviewStyles(), buildExportStyles()]) {
+      await page.setContent('<!doctype html><style>' + styles + '</style><main class="meo-export-doc">' + markerProbe.html + '</main>');
+      const markers = await page.$$eval('.meo-export-task-item', items => items.map(item => {
+        const box = item.querySelector('.meo-export-task-checkbox')!;
+        const outerItem = item.parentElement?.closest('li');
+        return { marker: getComputedStyle(item).listStyleType,
+          outer: outerItem && getComputedStyle(outerItem).listStyleType, left: box.getBoundingClientRect().left };
+      }));
+      assert.deepEqual(markers.map(({ marker, outer }) => [marker, outer]), [
+        ['none', 'decimal'], ['none', null], ['none', 'decimal']
+      ], 'Preview and HTML export render each task checkbox and retain outer numbering');
+      const plainTextLeft = await page.$eval('tbody tr:last-child td', cell => {
+        const text = document.createRange();
+        text.selectNodeContents(cell);
+        return text.getBoundingClientRect().left;
+      });
+      assert.ok(Math.abs(markers[1]!.left - plainTextLeft) < .5,
+        `a standalone task starts at the cell content edge: ${markers[1]!.left} vs ${plainTextLeft}`);
+    }
     for (const font of [{ family: 'Arial', size: 16 }, { family: 'Consolas, monospace', size: 24 }]) {
       for (const width of [620, 420]) {
         for (const appearance of ['light', 'dark'] as const) {
@@ -535,7 +558,7 @@ async function main() {
         footnote:{textClearOfRule:textLeft>ruleLeft+3,rendered:!!footnoteTable,indent:footnoteTable?.style.getPropertyValue('--meo-html-table-indent'),bars:footnoteTable?.style.getPropertyValue('--meo-live-block-quote-depth'),refs:document.querySelectorAll('#footnote .meo-md-footnote-ref').length},
         backlinks:[...preview.querySelectorAll<HTMLAnchorElement>('.footnote-backref')].map(a=>({href:a.getAttribute('href'),targetExists:!!document.getElementById(a.hash.slice(1)),label:a.getAttribute('aria-label'),text:a.textContent})),
         notes:{tables:document.querySelectorAll('#preview-notes .footnote-body table').length,graphs:document.querySelectorAll('#preview-notes .footnote-body .meo-export-mermaid').length},
-        preview:{numberedTasks:preview.querySelectorAll('.meo-export-task-show-marker').length,quotes:preview.querySelectorAll('blockquote').length,tasks:preview.querySelectorAll('.meo-export-task-checkbox').length,text:preview.textContent}
+        preview:{numberedTasks:preview.querySelectorAll('ul > li > ol > li.meo-export-task-item').length,quotes:preview.querySelectorAll('blockquote').length,tasks:preview.querySelectorAll('.meo-export-task-checkbox').length,text:preview.textContent}
       };
     });
     const geometry = await page.evaluate(()=>{

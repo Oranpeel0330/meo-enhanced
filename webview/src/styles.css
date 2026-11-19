@@ -7369,14 +7369,6 @@ html[data-editor-appearance='dark'] body.vscode-dark
   list-style: none;
 }
 
-.cm-editor .meo-md-html-table-cell-list:is(ol) > li.meo-md-html-table-cell-task-show-marker {
-  list-style-type: decimal;
-}
-
-.cm-editor .meo-md-html-table-cell-list:is(ul) > li.meo-md-html-table-cell-task-show-marker {
-  list-style-type: disc;
-}
-
 .cm-editor .meo-md-html-table-cell-list {
   --meo-table-default-list-indent: 1.5em;
   margin: 0;
@@ -7390,6 +7382,12 @@ html[data-editor-appearance='dark'] body.vscode-dark
   --meo-table-default-list-indent: 1.25em;
   --meo-table-list-indent: var(--meo-table-default-list-indent);
   --meo-table-list-digits: 0;
+}
+
+/* A task-only list needs no marker gutter. A child list under a task starts
+   deeper than its parent's checkbox, which is inside the parent's grid. */
+.cm-editor .meo-md-html-table-cell-list:has(> .meo-md-html-table-cell-task):not(:has(> li:not(.meo-md-html-table-cell-task)), .meo-md-html-table-cell-task > *) {
+  padding-inline-start: 0;
 }
 
 .cm-editor .meo-md-html-table-cell-preview:has(.meo-md-html-table-cell-list, .meo-md-table-active-source-line) {

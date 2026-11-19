@@ -1856,7 +1856,7 @@ function addListLineDecorations(
     }
     legacyOrderedCountsByLevel.length = 0;
     const inFrontmatterContent = isInsideFrontmatterContent(frontmatter, line.from);
-    let deepest: { marker: NonNullable<ReturnType<typeof listMarkerData>>; depth: number; showTaskListMarker: boolean } | null = null;
+    let deepest: { marker: NonNullable<ReturnType<typeof listMarkerData>>; depth: number } | null = null;
     let previousMarkerEnd = line.from;
     for (const entry of entries) {
       const precedingQuoteMarks = (quoteMarksByLine.get(lineNo) ?? []).filter((mark) => mark.to <= entry.listMarkFrom);
@@ -1891,24 +1891,20 @@ function addListLineDecorations(
           inclusive: false
         }).range(line.from + markerOffset, line.from + marker.fromOffset));
       }
-      const showTaskListMarker = marker.isTask && entries.length > 1;
-      addListMarkerDecoration(builder, state, line.from, orderedDisplayIndex, style,
-        showTaskListMarker ? { showTaskListMarker: true } : null, markerOffset);
+      addListMarkerDecoration(builder, state, line.from, orderedDisplayIndex, style, null, markerOffset);
       if (!deepest || entry.depth >= deepest.depth) {
-        deepest = { marker, depth: entry.depth, showTaskListMarker };
+        deepest = { marker, depth: entry.depth };
       }
     }
     if (deepest && !inFrontmatterContent) {
-      const { marker, showTaskListMarker } = deepest;
+      const { marker } = deepest;
       builder.push(listLineDeco(
         marker.contentOffsetColumns,
         marker.indentColumns,
         style?.columns ?? 2,
         indentSelectedLines.has(lineNo),
         marker.isTask,
-        showTaskListMarker && marker.taskBracketStart !== undefined
-          ? Math.max(0, marker.toOffset - marker.taskBracketStart - 1)
-          : marker.taskHiddenPrefixColumns,
+        marker.taskHiddenPrefixColumns,
         Boolean(marker.orderedNumber)
       ).range(line.from));
     }

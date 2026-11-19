@@ -1328,10 +1328,6 @@ function installTaskListTransform(md: MarkdownIt, github = false): void {
       const statusClass = taskStatusClassFromMarker(match[1]);
       current.token.attrJoin('class', 'meo-export-task-item');
       current.token.attrJoin('class', statusClass);
-      const parentItem = itemStack.at(-2)?.token;
-      if (parentItem && current.token.map?.[0] === parentItem.map?.[0]) {
-        current.token.attrJoin('class', 'meo-export-task-show-marker');
-      }
 
       removeTaskPrefixFromInlineToken(token, match[0].length);
 

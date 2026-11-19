@@ -714,6 +714,8 @@ async function checkCellTypography(page: import('puppeteer-core').Page) {
   const task = 'tbody tr:first-child .meo-md-table-task-content';
   const smallTask = 'tbody tr:nth-child(2) .meo-md-table-task-content';
   const preview = 'tbody tr:nth-child(3) .meo-md-html-table-cell-preview';
+  const rootTask = 'tbody tr:nth-child(4) .meo-md-table-task-content';
+  const mixedList = 'tbody tr:nth-child(5) .meo-md-html-table-cell-list';
   const layout = await page.addStyleTag({ content: `
     .cm-editor .meo-md-html-table { width: 185px !important; table-layout: fixed !important; }
     .cm-editor .meo-md-html-table :is(th, td) { width: 185px !important; max-width: 185px !important; }
@@ -723,7 +725,7 @@ async function checkCellTypography(page: import('puppeteer-core').Page) {
       .map(name => [name, document.documentElement.getAttribute(name)] as const));
   const table = '正文行距\n正文第二行\n\n| 标记 |\n| --- |\n'
     + '| - 1. - [X] 多种标记与折行。Task text wraps across several visual lines. |\n'
-    + '| > 7. - [ ] 引用任务 |\n| 第一行<br>第二行 |';
+    + '| > 7. - [ ] 引用任务 |\n| 第一行<br>第二行 |\n| - [ ] 单独任务 |\n| - 普通条目<br>- [x] 混合任务 |';
   const read = (selector: string) => page.$eval(selector, row => {
     const checkbox = row.querySelector('input')!;
     const body = row.lastElementChild!;
@@ -732,6 +734,8 @@ async function checkCellTypography(page: import('puppeteer-core').Page) {
     range.selectNodeContents(text);
     const box = checkbox.getBoundingClientRect();
     const cell = row.closest('td')!.getBoundingClientRect();
+    const preview = row.closest('.meo-md-html-table-cell-preview')!;
+    const contentLeft = preview.getBoundingClientRect().left + parseFloat(getComputedStyle(preview).paddingLeft);
     const lineHeight = parseFloat(getComputedStyle(body).lineHeight);
     const center = body.getBoundingClientRect().top + lineHeight / 2;
     const listMarkers = [];
@@ -740,7 +744,7 @@ async function checkCellTypography(page: import('puppeteer-core').Page) {
     }
     return { centerDelta: (box.top + box.bottom) / 2 - center, top: box.top, lineHeight,
       insideCell: box.top >= cell.top && box.bottom <= cell.bottom,
-      rows: range.getClientRects().length, listMarkers };
+      rows: range.getClientRects().length, listMarkers, checkboxInset: box.left - contentLeft };
   });
   try {
     for (const large of [false, true]) {
@@ -784,9 +788,17 @@ async function checkCellTypography(page: import('puppeteer-core').Page) {
         assert.ok(unusedHeight <= 1.5, `${context}: the reading row tracks its text height, extra height: ${unusedHeight}`);
         const wrapped = await read(task);
         assert.ok(wrapped.rows > 1, `${context}: the nested task wraps in the cell`);
-        assert.deepEqual(wrapped.listMarkers, ['disc', 'decimal', 'disc']);
-        assert.deepEqual((await read(smallTask)).listMarkers, ['disc', 'decimal']);
-        for (const marker of [wrapped, await read(smallTask)]) {
+        assert.deepEqual(wrapped.listMarkers, ['none', 'decimal', 'disc']);
+        assert.deepEqual((await read(smallTask)).listMarkers, ['none', 'decimal']);
+        const standalone = await read(rootTask);
+        assert.ok(Math.abs(standalone.checkboxInset) < .5, `${context}: a standalone task starts at the cell content edge`);
+        const mixed = await page.$eval(mixedList, list => ({
+          gutter: parseFloat(getComputedStyle(list).paddingInlineStart),
+          markers: [...list.children].map(item => getComputedStyle(item).listStyleType)
+        }));
+        assert.ok(mixed.gutter > 0, `${context}: a mixed list keeps room for ordinary markers`);
+        assert.deepEqual(mixed.markers, ['disc', 'none']);
+        for (const marker of [wrapped, await read(smallTask), standalone]) {
           assert.equal(marker.lineHeight, expected);
           assert.ok(marker.insideCell && Math.abs(marker.centerDelta) < .5, `${context}: checkbox centers on the first line`);
         }
