@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const puppeteer = require('puppeteer-core');
+const { findActiveWebview } = require('./native-input-delivery.cjs');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 exports.run = async function () {
@@ -43,19 +44,24 @@ exports.run = async function () {
     browser = await puppeteer.connect({ browserURL: process.env.MEO_NATIVE_BROWSER_URL || 'http://127.0.0.1:9337', defaultViewport: null });
     let frame;
     const locateActiveFrame = async () => {
-      const matches = [];
-      for (const page of await browser.pages()) {
-        for (const candidate of page.frames()) {
-          const active = await candidate.evaluate(() => window.frameElement?.id === 'active-frame'
-            && getComputedStyle(window.frameElement).visibility === 'visible'
-            && document.querySelector('.editor-root')?.textContent.includes('Auto-save endurance')
-            && !document.querySelector('.meo-preload-toolbar')
-            && !!document.querySelector('.cm-content')).catch(() => false);
-          if (active) matches.push(candidate);
-        }
+      let target;
+      try {
+        target = await findActiveWebview(browser, 'Auto-save endurance');
+      } catch (error) {
+        if (error.code === 'ERR_ASSERTION' && error.actual === 0 && error.expected === 1) return undefined;
+        throw error;
       }
-      assert.ok(matches.length <= 1, 'Only one active Webview may own the disposable document');
-      return matches[0];
+      // The protocol resolves the iframe owner even when window.frameElement is unavailable.
+      const admission = await target.frame.evaluate(() => {
+        const host = document.querySelector('.editor-host');
+        const content = host?.querySelector('.cm-content');
+        return {
+          legacyOwnerId: window.frameElement?.id ?? null,
+          ready: host?.hidden === false && host.inert === false && content?.getBoundingClientRect().height > 0
+        };
+      });
+      report.frameAdmission = admission;
+      return admission.ready ? target.frame : undefined;
     };
     const waitForActiveFrame = async label => {
       await waitFor(async () => {
