@@ -69,6 +69,16 @@ Write, preview, and review complex Markdown in VS Code. Move freely between Live
 
 更多用法见[设置与剪贴板说明](docs/editing-preferences.md)、[图片目录与命名设置](docs/image-storage.md)及[自定义预设指南](preview-presets/README.zh-CN.md)。界面提供简体中文与 English，可切换浅色、深色或跟随 VS Code，并调整字号与行间距。
 
+## 用自定义动作串联常用操作
+
+在 **全部设置 → 快捷键** 中选择 **新建动作**，用一个快捷键执行多个操作。
+
+例如，在源码模式选中一行议题，用一个动作把它填入会议纪要模板，再切到实时模式查看结果。
+
+![左侧为插入会议纪要的自定义动作设置，右侧为执行后在实时模式中生成的会议纪要，包含日期、议题和待办](docs/readme/zh-cn/custom-actions.png)
+
+内置示例 **插入当前时间**，默认快捷键为 `Ctrl+Alt+T`。[使用说明](docs/editing-preferences.md#自定义动作)
+
 ## 在编辑器中审阅改动
 
 编辑器侧边显示新增、修改和删除标记，工具栏汇总变更数量，右侧概览标记帮助定位改动在全文中的分布。源码模式还可展开修改前的内容，结合上下文检查每处变化。

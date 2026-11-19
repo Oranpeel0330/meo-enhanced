@@ -69,6 +69,16 @@ Also supports Frontmatter Properties, GitHub Alerts, footnotes, task lists, Wiki
 
 See the [settings and clipboard guide](docs/editing-preferences.md), [image folder and naming settings](docs/image-storage.md), and [custom preset guide](preview-presets/README.md) for more. The interface supports English and Simplified Chinese, light/dark appearances or the current VS Code theme, and adjustable font size and line spacing.
 
+## Combine steps with custom actions
+
+In **All settings → Shortcuts**, choose **New action** to run multiple steps with one shortcut.
+
+For example, select an agenda item in Source. A custom action fills in a meeting notes template and switches to Live.
+
+![Custom action settings on the left and the generated meeting notes in Live on the right](docs/readme/en/custom-actions.png)
+
+The built-in **Insert current time** example defaults to `Ctrl+Alt+T`. [Custom actions guide](docs/editing-preferences.md#自定义动作)
+
 ## Review changes in the editor
 
 See additions, modifications, and deletions beside the document, with change counts in the toolbar and an overview ruler showing their distribution throughout the file. Source mode can also show the previous content so you can review each change in context.
