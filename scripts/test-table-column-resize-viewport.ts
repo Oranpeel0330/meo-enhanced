@@ -33,13 +33,25 @@ const firstDivider = { column: '0', width: '2px', backgroundColor: 'rgb(49, 109,
 
 async function checkResizeHover(page: Page): Promise<void> {
   const points = await page.evaluate(() => {
-    const { anchor } = (window as any).__resizeProbe as { anchor: HTMLElement };
-    const body = anchor.querySelector('[data-table-resize-column="0"]')!;
-    const sticky = document.querySelector('.meo-md-html-table-sticky-table [data-table-resize-column="0"]')!;
-    return [body, sticky].map(handle => {
+    const { table, viewport } = (window as any).__resizeProbe as { table: HTMLTableElement; viewport: HTMLElement };
+    const selector = '[data-table-resize-column="0"]';
+    const chrome = table.closest('.meo-md-html-table-shell')!.querySelector('.meo-md-html-table-sticky-chrome.is-visible')!;
+    const viewportRect = viewport.getBoundingClientRect();
+    const headerBottom = chrome.getBoundingClientRect().bottom;
+    const hitPoint = (handle: Element, visibleTop: number) => {
       const rect = handle.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    });
+      const top = Math.max(rect.top, visibleTop);
+      const bottom = Math.min(rect.bottom, viewportRect.bottom);
+      if (bottom - top < 2) return null;
+      const point = { x: rect.left + rect.width / 2, y: (top + bottom) / 2 };
+      return document.elementFromPoint(point.x, point.y) === handle ? point : null;
+    };
+    // The first visible row can extend behind the floating header.
+    const body = Array.from(table.tBodies[0]!.querySelectorAll(selector))
+      .map(handle => hitPoint(handle, Math.max(headerBottom, viewportRect.top))).find(Boolean);
+    const sticky = hitPoint(chrome.querySelector(selector)!, viewportRect.top);
+    if (!body || !sticky) throw new Error('Both resize handles need a visible pointer target');
+    return [body, sticky];
   });
   await page.mouse.move(0, 0);
   assert.deepEqual(await highlightedDividers(page), [[], []]);

@@ -710,6 +710,121 @@ async function checkSingleLineCellPresentation(page: import('puppeteer-core').Pa
   }
 }
 
+async function checkCellTypography(page: import('puppeteer-core').Page) {
+  const task = 'tbody tr:first-child .meo-md-table-task-content';
+  const smallTask = 'tbody tr:nth-child(2) .meo-md-table-task-content';
+  const preview = 'tbody tr:nth-child(3) .meo-md-html-table-cell-preview';
+  const layout = await page.addStyleTag({ content: `
+    .cm-editor .meo-md-html-table { width: 185px !important; table-layout: fixed !important; }
+    .cm-editor .meo-md-html-table :is(th, td) { width: 185px !important; max-width: 185px !important; }
+  ` });
+  const originalAppearance = await page.evaluate(() =>
+    ['style', 'data-editor-appearance', 'data-meo-ui-contrast', 'data-meo-ui-color-source']
+      .map(name => [name, document.documentElement.getAttribute(name)] as const));
+  const table = '正文行距\n正文第二行\n\n| 标记 |\n| --- |\n'
+    + '| - 1. - [X] 多种标记与折行。Task text wraps across several visual lines. |\n'
+    + '| > 7. - [ ] 引用任务 |\n| 第一行<br>第二行 |';
+  const read = (selector: string) => page.$eval(selector, row => {
+    const checkbox = row.querySelector('input')!;
+    const body = row.lastElementChild!;
+    const range = document.createRange();
+    const text = document.createTreeWalker(body.querySelector('.meo-md-table-source-body') ?? body, NodeFilter.SHOW_TEXT).nextNode()!;
+    range.selectNodeContents(text);
+    const box = checkbox.getBoundingClientRect();
+    const cell = row.closest('td')!.getBoundingClientRect();
+    const lineHeight = parseFloat(getComputedStyle(body).lineHeight);
+    const center = body.getBoundingClientRect().top + lineHeight / 2;
+    const listMarkers = [];
+    for (let item = row.closest('li'); item; item = item.parentElement?.closest('li') ?? null) {
+      listMarkers.push(getComputedStyle(item).listStyleType);
+    }
+    return { centerDelta: (box.top + box.bottom) / 2 - center, top: box.top, lineHeight,
+      insideCell: box.top >= cell.top && box.bottom <= cell.bottom,
+      rows: range.getClientRects().length, listMarkers };
+  });
+  try {
+    for (const large of [false, true]) {
+      const label = large ? 'optimized' : 'ordinary';
+      const markdown = table + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+      assert.equal(assessLargeDocument(markdown).boundedEditorWork, large, `${label}/policy`);
+      await page.evaluate(({ text, appearance }) => {
+        (window as any).__tableCellEditor?.destroy();
+        const harness = (window as any).TableStabilityHarness;
+        harness.applyBuiltInVisualBaseline(appearance);
+        (window as any).__tableCellEditor = harness.createEditor({
+          parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+        });
+      }, { text: markdown, appearance: large ? 'light' : 'dark' });
+      await page.waitForSelector(`${task} input`, { visible: true });
+      await page.waitForFunction(large => (window as any).TableStabilityHarness
+        .usesLargeDocumentDerivedWorkBudget((window as any).__tableCellEditor.view.state) === large, {}, large);
+      for (const [font, spacing] of [[16, 1.5], [10, 1], [20, 1.8]] as const) {
+        await page.evaluate(([font, spacing]) => {
+          (window as any).__tableCellEditor.preserveViewport(() => {
+            const style = document.documentElement.style;
+            style.setProperty('--meo-user-editor-font-size', `${font}px`);
+            style.setProperty('--meo-user-editor-line-height', String(spacing));
+          }, true, { resizeTableRows: true });
+        }, [font, spacing]);
+        await page.evaluate(async () => {
+          for (let frame = 0; frame < 8; frame++) await new Promise(requestAnimationFrame);
+        });
+        const expected = font * spacing;
+        const context = `${label}/${font}/${spacing}`;
+        assert.equal(await page.$eval('.cm-line', line => parseFloat(getComputedStyle(line).lineHeight)), expected);
+        assert.equal(await page.$eval('thead th textarea', input => parseFloat(getComputedStyle(input).lineHeight)), expected);
+        const lineStep = await page.$$eval(`${preview} .meo-md-html-table-cell-line`, lines =>
+          lines[1]!.getBoundingClientRect().top - lines[0]!.getBoundingClientRect().top);
+        assert.ok(Math.abs(lineStep - expected) < .5, `${context}: explicit line breaks follow body line spacing`);
+        const unusedHeight = await page.$eval(preview, element => {
+          const cellBottom = element.closest('td')!.getBoundingClientRect().bottom;
+          const textBottom = element.lastElementChild!.getBoundingClientRect().bottom;
+          return cellBottom - textBottom - parseFloat(getComputedStyle(element).paddingBottom);
+        });
+        assert.ok(unusedHeight <= 1.5, `${context}: the reading row tracks its text height, extra height: ${unusedHeight}`);
+        const wrapped = await read(task);
+        assert.ok(wrapped.rows > 1, `${context}: the nested task wraps in the cell`);
+        assert.deepEqual(wrapped.listMarkers, ['disc', 'decimal', 'disc']);
+        assert.deepEqual((await read(smallTask)).listMarkers, ['disc', 'decimal']);
+        for (const marker of [wrapped, await read(smallTask)]) {
+          assert.equal(marker.lineHeight, expected);
+          assert.ok(marker.insideCell && Math.abs(marker.centerDelta) < .5, `${context}: checkbox centers on the first line`);
+        }
+        const first = await page.$eval(`${task} > div`, element => {
+          const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+          const range = document.createRange();
+          range.setStart(text, 0); range.setEnd(text, 1);
+          const rect = range.getBoundingClientRect();
+          return { x: rect.left + rect.width / 4, y: rect.top + rect.height / 2 };
+        });
+        await page.mouse.click(first.x, first.y);
+        await page.waitForSelector(`${task} .meo-md-table-source-body`, { visible: true });
+        const editing = await read(task);
+        assert.deepEqual(editing.listMarkers, wrapped.listMarkers);
+        assert.equal(editing.lineHeight, expected);
+        assert.ok(Math.abs(editing.centerDelta) < .5 && Math.abs(editing.top - wrapped.top) < .5,
+          `${context}: the checkbox retains its first-line position while editing`);
+        if (font === 16 && process.env.MEO_TEST_SCREENSHOTS) {
+          fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+          await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `table-typography-${label}.png`) });
+        }
+        await page.keyboard.press('Escape');
+      }
+      console.log(`Table marker alignment and line spacing passed (${label}, actual derived-work budget)`);
+    }
+  } finally {
+    await page.evaluate(attributes => {
+      (window as any).__tableCellEditor?.destroy();
+      for (const [name, value] of attributes) {
+        if (value === null) document.documentElement.removeAttribute(name);
+        else document.documentElement.setAttribute(name, value);
+      }
+    }, originalAppearance);
+    await layout.evaluate(element => element.remove());
+    await layout.dispose();
+  }
+}
+
 async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
   const layout = await page.addStyleTag({ content: `
     #app { height: 400px; }
@@ -1467,6 +1582,10 @@ async function main() {
       }
     ` });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+    if (process.argv.includes('--typography-only')) {
+      await checkCellTypography(page);
+      return;
+    }
     if (process.argv.includes('--keyboard-viewport-only')) {
       await checkCellKeyboardViewport(page);
       return;
@@ -1508,6 +1627,7 @@ async function main() {
     await checkCellKeyboardViewport(page);
     await checkCellEntryRegressions(page);
     if (process.argv.includes('--entry-regressions-only') || process.argv.includes('--rapid-input-only') || process.argv.includes('--entry-drag-only')) return;
+    await checkCellTypography(page);
     await checkCellHeightTransitions(page);
     await checkCellHeightFallback(page);
     await page.addStyleTag({ content: '.cm-editor .meo-md-html-table { width: 240px !important; table-layout: fixed !important; } .cm-editor .meo-md-html-table :is(th, td) { width: 120px !important; max-width: 120px !important; }' });

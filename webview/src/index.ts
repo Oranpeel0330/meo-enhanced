@@ -2367,7 +2367,7 @@ const switchToSourceAction = (emphasis: 'primary' | 'secondary' = 'secondary'): 
 const applyEditorLineHeight = (value: number, { post = false, refreshPreview = true } = {}): void => {
   editorLineHeight = normalizeEditorLineHeight(value);
   const mutate = () => document.documentElement.style.setProperty('--meo-user-editor-line-height', String(editorLineHeight));
-  if (editor?.preserveViewport) editor.preserveViewport(mutate, true); else mutate();
+  if (editor?.preserveViewport) editor.preserveViewport(mutate, true, { resizeTableRows: true }); else mutate();
   if (refreshPreview) previewAdapter.refreshVisible(getCurrentEditorText(), { preserveViewport: true, preserveFrame: true });
   if (post) vscode.postMessage({ type: 'setEditorLineHeight', value: editorLineHeight });
   settingsWindow?.present();
@@ -2399,7 +2399,7 @@ const applyEditorFontSizePreference = (
       document.documentElement.style.removeProperty('--meo-user-editor-font-size');
     }
   };
-  if (editor?.preserveViewport) editor.preserveViewport(mutate, true);
+  if (editor?.preserveViewport) editor.preserveViewport(mutate, true, { resizeTableRows: true });
   else mutate();
   syncEditorFontSizeControls();
   if (refreshPreview) {
@@ -3737,7 +3737,7 @@ const themeAdapter = createAppearanceWebviewAdapter({
   },
   refreshMermaidTheme: () => mermaidDiagramRenderPool.refreshTheme(),
   applyWithEditorViewportPreserved: (action) => {
-    if (editor) editor.preserveViewport(action, true);
+    if (editor) editor.preserveViewport(action, true, { resizeTableRows: true });
     else action();
   },
   refreshEditorDecorations: () => editor?.refreshDecorations(),

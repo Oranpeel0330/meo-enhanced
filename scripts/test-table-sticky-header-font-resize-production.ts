@@ -25,7 +25,7 @@ try {
     :root{--meo-background:#fff;--meo-foreground:#111;--meo-code-background:#f4f4f4;
       --meo-surface-background:#fff;--meo-font-live:Arial;--meo-font-live-weight:400;
       --meo-font-live-size:16px;--meo-font-source:monospace;--meo-font-source-weight:400;
-      --meo-font-source-size:14px;--meo-line-height-live:1.6;--meo-line-height-source:1.5}
+      --meo-font-source-size:14px;--meo-line-height-live:var(--meo-user-editor-line-height,1.6);--meo-line-height-source:1.5}
     html,body{margin:0;height:100%}#app{height:540px}
   ` });
   await page.addScriptTag({ path: path.join(temp, 'bundle.js') });
@@ -56,12 +56,15 @@ try {
       const current = find();
       const chrome = current?.querySelector<HTMLElement>('.meo-md-html-table-sticky-chrome');
       const table = current?.querySelector<HTMLElement>('.meo-md-html-table:not(.meo-md-html-table-sticky-table)');
+      const stickyTable = chrome?.querySelector('.meo-md-html-table-sticky-table');
       return {
         label,
         visible: chrome?.classList.contains('is-visible') ?? false,
         owner: chrome?.dataset.tableStickyHeaderOwner ?? null,
         tableTop: table?.getBoundingClientRect().top ?? null,
         tableBottom: table?.getBoundingClientRect().bottom ?? null,
+        tableLineHeight: table ? parseFloat(getComputedStyle(table).lineHeight) : null,
+        stickyLineHeight: stickyTable ? parseFloat(getComputedStyle(stickyTable).lineHeight) : null,
         viewportTop: scroller.getBoundingClientRect().top
       };
     };
@@ -69,9 +72,20 @@ try {
     for (const size of [15, 16, 17, 18, 19, 20, 19, 18, 17, 16, 15]) {
       editor.preserveViewport(() => {
         document.documentElement.style.setProperty('--meo-user-editor-font-size', `${size}px`);
-      }, true);
+      }, true, { resizeTableRows: true });
       await wait();
       snapshots.push(snapshot(String(size)));
+    }
+    for (const spacing of [1.3, 1.8, 1.6]) {
+      editor.preserveViewport(() => {
+        document.documentElement.style.setProperty('--meo-user-editor-line-height', String(spacing));
+      }, true, { resizeTableRows: true });
+      await wait();
+      const measured = snapshot(`line height ${spacing}`);
+      if (measured.tableLineHeight !== 15 * spacing || measured.stickyLineHeight !== measured.tableLineHeight) {
+        throw new Error(`Table and floating header must follow the configured line height: ${JSON.stringify(measured)}`);
+      }
+      snapshots.push(measured);
     }
     editor.setText(source, true);
     await wait();
@@ -104,7 +118,7 @@ try {
   if (failures.length > 0 || !result[0].visible || !cellEditable) {
     throw new Error(`Floating table header disappeared or table cell stopped responding: ${JSON.stringify({ result, failures, cellEditable })}`);
   }
-  console.log('table sticky header survives font resizing in long document');
+  console.log('table sticky header follows font size and line spacing in long document');
 } finally {
   await closeTestBrowser(browser);
   fs.rmSync(temp, { recursive: true, force: true });

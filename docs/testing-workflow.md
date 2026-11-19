@@ -1951,6 +1951,14 @@ as multiline cells. Both document sizes exercise pointer entry, body selection,
 caret movement into the marker, visual wrapping, whole-cell source editing and
 undo. A plain single-line cell witnesses the native editing path.
 
+`scripts/test-table-cell-editing-production.ts --typography-only` measures
+the first-line checkbox center in wrapped and unwrapped tasks, including nested
+bullet and numbered markers, in reading and editing states. The ordinary dark
+and optimized light cases change font size and line spacing through the existing
+viewport owner. Table text and the native input follow the document line height.
+Reading rows shrink with smaller line spacing. The full production table editing
+contract includes this slice.
+
 The same owner supports `--height-only` for rendered/source row-height transitions.
 Ordinary and actually optimized documents check compact long-link previews,
 held-pointer and Tab handoffs within one row, stable cross-cell drags, taller/shorter source editors,

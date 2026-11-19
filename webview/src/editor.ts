@@ -137,6 +137,7 @@ import {
   projectMountedTablePositions,
   refreshMountedTableUiLanguage,
   flushMountedTableLayouts,
+  scheduleMountedTableRowSizing,
   focusMountedTableInput,
   mountedTableEntryInput,
   mountedTableInputsForLine,
@@ -4772,8 +4773,11 @@ export function createEditor({
     refreshInputSuggestions() {
       view.dispatch({ effects: refreshInputSuggestions.of(null) });
     },
-    preserveViewport(mutate: () => void, immediateLayout = false) {
-      viewportController.preserveDocumentAnchorWhileMutation(mutate, immediateLayout);
+    preserveViewport(mutate: () => void, immediateLayout = false, { resizeTableRows = false } = {}) {
+      viewportController.preserveDocumentAnchorWhileMutation(() => {
+        mutate();
+        if (resizeTableRows && currentMode === 'live') scheduleMountedTableRowSizing(view);
+      }, immediateLayout);
     },
     preserveViewportLayout(mutate: () => void) {
       const anchor = viewportController.captureDocumentAnchor();

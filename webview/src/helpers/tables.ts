@@ -2952,6 +2952,10 @@ export function refreshMountedTableUiLanguage(view: EditorView, language: UiLang
   for (const widget of widgets) widget.refreshUiLanguage(language);
 }
 
+export function scheduleMountedTableRowSizing(view: EditorView): void {
+  for (const widget of mountedTableWidgets.get(view) ?? []) widget.scheduleLayout({ resizeRows: true });
+}
+
 /** Completes attached table geometry before a mode transition exposes the editor. */
 export function flushMountedTableLayouts(view: EditorView): boolean {
   const widgets = mountedTableWidgets.get(view);

@@ -6823,6 +6823,7 @@ body.outline-resizing .preview-frame {
   --meo-table-outline-width: 1.5px;
   --meo-table-outline-color: color-mix(in srgb, var(--meo-semantic-tableSelectionBorder) 80%, var(--meo-background));
   border-collapse: collapse;
+  line-height: var(--meo-active-editor-line-height);
   width: fit-content;
   max-width: 100%;
   min-width: 0;
@@ -7347,9 +7348,21 @@ html[data-editor-appearance='dark'] body.vscode-dark
 }
 
 .cm-editor .meo-md-html-table-cell-task-checkbox {
-  margin-inline-end: 0.5ch;
+  --meo-table-task-checkbox-size: min(var(--meo-task-checkbox-size), 1lh);
+  align-self: center;
+  inline-size: var(--meo-table-task-checkbox-size);
+  block-size: var(--meo-table-task-checkbox-size);
+  inset-block-start: auto;
+  margin: 0;
   pointer-events: none;
-  vertical-align: middle;
+}
+
+.cm-editor .meo-md-html-table-cell-task-checkbox.is-done::after {
+  inset: 0;
+  margin: auto;
+  box-sizing: border-box;
+  inline-size: 50%;
+  block-size: 75%;
 }
 
 .cm-editor .meo-md-html-table-cell-task {
@@ -7582,7 +7595,15 @@ html[data-editor-appearance='dark'] body.vscode-dark
 .cm-editor .meo-md-table-task-content {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: 1lh auto;
+  column-gap: 0.5ch;
   align-items: baseline;
+}
+
+.cm-editor .meo-md-table-task-content > div {
+  /* The text spans both tracks while the checkbox centers in the first line. */
+  grid-row: 1 / span 2;
+  grid-column: 2;
 }
 
 .cm-editor .meo-md-html-table-cell-content.is-editing-line.is-cell-composing > textarea {
