@@ -215,9 +215,12 @@ try {
         await new Promise(resolve => setTimeout(resolve, 250));
         await page.evaluate(() => {
           const global = window as any;
-          global.__shortcutPreferences = global.EditingSettingsHarness.changeEditingPreferences(
+          const { builtinShortcutConflicts, changeEditingPreferences, shortcutReplacements } = global.EditingSettingsHarness;
+          const keys = ['Ctrl + Enter'];
+          const confirmedReplacements = shortcutReplacements(builtinShortcutConflicts('preview', keys, global.__shortcutPreferences, 'other'));
+          global.__shortcutPreferences = changeEditingPreferences(
             global.__shortcutPreferences,
-            { type: 'bind', command: 'preview', keys: ['Ctrl + Enter'], replaceConflicts: true }, 'other'
+            { type: 'bind', command: 'preview', keys, confirmedReplacements }, 'other'
           );
           window.dispatchEvent(new MessageEvent('message', { data: {
             type: 'editingPreferencesChanged', preferences: global.__shortcutPreferences, revision: 2

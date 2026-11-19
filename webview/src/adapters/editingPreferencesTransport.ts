@@ -38,6 +38,7 @@ export function createEditingPreferencesTransport(options: {
       if (!request) return false;
       pending.delete(response.requestId); cancel(request.timer);
       if (response.result.ok) options.onSnapshot?.(response.result.value, response.revision);
+      else if ('preferences' in response.result) options.onSnapshot?.(response.result.preferences, response.revision);
       request.resolve(response.result); return true;
     },
     dispose() {

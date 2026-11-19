@@ -134,16 +134,21 @@ function wrapMath(view: EditorView, block: boolean): boolean {
   return true;
 }
 
-function structuralLineCommand(view: EditorView, run: (target: EditorView) => boolean): boolean {
+function structuralLineSelection(view: EditorView): SelectionRange | null {
   const current = view.state.selection.main;
   let node = syntaxTree(view.state).resolveInner(current.head, -1);
   while (node.parent) {
     if (['Table', 'FencedCode'].includes(node.name) && node.from <= current.from && node.to >= current.to) {
-      view.dispatch({ selection: EditorSelection.range(node.from, node.to) });
-      break;
+      return EditorSelection.range(node.from, node.to);
     }
     node = node.parent;
   }
+  return null;
+}
+
+function structuralLineCommand(view: EditorView, run: (target: EditorView) => boolean): boolean {
+  const selection = structuralLineSelection(view);
+  if (selection) view.dispatch({ selection });
   return run(view);
 }
 
@@ -167,6 +172,33 @@ export function toggleHtmlComment(view: EditorView, lines: boolean, blocked: () 
   view.focus(); return true;
 }
 
+function selectedDelimitedCells(view: EditorView): string[][] | null {
+  if (isCodeInput(view)) return null;
+  const selection = view.state.selection.main;
+  const text = view.state.sliceDoc(selection.from, selection.to);
+  const tsv = parseDelimitedTable(text, '\t');
+  const cells = tsv && tsv[0].length > 1 ? tsv : parseDelimitedTable(text, ',');
+  return cells && cells[0].length > 1 ? cells : null;
+}
+
+export function canRunCustomEditorCommand(view: EditorView, command: EditorCommandId): boolean {
+  const { state } = view;
+  if (command === 'convert') return selectedDelimitedCells(view) !== null;
+  if (command === 'taskDone') return selectedLines(view).some(line => readMarkdownListPrefix(line.text)?.taskBracketStart !== undefined);
+  if (command === 'addCursor') return state.doc.lineAt(state.selection.main.head).number < state.doc.lines;
+  if (command === 'shrinkSelection') {
+    const record = selectionHistory.get(view);
+    return Boolean(record?.after.eq(state.selection) && record.before.length);
+  }
+  if (command === 'moveUp' || command === 'moveDown') {
+    const block = structuralLineSelection(view);
+    return (block ? [block] : state.selection.ranges).some(range => command === 'moveUp'
+      ? state.doc.lineAt(range.from).number > 1
+      : state.doc.lineAt(range.empty ? range.to : range.to - 1).number < state.doc.lines);
+  }
+  return true;
+}
+
 export function runEditorCommand(view: EditorView, command: EditorCommandId): boolean {
   if (/^heading/.test(command) || ['bullet', 'ordered', 'taskList', 'taskDone', 'quote'].includes(command)) return toggleLines(view, command);
   if (command === 'inlineMath' || command === 'blockMath') return wrapMath(view, command === 'blockMath');
@@ -180,12 +212,9 @@ export function runEditorCommand(view: EditorView, command: EditorCommandId): bo
     return true;
   }
   if (command === 'convert') {
-    if (isCodeInput(view)) return false;
+    const cells = selectedDelimitedCells(view);
+    if (!cells) return false;
     const selection = view.state.selection.main;
-    const text = view.state.sliceDoc(selection.from, selection.to);
-    const tsv = parseDelimitedTable(text, '\t');
-    const cells = tsv && tsv[0].length > 1 ? tsv : parseDelimitedTable(text, ',');
-    if (!cells || cells[0].length < 2) return false;
     const insert = markdownTableFromCells(cells);
     view.dispatch({ changes: { from: selection.from, to: selection.to, insert }, selection: EditorSelection.cursor(selection.from + insert.length), annotations: annotation });
     return true;

@@ -1,6 +1,7 @@
 import { defaultImageStorage, imageNamingModes, type ImageLocationState, type ImageStoragePreferences } from '../../../src/foundation/imageStorage';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
 import type { ImageLocationRequest, ImageLocationResponse } from '../../../src/protocol/imageStorage';
+import { imageLocationVariables } from '../application/settingsCatalog';
 import { createTooltip } from './tooltip';
 
 type Request = Omit<Extract<ImageLocationRequest, { action: 'read' | 'selectFolder' }>, 'type' | 'requestId'>
@@ -72,17 +73,11 @@ export function createImageLocationSettings(options: {
   const ruleBox = node('div', 'image-location-rule-box'); ruleBox.append(rule, picker);
   const advancedHint = node('p', 'settings-description');
   const variables = node('div', 'image-location-variables');
-  const tokens = [
-    ['fileDirname', '当前文档目录', 'Document directory'],
-    ['fileBasename', '文档名，含扩展名', 'File name with extension'],
-    ['fileBasenameNoExtension', '文档名，不含扩展名', 'File name without extension'],
-    ['fileExtname', '扩展名，含点号', 'Extension including the dot']
-  ].map(([name, zh, en]) => {
+  const tokens = imageLocationVariables.map(([name, zh, en]) => {
     const value = '${' + name + '}';
-    const button = node('button', 'settings-button image-location-token', value); button.type = 'button';
-    button.setAttribute('aria-label', value);
+    const button = node('button', 'settings-button image-location-token', t(zh, en)); button.type = 'button';
     const tooltip = createTooltip(button, {
-      id: 'meo-image-variable-' + name, content: { text: t(zh, en) }
+      id: 'meo-image-variable-' + name, content: { text: value }
     });
     button.addEventListener('click', () => {
       rule.setRangeText(value, rule.selectionStart ?? rule.value.length, rule.selectionEnd ?? rule.value.length, 'end');
@@ -190,7 +185,7 @@ export function createImageLocationSettings(options: {
     for (const item of namingControls) item.text.textContent = namingLabels[item.mode];
     exampleLabel.textContent = t('保存示例', 'Save example');
     exampleValue.textContent = previewPending ? t('正在计算…', 'Calculating…') : state?.examplePath ?? '—';
-    for (const token of tokens) token.tooltip.setContent({ text: t(token.zh, token.en) });
+    for (const token of tokens) token.button.textContent = t(token.zh, token.en);
     legacy.hidden = !state?.legacy || dirty;
     legacy.textContent = t('沿用原有目录配置；主动修改后使用这里的新规则。', 'Your previous folder configuration is preserved until you change it here.');
     notice.textContent = t('有效修改自动保存，仅影响新粘贴的图片。示例使用 .png，实际后缀跟随图片格式。', 'Valid changes save automatically and apply to newly pasted images. The example uses .png; the actual extension follows the image format.');

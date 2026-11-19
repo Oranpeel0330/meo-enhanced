@@ -9,6 +9,7 @@ import { createDocumentBlocks } from './documentBlocks';
 import { createDocumentContentTransport } from './adapters/documentContentTransport';
 import { createLoadingPresentation } from './adapters/loadingPresentation';
 import { effectiveShortcuts } from '../../src/application/editingPreferences';
+import { customShortcutActionTitle, customShortcutTitle, settingsText } from './application/settingsCatalog';
 import { version as productVersion } from '../../package.json';
 import type { DocumentText, DocumentTextEdit } from '../../src/foundation/documentSnapshot';
 import { createDocumentStatisticsReporter } from './adapters/documentStatistics';
@@ -3171,18 +3172,30 @@ const shortcutHandlerContext: ShortcutHandlerContext = {
   get shortcuts() { return editingPreferences.shortcuts; },
   get customShortcuts() { return editingPreferences.customShortcuts; },
   customShortcutMatcher,
+  reportCustomShortcutError(rule, index, error) {
+    console.error('[MEO webview] Custom action step failed', { id: rule.id, step: index + 1, error });
+    failureNotice.setFailureNotice(() => {
+      const language = activeUiLanguage;
+      const name = customShortcutTitle(rule, language);
+      const step = customShortcutActionTitle(rule.actions[index], language);
+      return {
+        title: settingsText(language, '自定义动作执行失败', 'Custom action failed'),
+        message: settingsText(language, `「${name}」在第 ${index + 1} 步「${step}」停止。前面已完成的修改会保留。`,
+          `“${name}” stopped at step ${index + 1}, “${step}”. Changes already made are kept.`)
+      };
+    }, 'error');
+  },
+  canInsertSnippet: template => editor?.canInsertSnippet(template, imageDimensionDocumentId ?? '') ?? false,
   insertSnippet: template => editor?.insertSnippet(template, imageDimensionDocumentId ?? '') ?? false,
-  setMode: mode => { void editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' }); },
-  requestPreview: () => { void editorModeRuntime.dispatch({ type: 'requestMode', mode: getActiveEditorMode() === 'preview' ? getActiveEditableMode() : 'preview', source: 'user' }); },
-  requestPlainPaste: () => { void pastePlainFromHost(); },
-  requestTableCopy: format => { void copyTableToHost(format); },
+  setMode: mode => editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' }),
+  requestPreview: () => editorModeRuntime.dispatch({ type: 'requestMode', mode: getActiveEditorMode() === 'preview' ? getActiveEditableMode() : 'preview', source: 'user' }),
+  requestPlainPaste: () => pastePlainFromHost(),
+  requestTableCopy: format => copyTableToHost(format),
   get editorSurfaceActive() { return getActiveEditorMode() !== 'preview'; },
   requestSave,
   requestSaveAs,
   openFindPanel: (target) => findPanelController.open(target),
-  requestMode: (mode) => {
-    void editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' });
-  }
+  requestMode: mode => editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' })
 };
 
 const handleLocalEditorChange = (edit: DocumentTextEdit) => {

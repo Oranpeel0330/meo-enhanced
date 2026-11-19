@@ -6,7 +6,8 @@ import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 import { saveClipboardImageFile } from '../src/host/clipboardImageSave';
 import { createImageStorageHost, type ImageStorageContext } from '../src/host/imageStorage';
 import type { ImageLocationRequest } from '../src/protocol/imageStorage';
-import { editorCommandIds } from '../src/foundation/editingPreferences';
+import { defaultInputAssistance, editorCommandIds, insertCurrentTimeExampleId, insertCurrentTimeExampleName, type CustomShortcutAction } from '../src/foundation/editingPreferences';
+import { createEditingPreferencesHost } from '../src/host/editingPreferences';
 import { assessLargeDocument } from '../src/foundation/largeDocument';
 import { version as productVersion } from '../package.json';
 import { renderPreviewDocument } from '../src/export/runtime';
@@ -19,6 +20,14 @@ const browser = await launchTestBrowser();
 let page = await browser.newPage();
 let imagePasteRoot: string | null = null;
 const errors: string[] = []; page.on('pageerror', error => errors.push(String(error)));
+const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+const luminance = (color: string) => channels(color).reduce((total, value, index) => {
+  const channel = value / 255;
+  const linear = channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  return total + linear * [0.2126, 0.7152, 0.0722][index];
+}, 0);
+const contrast = (a: string, b: string) => (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
+
 async function clickImageMode(mode: string) {
   const selector = '.image-location-modes input[value="' + mode + '"]';
   await page.evaluate(selector => {
@@ -123,7 +132,13 @@ try {
             window.__preferences=window.EditingSettingsHarness.changeEditingPreferences(window.__preferences,message.change,'other');
             const revision=++window.__revision;
             queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'updatedEditingPreferences',requestId:message.requestId,revision,result:{ok:true,value:window.__preferences}}})));
-          } catch(error) { queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'updatedEditingPreferences',requestId:message.requestId,revision:window.__revision,result:{ok:false,error:{code:'operation-failed',message:String(error)}}}}))); }
+          } catch(error) {
+            const stale = error instanceof window.EditingSettingsHarness.ShortcutConflictsChangedError;
+            const result = stale
+              ? {ok:false,error:{code:'shortcut-conflicts-changed',message:String(error)},preferences:window.__preferences}
+              : {ok:false,error:{code:'operation-failed',message:String(error)}};
+            queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'updatedEditingPreferences',requestId:message.requestId,revision:window.__revision,result}})));
+          }
           };
           if(window.__holdNextUpdate) { window.__holdNextUpdate=false; window.__flushUpdate=apply; } else apply();
         }
@@ -189,34 +204,448 @@ try {
       await page.locator('.more-tools-settings-button').click();
       await page.locator('[data-tab="shortcuts"]').click();
     };
-    const focusStart = async () => {
-      await page.focus('.cm-content');
-      await page.keyboard.press('Home');
-    };
+    const focusStart = () => page.evaluate(() => {
+      const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      view.dispatch({ selection: { anchor: 0 } });
+      view.focus();
+    });
     const fixture = 'target\n\n';
     await openFixture(fixture);
     await ready();
     await openShortcuts();
+    const settings = '.settings-window';
+    const list = settings + ' .settings-content';
+    assert.equal(await page.$eval('#meo-settings-customShortcuts h3', element => element.textContent), '自定义动作');
+    const originalSize = await page.$eval(settings, element => element.getBoundingClientRect().toJSON());
     await page.locator('[data-add-custom-shortcut]').click();
     const form = '.settings-custom-shortcut-form';
+    const footerHint = '.settings-shortcut-skip-hint';
+    const footerWarning = '.settings-shortcut-feedback';
+    const footerNotesFitBesideButtons = () => page.$eval('.settings-shortcut-page-footer', footer => {
+      const buttons = footer.querySelector('.settings-actions')!.getBoundingClientRect();
+      const notes = [...footer.querySelectorAll<HTMLElement>('.settings-shortcut-footer-note:not([hidden])')];
+      const messageRight = Math.max(...notes.map(note => note.getBoundingClientRect().right));
+      const gap = parseFloat(getComputedStyle(footer).columnGap);
+      return notes.length === 2 && buttons.right <= innerWidth && buttons.bottom <= innerHeight
+        && Math.abs(buttons.left - messageRight - gap) < 1 && notes.every(note => note.scrollWidth <= note.clientWidth);
+    });
+    const checkShortcutPlaceholder = async (selector: string) => {
+      const { hint, ink, background } = await page.$eval(selector, field => {
+        const style = getComputedStyle(field);
+        let background = style.backgroundColor;
+        for (let parent = field.parentElement; parent && background === 'rgba(0, 0, 0, 0)'; parent = parent.parentElement) {
+          background = getComputedStyle(parent).backgroundColor;
+        }
+        return { hint: getComputedStyle(field, '::placeholder').color, ink: style.color, background };
+      });
+      assert.ok(contrast(hint, background) >= 4.5, `${selector}: placeholder remains readable`);
+      assert.ok(contrast(hint, background) < contrast(ink, background), `${selector}: placeholder is quieter than submitted text`);
+    };
+    const editorPage = settings + '[data-page="shortcut-editor"]';
+    assert.equal(await page.$eval('#meo-shortcut-editor-title', element => element.textContent), '新建自定义动作');
+    assert.equal(await page.$$eval('dialog:modal', dialogs => dialogs.length), 1, 'The form uses the existing settings dialog');
+    assert.deepEqual(await page.$eval(editorPage, element => element.getBoundingClientRect().toJSON()), originalSize);
+    assert.ok(await page.$eval(list, element => element.getClientRects().length === 0));
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLInputElement)?.name), 'name');
+    assert.equal(await page.$eval(form + ' input[name="name"]', input => input.getAttribute('placeholder')), '例如，插入会议纪要');
+    await checkShortcutPlaceholder(form + ' input[name="name"]');
+    await page.waitForSelector('.settings-shortcut-empty-actions', { visible: true });
     await page.locator(form + ' input[name="name"]').fill('Meeting notes');
-    await page.select(form + ' select', 'source');
-    await page.select(form + ' select[name="action"]', '$' + 'snippet');
-    await page.locator(form + ' textarea').fill('[${1:Title}] ${TM_FILENAME} ${CURRENT_YEAR} $0');
-    const recorders = await page.$$(form + ' .settings-recorder');
-    await recorders[0].focus(); await bind('k');
-    await recorders[1].focus(); await page.keyboard.press('t');
-    assert.deepEqual(await page.$$eval(form + ' .settings-recorder', elements => elements.map(e => (e as HTMLInputElement).value)),
-      ['Ctrl + Alt + K', 'T']);
+    const scope = form + ' [data-shortcut-scope]';
+    const scopeMenu = form + ' .settings-shortcut-scope-menu';
+    const scopeOption = '[data-shortcut-scope-option]';
+    const addStep = '[data-shortcut-add-action]';
+    const pickerSearch = form + ' .settings-shortcut-picker input';
+    const pickerRestriction = ' .settings-shortcut-picker-restriction';
+    const codeBlock = '[data-shortcut-choice="codeBlock"]';
+    const snippet = '[data-shortcut-choice="snippet"]';
+    const deleteRow = '[data-shortcut-choice="rowDelete"]';
     const screenshots = '.local/test-artifacts/custom-shortcuts';
     await fs.mkdir(screenshots, { recursive: true });
-    await page.screenshot({ path: screenshots + '/settings-source.png' });
-    await page.locator(form + ' .settings-shortcut-controls > .settings-button:first-child').click();
+    await page.locator(addStep).click();
+    await checkShortcutPlaceholder(pickerSearch);
+    assert.equal(await page.$eval(codeBlock + pickerRestriction, hint => hint.textContent), '仅在表格外执行');
+    await page.$eval(codeBlock, option => option.scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: screenshots + '/shortcut-action-menu.png' });
+    await page.keyboard.press('Escape');
+    await page.locator(scope).click();
+    await page.waitForSelector(scopeMenu, { visible: true });
+    assert.equal(await page.$eval(scope + ' > svg', element => getComputedStyle(element).rotate), '180deg');
+    assert.deepEqual(await page.$$eval(scopeOption, options => options.map(option => option.getAttribute('data-shortcut-scope-option'))),
+      ['global', 'editor', 'live', 'source'], 'New actions have a unified editing area');
+    assert.ok(await page.$eval(scopeOption + '[aria-selected="true"]', element => element.childElementCount === 0));
+    for (const [value, text] of [
+      ['global', 'Live、Source 和 Preview 中都可触发。设置、搜索等输入框里不会触发。'], ['editor', '在 Live 和 Source 的编辑区触发，包含普通内容和表格单元格。'],
+      ['live', '在 Live 的编辑区触发，包含普通内容和表格单元格。'], ['source', '在 Source 的编辑区触发，包含普通内容和表格单元格。'],
+    ]) {
+      const option = '[data-shortcut-scope-option="' + value + '"]';
+      await page.hover(option);
+      await page.waitForFunction(selector => {
+        const id = document.querySelector(selector)?.getAttribute('aria-describedby');
+        return id && document.getElementById(id)?.classList.contains('is-visible');
+      }, {}, option);
+      const hint = await page.$eval(option, element => {
+        const hint = document.getElementById(element.getAttribute('aria-describedby')!)!;
+        return { text: hint.textContent ?? '', toLeft: hint.getBoundingClientRect().right < element.getBoundingClientRect().left };
+      });
+      assert.ok(hint.toLeft, 'The hover hint stays to the left of the scope option');
+      assert.equal(hint.text, text);
+    }
+    await page.screenshot({ path: screenshots + '/shortcut-page-scope-menu.png' });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(scopeMenu, { hidden: true });
+    assert.ok(await page.$(editorPage), 'Escape closes the scope menu and keeps the settings page open');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    assert.match(await page.$eval(scope, element => element.textContent ?? ''), /Source/);
+    assert.ok(await page.$eval(scope, element => element === document.activeElement));
+    const stepsLayout = () => page.$eval('.settings-shortcut-actions-list', element => ({
+      steps: element.getBoundingClientRect().toJSON(),
+      add: element.parentElement!.querySelector('[data-shortcut-add-action]')!.getBoundingClientRect().toJSON(),
+      scrollHeight: element.closest('.settings-shortcut-page-body')!.scrollHeight,
+    }));
+    const initialStepsLayout = await stepsLayout();
+    await page.locator(addStep).click();
+    assert.equal(await page.$eval(addStep, element => element.textContent), '添加步骤');
+    assert.deepEqual(await stepsLayout(), initialStepsLayout, 'The floating menu leaves the step section geometry unchanged');
+    const pickerResults = form + ' .settings-shortcut-picker-results';
+    const menu = await page.$eval(pickerResults, results => {
+      const option = results.querySelector<HTMLElement>('.preview-dropdown-option')!;
+      return {
+        scrollable: results.scrollHeight > results.clientHeight,
+        scrollbarWidth: getComputedStyle(results, '::-webkit-scrollbar').width,
+        radius: getComputedStyle(option).borderRadius,
+      };
+    });
+    assert.deepEqual(menu, { scrollable: true, scrollbarWidth: '6px', radius: '3px' });
+    assert.equal(await page.$eval(codeBlock + ' .settings-shortcut-picker-name', option => option.textContent), '代码块');
+    assert.ok(await page.$eval(pickerResults, list => Array.from(list.children).every(option => option.matches('button[data-shortcut-choice]'))),
+      'The step menu is one continuous list of options');
+    await page.locator(pickerSearch).fill('表格');
+    await page.screenshot({ path: screenshots + '/shortcut-action-menu-table.png' });
+    await page.locator(pickerSearch).fill('移除表格行');
+    assert.equal(await page.$eval(deleteRow, element => element.getAttribute('aria-disabled')), null);
+    assert.equal(await page.$eval(deleteRow + pickerRestriction, element => element.textContent), '仅在单元格内执行');
+    assert.ok(await page.$eval(deleteRow, option => {
+      const [name, hint] = Array.from(option.children, child => child.getBoundingClientRect());
+      return name.right < hint.left && name.bottom > hint.top && hint.bottom > name.top;
+    }), 'Restrictions stay on the right of the option name');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.settings-shortcut-empty-actions', { hidden: true });
+    await page.locator(addStep).click();
+    await page.locator(pickerSearch).fill('markdown template');
+    await page.waitForSelector(snippet);
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLTextAreaElement)?.name), 'template');
+    await checkShortcutPlaceholder(form + ' textarea');
+    await page.locator('[data-shortcut-record]').click();
+    await checkShortcutPlaceholder(form + ' .settings-recorder');
+    assert.equal(await page.$eval(footerHint, hint => hint.textContent), '执行时会自动跳过不适用的步骤');
+    assert.equal(await page.$eval(footerWarning, note => note.textContent), '调整相关警告后可保存');
+    assert.ok(await footerNotesFitBesideButtons());
+    await page.screenshot({ path: screenshots + '/shortcut-placeholders-dark.png' });
+    await page.keyboard.press('Escape');
+    await page.locator(form + ' textarea').fill('Cell-compatible text');
+    assert.equal(await page.$eval('[data-shortcut-save]', button => (button as HTMLButtonElement).disabled), true,
+      'A row command must be last when the following snippet can also run in the cell');
+    assert.ok(await page.$('.settings-shortcut-step-warning'));
+    await page.locator(form + ' textarea').fill('${1:Prose only}');
+    const stepNotes = '.settings-shortcut-step-location';
+    assert.deepEqual(await page.$$eval(stepNotes, notes => notes.map(note => note.textContent)),
+      ['仅在单元格内执行', '仅在表格外执行']);
+    const notesFitBesideSteps = () => page.$$eval('.settings-shortcut-step-note', notes => notes.length > 0 && notes.every(note => {
+      const annotations = note.closest('.settings-shortcut-step-notes')!;
+      const button = annotations.previousElementSibling!;
+      const caption = button.querySelector('.settings-shortcut-step-caption')!;
+      const name = caption.getBoundingClientRect();
+      const icon = note.querySelector('svg[aria-hidden="true"]')!.getBoundingClientRect();
+      const hint = note.getBoundingClientRect();
+      const textLeft = hint.left + parseFloat(getComputedStyle(note).paddingInlineStart);
+      const tools = note.closest('.settings-shortcut-action-heading')!.querySelector('.settings-shortcut-row-tools')!.getBoundingClientRect();
+      return name.right < icon.left && icon.right < textLeft && icon.right <= hint.right
+        && Math.abs(name.top + name.height / 2 - hint.top - hint.height / 2) < 1
+        && annotations.getBoundingClientRect().right < tools.left && caption.scrollWidth === caption.clientWidth
+        && note.scrollWidth === note.clientWidth
+        && button.getAttribute('aria-describedby')?.split(' ').includes(note.id);
+    }));
+    assert.ok(await notesFitBesideSteps(), 'Step restrictions share the heading line and are exposed to assistive technology');
+    await page.hover(stepNotes);
+    assert.equal(await page.$eval(stepNotes, note => note.getAttribute('aria-describedby')), null,
+      'Hovering a fully visible note does not create a duplicate tooltip');
+    assert.equal(await page.$eval('[data-shortcut-save]', button => (button as HTMLButtonElement).disabled), false);
+    assert.ok(await page.$eval(footerWarning, element => element.hasAttribute('hidden')), 'Valid drafts clear the warning');
+    await page.waitForSelector(footerHint, { visible: true });
+    await page.locator(scope).click();
+    assert.equal(await page.$$eval(scopeOption + '[aria-disabled="true"]', options => options.length), 0);
+    assert.equal(await page.$$eval(scopeOption + ' svg', icons => icons.length), 0, 'Scope options do not add warning icons');
+    const globalScope = '[data-shortcut-scope-option="global"]';
+    await page.hover(globalScope);
+    const conditionalScopeHint = await page.$eval(globalScope, element => '#' + element.getAttribute('aria-describedby'));
+    await page.waitForSelector(conditionalScopeHint + '.is-visible');
+    const scopeHint = await page.$eval(conditionalScopeHint, element => {
+      const reason = element.querySelector('.meo-tooltip-label')!;
+      const divider = element.querySelector('.meo-tooltip-details > hr')!;
+      const bounds = divider.getBoundingClientRect();
+      return { reason: reason.textContent, description: divider.nextSibling?.textContent,
+        separated: bounds.top > reason.getBoundingClientRect().bottom && bounds.width > 0 && bounds.height === 1 };
+    });
+    assert.deepEqual(scopeHint, { reason: '这个动作在预览中没有可执行的步骤。',
+      description: 'Live、Source 和 Preview 中都可触发。设置、搜索等输入框里不会触发。', separated: true });
+    await page.screenshot({ path: screenshots + '/shortcut-conditional-scope.png' });
+    await page.keyboard.press('Escape');
+    const removeTableStep = '[data-shortcut-action-remove="0"]';
+    await page.locator(removeTableStep).click();
+    await page.locator(removeTableStep).click();
+    await page.locator(form + ' textarea').fill('Cell-compatible text');
+    await page.waitForSelector(footerHint, { hidden: true });
+    await page.locator(form + ' textarea').fill('[${1:Title}] ');
+    const fileToken = form + ' .image-location-token[data-shortcut-token="${TM_FILENAME}"]';
+    await page.waitForSelector(fileToken, { visible: true });
+    assert.equal(await page.$eval(fileToken, button => button.textContent), '文件名');
+    await page.hover(fileToken);
+    await page.waitForFunction(() => [...document.querySelectorAll('.meo-tooltip.is-visible')].some(tooltip =>
+      tooltip.getClientRects().length && tooltip.querySelector('.meo-tooltip-text')?.textContent === '${TM_FILENAME}'));
+    await page.locator(fileToken).click();
+    assert.equal(await page.$eval(form + ' textarea', input => (input as HTMLTextAreaElement).value), '[${1:Title}] ${TM_FILENAME}');
+    await page.locator(form + ' textarea').fill('[${1:Title}] ${TM_FILENAME} ${CURRENT_YEAR} $0');
+    await page.locator('[data-shortcut-record]').click();
+    const recordHint = '.settings-shortcut-record-hint';
+    await page.waitForSelector(recordHint, { visible: true });
+    assert.equal(await page.$eval(recordHint, hint => hint.textContent), '按下第一组按键。按 Esc 取消录制。');
+    await chord('c');
+    assert.equal(await page.$eval(recordHint, hint => hint.textContent), '可以直接按第二组，或选择「完成」。');
+    await page.locator('[data-shortcut-record-done]').click();
+    assert.equal(await page.$eval('[data-shortcut-save]', button => (button as HTMLButtonElement).disabled), true, 'Reserved keys cannot replace a system binding');
+    assert.match(await page.$eval(footerWarning, note => note.textContent ?? ''), /此按键由系统命令保留.*复制/);
+    await page.screenshot({ path: screenshots + '/shortcut-conflict-reserved.png' });
+    await page.locator('[data-shortcut-record]').click();
+    await chord('b');
+    await page.locator('[data-shortcut-record-done]').click();
+    assert.equal(await page.$eval('[data-shortcut-save]', button => button.textContent), '替换并保存');
+    assert.match(await page.$eval(footerWarning, note => note.textContent ?? ''), /将替换.*粗体.*的键位/);
+    await page.screenshot({ path: screenshots + '/shortcut-conflict-before-save.png' });
+    await page.evaluate(() => { (window as any).__holdNextUpdate = true; });
+    await page.locator('[data-shortcut-save]').click();
+    await page.waitForFunction(() => typeof (window as any).__flushUpdate === 'function');
+    await page.evaluate(() => {
+      const harness = window as any;
+      const current = harness.__preferences;
+      harness.__beforeCompetingBinding = current;
+      harness.__preferences = { ...current, shortcuts: { ...current.shortcuts, bold: [] },
+        customShortcuts: [...(current.customShortcuts ?? []), { id: 'competing-keybinding', name: '插入日报',
+          scope: 'editor', strokes: ['Ctrl + B'], actions: [{ type: 'snippet', template: '日报' }] }] };
+      harness.__revision++;
+      harness.__flushUpdate();
+      delete harness.__flushUpdate;
+    });
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent?.includes('键位冲突已变化'), {}, footerWarning);
+    assert.match(await page.$eval(footerWarning, note => note.textContent ?? ''), /将替换「插入日报」的键位/);
+    assert.equal(await page.$eval(form + ' input[name="name"]', input => (input as HTMLInputElement).value), 'Meeting notes');
+    assert.deepEqual(await page.evaluate(() => (window as any).__preferences.customShortcuts.at(-1).strokes), ['Ctrl + B']);
+    await page.screenshot({ path: screenshots + '/shortcut-conflict-changed.png' });
+    await page.evaluate(() => {
+      const harness = window as any;
+      harness.__preferences = harness.__beforeCompetingBinding;
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences: harness.__preferences, revision: ++harness.__revision } }));
+    });
+    await page.locator('[data-shortcut-record]').click();
+    await bind('j');
+    assert.equal(await page.$eval('[data-shortcut-clear-recording]', button => button.getAttribute('aria-label')), '清空已录按键');
+    await page.locator('[data-shortcut-clear-recording]').click();
+    await page.waitForSelector(form + ' .settings-recorder', { visible: true });
+    assert.equal(await page.$eval(form + ' .settings-recorder', input => (input as HTMLInputElement).value), '');
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('settings-recorder')), true);
+    await bind('k');
+    assert.equal(await page.$eval(form + ' .settings-recorder', input => (input as HTMLInputElement).value), 'Ctrl + Alt + K');
+    await page.keyboard.press('t');
+    assert.deepEqual(await page.$$eval(form + ' kbd', elements => elements.map(e => e.textContent)), ['Ctrl + Alt + K', 'T']);
+    await page.locator('[data-shortcut-record]').click();
+    await bind('j');
+    await page.keyboard.press('Escape');
+    assert.deepEqual(await page.$$eval(form + ' kbd', elements => elements.map(e => e.textContent)), ['Ctrl + Alt + K', 'T'], 'Escape restores the previous chord');
+    await page.screenshot({ path: screenshots + '/shortcut-page-zh-dark.png' });
+    await page.evaluate(() => (window as any).__failNextUpdate = true);
+    await page.locator('[data-shortcut-save]').click();
+    await page.waitForFunction(() => document.querySelector('.settings-shortcut-feedback')?.textContent?.includes('保存失败'));
+    assert.equal(await page.$eval(form + ' input[name="name"]', input => (input as HTMLInputElement).value), 'Meeting notes');
+    await page.locator('[data-shortcut-save]').click();
+    await page.waitForSelector('[data-custom-shortcut]');
+    await page.waitForSelector(editorPage, { hidden: true });
+    assert.equal(await page.$eval(settings, element => element.matches(':modal')), true);
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.hasAttribute('data-custom-shortcut-edit')), true, 'Saving restores focus to the new row');
+    const rowAppearance = await page.$eval('[data-custom-shortcut]', row => {
+      const name = row.querySelector('.settings-item-title')!;
+      const summary = row.querySelector('.settings-custom-shortcut-summary')!;
+      const builtin = document.querySelector('[data-command="bold"] .settings-item-title')!;
+      return {
+        sameLine: name.getBoundingClientRect().top === summary.getBoundingClientRect().top,
+        sameSize: [name, summary].every(text => getComputedStyle(text).fontSize === getComputedStyle(builtin).fontSize),
+        distinctColors: getComputedStyle(name).color !== getComputedStyle(summary).color,
+        textTooltip: [name, summary].some(text => text.hasAttribute('title') || text.hasAttribute('data-tooltip')),
+        actions: [...row.querySelectorAll('button')].map(button => button.getAttribute('aria-label')),
+      };
+    });
+    assert.deepEqual(rowAppearance, { sameLine: true, sameSize: true, distinctColors: true, textTooltip: false, actions: ['编辑', '删除'] });
+    const summaryColors = await page.$eval('.settings-custom-shortcut-summary', element => {
+      const style = getComputedStyle(element);
+      return { summary: style.color, muted: style.getPropertyValue('--meo-ui-text-muted'), panel: getComputedStyle(element.closest('.settings-window')!).backgroundColor };
+    });
+    assert.ok(contrast(summaryColors.summary, summaryColors.panel) >= 4.5, 'The weaker action summary remains readable');
+    assert.ok(contrast(summaryColors.summary, summaryColors.panel) < contrast(summaryColors.muted, summaryColors.panel),
+      'The action summary is quieter than ordinary secondary settings text');
+    await page.screenshot({ path: screenshots + '/shortcut-list-compact.png' });
+    await page.locator('.settings-search').fill('自定义快捷键');
     await page.waitForSelector('[data-custom-shortcut]');
     await page.locator('.settings-search').fill('Meeting notes');
     await page.waitForSelector('[data-custom-shortcut]');
     assert.equal(await page.$$eval('[data-custom-shortcut]', rules => rules.length), 1);
     const saved = await page.evaluate(() => (window as any).__preferences);
+    await page.locator('[data-custom-shortcut-edit]').click();
+    await page.locator(form + ' input[name="name"]').fill('Discard this draft');
+    await page.locator(form + ' .settings-actions button:first-child').click();
+    await page.waitForSelector(editorPage, { hidden: true });
+    assert.equal(await page.$eval(settings + ' .settings-search', input => (input as HTMLInputElement).value), 'Meeting notes');
+    assert.equal(await page.$eval('[data-custom-shortcut] .settings-item-title', element => element.textContent), 'Meeting notes');
+    assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.hasAttribute('data-custom-shortcut-edit')), true);
+    const removeRule = '[data-custom-shortcut-remove]';
+    const originalRemove = (await page.$(removeRule))!;
+    const ruleLayout = () => page.$eval('[data-custom-shortcut]', row =>
+      [row, ...row.querySelectorAll('button')].map(element => element.getBoundingClientRect().toJSON()));
+    const initialRuleLayout = await ruleLayout();
+    await page.locator(removeRule).click();
+    assert.deepEqual(await originalRemove.evaluate(button => [button.isConnected, button.getAttribute('aria-label'), getComputedStyle(button).backgroundColor]),
+      [true, '确认删除', 'rgb(188, 75, 66)'], 'The same icon becomes the red confirmation control');
+    assert.deepEqual(await ruleLayout(), initialRuleLayout, 'Arming deletion keeps the row and both controls in place');
+    assert.deepEqual(await page.evaluate(() => (window as any).__preferences.customShortcuts), saved.customShortcuts);
+    await page.screenshot({ path: screenshots + '/shortcut-delete-confirm.png' });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(removeRule + '[aria-label="删除"]');
+    assert.ok(await page.$(settings + ':modal'), 'Escape cancels deletion and keeps the list open');
+    await page.locator('.settings-search-clear').click();
+    await page.locator('[data-tab="appearance"]').click();
+    await page.locator('[data-appearance-mode="light"]').click();
+    await page.waitForFunction(() => document.documentElement.dataset.editorAppearance === 'light');
+    await page.locator('[data-tab="shortcuts"]').click();
+    await page.$eval(list, element => { element.scrollTop = 12; });
+    const listScroll = await page.$eval(list, element => element.scrollTop);
+    await page.locator('[data-custom-shortcut-edit]').click();
+    await page.setViewport({ width: 520, height: 450 });
+    await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', { data: { type: 'uiLanguageChanged', uiLanguagePreference: 'en', uiLanguage: 'en', automaticUiLanguage: 'en' } })));
+    await page.waitForFunction(() => document.querySelector('#meo-shortcut-editor-title')?.textContent === 'Edit custom action');
+    await page.locator(scope).click();
+    await page.locator(globalScope).click();
+    await page.locator('[data-shortcut-add-action]').click();
+    await page.locator(form + ' .settings-shortcut-picker input').fill('nonmatching');
+    assert.equal(await page.$eval('.settings-shortcut-picker-empty', element => element.textContent), 'No matching steps');
+    await page.locator('.settings-shortcut-picker-clear').click();
+    assert.equal(await page.$eval('.settings-shortcut-picker-input', input => (input as HTMLInputElement).value), '');
+    assert.equal(await page.$eval(codeBlock + pickerRestriction, hint => hint.textContent), 'Only outside tables');
+    assert.equal(await page.$eval('[data-shortcut-choice="plain"]' + pickerRestriction, hint => hint.textContent), 'Only outside tables');
+    await page.locator(form + ' .settings-shortcut-picker input').fill('undo');
+    await page.locator(form + ' [data-shortcut-choice="undo"]').click();
+    assert.equal(await page.$$eval('[data-shortcut-action]', actions => actions.length), 2);
+    assert.ok(await page.$eval('[data-shortcut-save]', element => {
+      const box = element.getBoundingClientRect();
+      return box.y >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth;
+    }), 'Save remains visible while editing actions in a narrow window');
+    await page.locator(form + ' .settings-shortcut-action:last-child [aria-label="Move step up"]').click();
+    assert.equal(await page.$eval('[data-shortcut-save]', button => (button as HTMLButtonElement).disabled), true,
+      'The order check explains why an async action cannot be moved before other actions');
+    const orderWarning = 'Must run last';
+    const warning = '.settings-shortcut-step-warning';
+    assert.equal(await page.$eval(footerWarning, element => element.textContent), 'Resolve the warnings to save');
+    assert.equal(await page.$eval(footerHint, element => element.textContent), 'Automatically skips steps that don’t apply');
+    assert.ok(await page.$eval('.settings-shortcut-footer-notes', notes => {
+      return ['.settings-shortcut-step-location', '.settings-shortcut-step-warning'].every((selector, index) => {
+        const stepNote = document.querySelector(selector)!;
+        const footerNote = notes.children[index];
+        const graphic = footerNote.querySelector('svg[aria-hidden="true"]');
+        return graphic?.innerHTML === stepNote.querySelector('svg')?.innerHTML && Boolean(graphic)
+          && getComputedStyle(footerNote).color === getComputedStyle(stepNote).color;
+      });
+    }), 'The footer matches the icon and color of each step annotation');
+    assert.ok(await footerNotesFitBesideButtons());
+    assert.deepEqual(await page.$$eval(warning, icons => icons.map(icon =>
+      icon.closest('.settings-shortcut-step-notes')?.previousElementSibling?.getAttribute('data-shortcut-action'))),
+      ['0'], 'Only the misplaced step has a warning next to its name');
+    assert.equal(await page.$eval(warning, note => note.textContent), orderWarning, 'The warning is rendered inline beside the step');
+    assert.ok(await notesFitBesideSteps(), 'The shortened notes share the same line and fit in a narrow window');
+    await page.screenshot({ path: screenshots + '/shortcut-step-order-warning.png' });
+    await page.setViewport({ width: 360, height: 450 });
+    assert.ok(await footerNotesFitBesideButtons(), 'The wrapped messages leave both footer buttons visible');
+    const clippedNotes = await page.$$eval('.settings-shortcut-step-note', notes => notes
+      .filter(note => note.scrollWidth > note.clientWidth + 1)
+      .map(note => ({ id: note.id, text: note.textContent })));
+    assert.ok(clippedNotes.length > 0, 'A very narrow viewport clips some notes');
+    for (const { id, text } of clippedNotes) {
+      await page.hover('#' + id);
+      await page.waitForFunction(text => [...document.querySelectorAll('.meo-tooltip.is-visible .meo-tooltip-text')]
+        .some(hint => hint.textContent === text), {}, text);
+    }
+    await page.setViewport({ width: 520, height: 450 });
+    await page.locator(form + ' .settings-shortcut-action:first-child [aria-label="Move step down"]').click();
+    assert.equal(await page.$eval('[data-shortcut-save]', button => (button as HTMLButtonElement).disabled), false);
+    assert.equal(await page.$(warning), null, 'Moving the step to the end removes the warning');
+    await page.locator('[data-shortcut-action="1"]').click();
+    assert.equal(await page.$eval(deleteRow, element => element.getAttribute('aria-disabled')), null);
+    assert.equal(await page.$eval(deleteRow + pickerRestriction, element => element.textContent), 'Only in table cells');
+    await page.locator(form + ' .settings-shortcut-picker input').fill('specific mode');
+    await page.locator(form + ' [data-shortcut-choice="mode"]').click();
+    await page.locator('[data-shortcut-mode="preview"]').click();
+    assert.equal(await page.$eval('[data-shortcut-mode="preview"]', element => element.getAttribute('aria-pressed')), 'true');
+    assert.match(await page.$eval('[data-shortcut-action="1"]', element => element.textContent ?? ''), /Preview/);
+    const stepRows = await page.$$eval('.settings-shortcut-action', rows => rows.map(row => {
+      const number = row.querySelector('.settings-shortcut-step-number')!;
+      const title = row.querySelector('.settings-shortcut-step-caption')!;
+      const details = row.querySelector('.settings-shortcut-action-details')!;
+      return { number: number.textContent, numberLeft: number.getBoundingClientRect().left,
+        titleLeft: title.getBoundingClientRect().left, detailsLeft: details.getBoundingClientRect().left,
+        titleFits: title.scrollWidth === title.clientWidth };
+    }));
+    assert.deepEqual(stepRows.map(step => step.number), ['1', '2']);
+    assert.ok(stepRows.every(step => step.numberLeft < step.titleLeft && step.titleLeft === step.detailsLeft &&
+      step.numberLeft === stepRows[0].numberLeft && step.titleLeft === stepRows[0].titleLeft), 'All steps, headings and details use the same two aligned columns');
+    assert.ok(stepRows.every(step => step.titleFits), 'Titles remain fully visible when the heading has enough room');
+    assert.ok(await notesFitBesideSteps(), 'Step restrictions also fit beside the title in a narrow English window');
+    await page.waitForFunction(() => document.querySelector('[data-shortcut-mode="preview"] .segmented-control-button-indicator')
+      ?.getAnimations().every(animation => animation.playState === 'finished'));
+    await page.screenshot({ path: screenshots + '/shortcut-page-en-narrow.png' });
+    const removeAction = '[data-shortcut-action-remove="1"]';
+    const draftLayout = () => page.$eval(removeAction, button => {
+      const row = button.closest('.settings-shortcut-action')!;
+      return [row, ...row.querySelectorAll('button')].map(element => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        const origin = row.getBoundingClientRect();
+        return { x: x - origin.x, y: y - origin.y, width, height };
+      });
+    });
+    const initialDraftLayout = await draftLayout();
+    await page.locator(removeAction).click();
+    assert.equal(await page.$eval(removeAction + '.is-delete-armed', button => button.getAttribute('aria-label')), 'Confirm removal');
+    assert.deepEqual(await draftLayout(), initialDraftLayout, 'Draft removal leaves the action and all its controls in place until confirmed');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(removeAction + '[aria-label="Remove step"]');
+    assert.ok(await page.$(editorPage), 'Escape only disarms draft removal');
+    await page.locator(removeAction).click();
+    await page.locator(removeAction).click();
+    assert.equal(await page.$$eval('[data-shortcut-action]', actions => actions.length), 1);
+    const removeLastStep = '[data-shortcut-action-remove="0"]';
+    await page.locator(removeLastStep).click();
+    await page.locator(removeLastStep).click();
+    const restoredScopeHint = await page.$eval(globalScope, element => {
+      const id = element.getAttribute('aria-describedby');
+      const tooltip = document.getElementById(id!)!;
+      return { text: tooltip.textContent ?? '', hasDivider: !!tooltip.querySelector('hr') };
+    });
+    assert.match(restoredScopeHint.text, /Live, Source, and Preview/, 'The available scope shows its regular description again');
+    assert.equal(restoredScopeHint.hasDivider, false);
+    await page.setViewport({ width: 1100, height: 780 });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(editorPage, { hidden: true });
+    assert.ok(await page.$(settings + ':modal'), 'Returning from the editor keeps the settings dialog open');
+    assert.equal(await page.$eval(list, element => element.scrollTop), listScroll);
     await page.locator('.settings-close').click();
     await focusStart();
     await bind('k');
@@ -237,6 +666,24 @@ try {
     assert.equal(beforeModeGuard, 'target', 'Source-only prefix cannot start the rule in Live');
     await page.keyboard.press('t');
     assert.equal((await editorState()).line, 'ttarget', 'Live receives the normal key when the rule is out of scope');
+    await openShortcuts();
+    await page.evaluate(() => {
+      const g = window as any;
+      g.__preferences = { ...g.__preferences, shortcuts: { bold: ['Ctrl + Alt + U'] } };
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences: g.__preferences, revision: ++g.__revision } }));
+    });
+    await page.locator('.settings-footer > .settings-button').click();
+    assert.match(await page.$eval('.settings-reset-description', element => element.textContent ?? ''), /Custom keybindings are cleared/);
+    await page.locator('.settings-reset-popover .settings-primary').click();
+    await page.waitForSelector('[data-custom-shortcut] .settings-unassigned');
+    assert.deepEqual(await page.evaluate(() => (window as any).__preferences.shortcuts), {});
+    assert.deepEqual(await page.evaluate(() => (window as any).__preferences.customShortcuts),
+      saved.customShortcuts.map((rule: import('../src/foundation/editingPreferences').CustomShortcut) => ({ ...rule, strokes: [] })));
+    await page.locator(removeRule).click();
+    await page.locator(removeRule).click();
+    await page.waitForSelector('[data-custom-shortcut]', { hidden: true });
+    assert.deepEqual(await page.evaluate(() => (window as any).__preferences.customShortcuts), []);
+    assert.match(await page.$eval('.settings-custom-shortcut-empty', hint => hint.textContent ?? ''), /assign keys/);
 
     await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
     const largeText = 'target\n\n' + 'A paragraph for the large document shortcut test.\n\n'.repeat(4600);
@@ -254,21 +701,221 @@ try {
     assert.match((await editorState()).line, /^\[Title\] settings\.md \d{4} target$/);
     await chord('z');
     assert.equal((await editorState()).line, 'target');
+
+    await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+    const tableFixture = fixture + '| Column |\n| --- |\n| first cell |\n| second cell |\n|  |\n';
+    const documentText = () => page.evaluate(() => (window as any).EditingSettingsHarness.EditorView
+      .findFromDOM(document.querySelector('.editor-host > .cm-editor')).state.doc.toString());
+    const focusCell = async (mode: 'source' | 'live', select = false, offset = 0, cell = 'first cell') => {
+      if (mode === 'live') {
+        await page.locator('tbody tr:first-child .meo-md-html-table-cell-preview').click();
+        await page.waitForFunction(cell => document.activeElement instanceof HTMLTextAreaElement
+          && document.activeElement.value === cell, {}, cell);
+      }
+      await page.evaluate(({ mode, select, offset, cell }) => {
+        if (mode === 'live') {
+          const input = document.activeElement as HTMLTextAreaElement;
+          input.setSelectionRange(offset, select ? input.value.length : offset);
+          return;
+        }
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        const anchor = view.state.doc.toString().indexOf(cell) + offset;
+        view.dispatch({ selection: { anchor, head: anchor + (select ? cell.length - offset : 0) } });
+        view.focus();
+      }, { mode, select, offset, cell });
+    };
+    await openFixture(tableFixture);
+    await ready();
+    const exampleHost = createEditingPreferencesHost({
+      platform: 'other', read: () => ({ input: defaultInputAssistance, shortcuts: {} }),
+      write: async () => { throw new Error('The initial example must not write settings'); }
+    });
+    await page.evaluate(preferences => {
+      const global = window as any;
+      global.__preferences = preferences;
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences, revision: ++global.__revision } }));
+    }, exampleHost.read());
+    for (const mode of ['source', 'live'] as const) {
+      await page.locator('button[data-mode="' + mode + '"]').click();
+      await ready();
+      await focusStart();
+      await bind('t');
+      assert.match((await editorState()).line, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}target$/);
+      await chord('z');
+      assert.equal((await editorState()).line, 'target');
+      await focusCell(mode);
+      await bind('t');
+      assert.match(await documentText(), /\| \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}first cell\s*\|/,
+        `${mode}: the default timestamp is inserted in the cell`);
+      await chord('z');
+      assert.equal(await documentText(), tableFixture, `${mode}: one undo restores the cell and the original table`);
+      if (mode === 'source') {
+        const focusSource = (marker: string) => page.evaluate(marker => {
+          const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf(marker) + 2 } });
+          view.focus();
+        }, marker);
+        await focusSource('| --- |');
+        await bind('t');
+        assert.equal(await documentText(), tableFixture, 'The Source table delimiter is never edited by a snippet');
+        await focusSource('|  |');
+        await bind('t');
+        assert.match(await documentText(), /\n\| \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \|\n$/,
+          'A Source cell with no text can receive the timestamp');
+        await chord('z');
+        assert.equal(await documentText(), tableFixture);
+      }
+    }
+    await openShortcuts();
+    const example = '[data-custom-shortcut="' + insertCurrentTimeExampleId + '"]';
+    const exampleName = example + ' .settings-item-title';
+    assert.equal(await page.$$eval('[data-custom-shortcut]', actions => actions.length), 1);
+    assert.equal(await page.$eval(exampleName, element => element.textContent), '示例 · 插入当前时间');
+    assert.equal(await page.$eval(example + ' .settings-custom-shortcut-summary', element => element.textContent), '编辑区（Live / Source） · 插入片段');
+    assert.equal(await page.$eval(example + ' kbd', element => element.textContent), 'Ctrl + Alt + T');
+    await page.screenshot({ path: screenshots + '/shortcut-example.png' });
+    await page.locator('.settings-search').fill('insert current time');
+    await page.waitForSelector(example);
+    await page.locator('.settings-search-clear').click();
+    await page.locator(example + ' [data-custom-shortcut-edit]').click();
+    const nameField = form + ' input[name="name"]';
+    assert.equal(await page.$eval(nameField, input => (input as HTMLInputElement).value), '示例 · 插入当前时间');
+    const useLanguage = (language: 'zh-CN' | 'en') => page.evaluate(language => window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'uiLanguageChanged', uiLanguagePreference: language, uiLanguage: language, automaticUiLanguage: language }
+    })), language);
+    await useLanguage('en');
+    await page.waitForFunction((selector, title) => document.querySelector<HTMLInputElement>(selector)?.value === title, {}, nameField, insertCurrentTimeExampleName);
+    await page.locator('[data-shortcut-save]').click();
+    await page.waitForSelector(editorPage, { hidden: true });
+    assert.equal(await page.$eval(exampleName, element => element.textContent), insertCurrentTimeExampleName);
+    assert.equal(await page.evaluate(() => (window as any).__preferences.customShortcuts[0].useDefaultName), true);
+    await page.locator(example + ' [data-custom-shortcut-edit]').click();
+    await page.locator(nameField).fill('我的时间戳');
+    await page.locator('[data-shortcut-save]').click();
+    await page.waitForSelector(editorPage, { hidden: true });
+    await useLanguage('zh-CN');
+    await page.waitForFunction(() => document.querySelector('#meo-settings-customShortcuts h3')?.textContent === '自定义动作');
+    assert.equal(await page.$eval(exampleName, element => element.textContent), '我的时间戳');
+    assert.equal(await page.evaluate(() => (window as any).__preferences.customShortcuts[0].useDefaultName), undefined);
+    await page.locator('.settings-close').click();
+    const applyMixedAction = () => page.evaluate(() => {
+      const global = window as any;
+      const actions: CustomShortcutAction[] = [{ type: 'snippet', template: 'Prose: $1' }, { type: 'command', command: 'heading1' },
+        { type: 'command', command: 'rowDelete' }];
+      const mixed = { id: 'mixed', name: 'Mixed action', scope: 'editor', strokes: ['Ctrl + Alt + Y'], actions };
+      const cell = { id: 'cell', name: 'Cell snippet', scope: 'editor', strokes: ['Ctrl + Alt + I'], actions: [
+        { type: 'snippet', template: 'A | $0${TM_SELECTED_TEXT}\nZ' }
+      ] };
+      const cellBreak = { id: 'cell-break-then-insert', name: 'Cell break and insert', scope: 'editor', strokes: ['Ctrl + Alt + X'], actions: [
+        { type: 'command', command: 'cellBreak' }, { type: 'snippet', template: 'Time' }
+      ] };
+      const preferences = { ...global.__preferences, customShortcuts: [...(global.__preferences.customShortcuts ?? []), mixed, cell, cellBreak] };
+      global.__preferences = preferences;
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences, revision: ++global.__revision } }));
+    });
+    for (const mode of ['source', 'live'] as const) {
+      let text = tableFixture;
+      if (mode === 'live') {
+        text += '\n' + largeText;
+        assert.equal(assessLargeDocument(text).boundedEditorWork, true);
+        await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+        await openFixture(text, 'live', false, 'hidden', false, true);
+      } else {
+        await page.locator('button[data-mode="source"]').click();
+      }
+      await ready();
+      await applyMixedAction();
+      await focusStart();
+      assert.equal((await editorState()).optimized, mode === 'live');
+      if (mode === 'source') {
+        await page.evaluate(() => {
+          const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf('first cell') + 2, head: 0 } });
+          view.focus();
+        });
+        await bind('i');
+        assert.equal(await documentText(), text, 'A selection that extends from a cell into prose stays intact');
+        assert.equal((await editorState()).from, 0);
+      }
+      await focusCell(mode, true);
+      await bind('i');
+      const insertedCell = await documentText();
+      assert.equal(insertedCell.replace(/\|\s*A \\\| first cell<br>Z\s*\|/, '| first cell |'), text,
+        `${mode}: selection replacement escapes pipes, keeps line breaks inside the cell and preserves the document`);
+      assert.notEqual(insertedCell, text);
+      const caretText = await page.evaluate(() => {
+        if (document.activeElement instanceof HTMLTextAreaElement) return document.activeElement.value.slice(0, document.activeElement.selectionStart);
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        return view.state.sliceDoc(view.state.doc.lineAt(view.state.selection.main.head).from, view.state.selection.main.head);
+      });
+      assert.ok(caretText.endsWith('A \\| '), `${mode}: the final marker places the caret before the selected-text variable`);
+      await chord('z');
+      assert.equal(await documentText(), text, `${mode}: one undo restores the replaced selection`);
+      await focusStart();
+      await bind('y');
+      const withProse = text.replace('target', '# Prose: target');
+      assert.equal(await documentText(), withProse, `${mode}: the mixed binding runs the prose steps in a paragraph`);
+      await focusCell(mode, false, 2);
+      await bind('y');
+      assert.equal(await documentText(), withProse.replace('| first cell |\n', ''),
+        `${mode}: the same binding skips the prose steps and deletes just the selected row`);
+      await focusCell(mode, false, 2, 'second cell');
+      await bind('x');
+      assert.match(await documentText(), /\|[^\n]*<br>Time[^\n]*\|/, `${mode}: a cell break is followed by the snippet in the same cell`);
+    }
+    await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
+    const failureFixture = '# 示例文档\n\n已打开会议记录模板\n\n待填写的会议纪要\n';
+    await openFixture(failureFixture);
+    await ready();
+    await useLanguage('zh-CN');
+    await page.evaluate(() => {
+      const harness = window as any;
+      const view = harness.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      const dispatch = view.dispatch.bind(view);
+      view.dispatch = (...transactions: any[]) => {
+        for (const transaction of transactions) {
+          transaction.changes?.iterChanges?.((_from: number, _to: number, _before: number, _after: number, insert: { toString(): string }) => {
+            if (insert.toString().includes('MEO_FIXTURE_FAIL')) throw new Error('Simulated editor failure');
+          });
+        }
+        dispatch(...transactions);
+      };
+      const notes = { id: 'failure-example', name: '插入会议纪要', scope: 'editor', strokes: ['Ctrl + Alt + J'], actions: [
+        { type: 'snippet', template: '# 会议纪要\n\n' },
+        { type: 'snippet', template: 'MEO_FIXTURE_FAIL' },
+        { type: 'snippet', template: '第三步不应执行' }
+      ] };
+      const moveAndInsert = { id: 'continue-example', name: '上移并插入', scope: 'editor', strokes: ['Ctrl + Alt + M'], actions: [
+        { type: 'command', command: 'moveUp' }, { type: 'snippet', template: '已继续执行' }
+      ] };
+      harness.__preferences = { ...harness.__preferences, customShortcuts: [notes, moveAndInsert] };
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences: harness.__preferences, revision: ++harness.__revision } }));
+    });
+    await page.evaluate(() => {
+      const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf('待填写的会议纪要') } });
+      view.focus();
+    });
+    await bind('j');
+    const executionError = '.editor-notice[data-kind="error"]';
+    await page.waitForSelector(executionError, { visible: true });
+    assert.match(await page.$eval(executionError, notice => notice.textContent ?? ''), /自定义动作执行失败.*插入会议纪要.*第 2 步.*插入片段.*已完成的修改会保留/);
+    const partlyApplied = failureFixture.replace('待填写的会议纪要', '# 会议纪要\n\n待填写的会议纪要');
+    assert.equal(await documentText(), partlyApplied);
+    await page.screenshot({ path: screenshots + '/shortcut-execution-failure.png', clip: { x: 0, y: 0, width: 1100, height: 264 } });
+    await page.locator(executionError + ' .editor-notice-close').click();
+    await page.waitForSelector(executionError, { hidden: true });
+    await focusStart();
+    await bind('m');
+    assert.equal(await documentText(), '已继续执行' + partlyApplied);
+    assert.equal(await page.$(executionError), null, 'Skip is quiet and does not show an execution failure');
     assert.deepEqual(errors, []);
-    console.log('Custom shortcuts: recording, settings search, Source and optimized Live snippets, tab stops and history passed');
+    console.log('Custom shortcuts: settings, scoped steps, prose and table snippets, timestamps, cell-safe formatting and undo (Source and optimized Live) passed');
     if (process.argv.includes('--custom-shortcuts-only')) { await closeTestBrowser(browser); process.exit(0); }
     await page.close(); page = await browser.newPage(); page.on('pageerror', error => errors.push(String(error)));
   }
   if (process.argv.includes('--keycaps-only') || process.argv.length === 2) {
     const folder = path.resolve('.local/test-artifacts/ui-keycaps'); await fs.mkdir(folder, { recursive: true });
-    const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
-    const luminance = (color: string) => {
-      const values = channels(color).map(value => {
-        const channel = value / 255; return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-      });
-      return values.reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
-    };
-    const contrast = (a: string, b: string) => (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
     const sample = (selector: string, carrier: string) => page.$eval(selector, (cap, carrier) => {
       const style = getComputedStyle(cap), parent = getComputedStyle(cap.closest(carrier)!);
       const roles = document.documentElement.style;
@@ -1940,8 +2587,10 @@ try {
           const descriptions = language === 'en'
             ? ['Document directory', 'File name with extension', 'File name without extension', 'Extension including the dot']
             : ['当前文档目录', '文档名，含扩展名', '文档名，不含扩展名', '扩展名，含点号'];
+          const variables = ['${fileDirname}', '${fileBasename}', '${fileBasenameNoExtension}', '${fileExtname}'];
           for (const [index, description] of descriptions.entries()) {
             const selector = '.image-location-variables > button:nth-child(' + (index + 1) + ')';
+            assert.equal(await page.$eval(selector, element => element.textContent), description);
             await page.$eval(selector, element => element.scrollIntoView({block: 'center'}));
             await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
             await page.mouse.move(0, 0);
@@ -1961,7 +2610,7 @@ try {
                 visible: style.visibility, opacity: style.opacity, delay: style.transitionDelay, border: style.borderTopWidth, background: style.backgroundColor, foreground: style.color, radius: style.borderRadius, shadow: style.boxShadow, singleLine: bounds.height < parseFloat(style.lineHeight) * 2, arrow: arrow.content !== 'none' && arrow.width === '8px', centered: Math.abs((bounds.left + bounds.right) / 2 - expectedCenter) < 1 && style.textAlign === 'center',
                 above: bounds.bottom <= button.top, lighterThanWindow: brightness(style.backgroundColor) > brightness(getComputedStyle(window).backgroundColor), contained: bounds.left >= content.left && bounds.right <= content.right && bounds.bottom <= content.bottom };
             });
-            assert.deepEqual(hint, {text: description, title: null, described: true, visible: 'visible', opacity: '1', delay: '0s', border: '0px', background: appearance === 'dark' ? 'rgb(58, 58, 58)' : 'rgb(13, 13, 13)', foreground: 'rgb(255, 255, 255)', radius: '10px', shadow: appearance === 'dark' ? 'rgba(0, 0, 0, 0.4) 0px 3px 10px 0px' : 'none', singleLine: true, arrow: false, centered: true, above: true, lighterThanWindow: appearance === 'dark', contained: true}, language + '/' + appearance + '/' + width + ': hover shows one unobstructed hint above the button after the shared delay');
+            assert.deepEqual(hint, {text: variables[index], title: null, described: true, visible: 'visible', opacity: '1', delay: '0s', border: '0px', background: appearance === 'dark' ? 'rgb(58, 58, 58)' : 'rgb(13, 13, 13)', foreground: 'rgb(255, 255, 255)', radius: '10px', shadow: appearance === 'dark' ? 'rgba(0, 0, 0, 0.4) 0px 3px 10px 0px' : 'none', singleLine: true, arrow: false, centered: true, above: true, lighterThanWindow: appearance === 'dark', contained: true}, language + '/' + appearance + '/' + width + ': hover shows the variable above its descriptive button after the shared delay');
             if (index === 2) {
               const hintId = await page.$eval(selector, element => element.getAttribute('aria-describedby'));
               await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));

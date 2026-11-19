@@ -177,6 +177,9 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       // A stronger label restores hierarchy without reducing detail readability.
       const strongText = highContrast ? text : fit(text, surfaces, 7);
       const muted = highContrast ? text : fit(mix(text, neutral(raised), 0.34), surfaces, 4.55);
+      const inputSurfaces = [surface, raised, field];
+      const placeholderFloor = highContrast ? Math.min(7, minimumContrast(text, inputSurfaces)) : 4.55;
+      const placeholder = fit(mix(text, neutral(field), 0.43), inputSurfaces, placeholderFloor);
       const separator = nativeBorder ?? mix(raised, tint, appearance === 'light' ? 0.13 : 0.12);
       const floatBorder = nativeBorder ?? fit(mix(raised, tint, appearance === 'light' ? 0.20 : 0.19), [surface, raised], 1.3);
       const controlBorder = nativeBorder ?? fit(mix(raised, tint, appearance === 'light' ? 0.35 : 0.30), [surface, raised, field], 3.05);
@@ -210,7 +213,9 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
       const roles: Record<string, string> = Object.fromEntries(Object.entries({
         surface, 'document-background': documentSurface, 'surface-raised': raised, 'surface-field': field, 'surface-hover': hover,
         'surface-pressed': pressed, 'surface-selected': selected, 'segmented-track': track,
-        text, 'text-strong': strongText, 'text-muted': muted, 'text-disabled': mix(text, neutral(raised), 0.55),
+        text, 'text-strong': strongText, 'text-muted': muted, 'text-placeholder': placeholder,
+        'text-muted-on-raised': highContrast ? text : fit(mix(muted, raised, 0.26), [raised], 4.55),
+        'text-disabled': mix(text, neutral(raised), 0.55),
         'text-selected': selectedText, separator, 'border-float': floatBorder, 'border-control': controlBorder,
         focus: nativeFocus ?? fit(accent, [surface, raised, field], 3.05),
         'selection-border': nativeActiveBorder ?? selected,

@@ -9,6 +9,7 @@ import { markLiveInputNestedProjection, usesLargeDocumentDerivedWorkBudget } fro
 import { renderedBlockPreviewHeight, RenderedBlockPreviewHeight } from './renderedBlockPreview';
 import { matchInlineScript } from '../../../src/foundation/inlineScript';
 import { markdownTableSeparatorPipes } from '../../../src/foundation/markdownTableRow';
+import { expandTableShortcutSnippet, type SourceCellSnippetEdit } from '../editor/shortcutSnippet';
 import { matchInlineHtmlCode } from '../../../src/shared/htmlPolicy';
 import { latexDelimitersFacet } from '../editor/mathSyntaxPreference';
 import { parseTableInlineSyntax } from './inlineMarkdownParser';
@@ -17,7 +18,7 @@ import { automaticSymbolPairs, symbolOriginEpoch, replaceAutomaticSymbolPairArea
 import { emptyMarkdownTable, markdownTableFromCells, serializeDelimitedTable, parseMarkdownTable, externalTableCellToMarkdown } from '../application/delimitedTable';
 import { defaultInputAssistance, type EditorCommandId } from '../../../src/foundation/editingPreferences';
 import { countColumn, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, type Annotation, type ChangeDesc, type ChangeSpec, type Range, type SelectionRange as CodeMirrorSelectionRange, type Text as CodeMirrorText } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
 import type { SyntaxNode, SyntaxNodeRef, Tree } from '@lezer/common';
 import { isolateHistory } from '@codemirror/commands';
@@ -382,6 +383,8 @@ type TableAlignment = '' | 'left' | 'center' | 'right' | null;
 interface ParsedTableCellSegment {
   from: number;
   to: number;
+  rawFrom: number;
+  rawTo: number;
   cellIndex: number;
   empty: boolean;
 }
@@ -2265,11 +2268,9 @@ function parseTableRowCells(lineText: string, lineFrom = 0): ParsedTableRowCells
     let to = rawTo;
     while (from < to && /\s/.test(lineText[from])) from += 1;
     while (to > from && /\s/.test(lineText[to - 1])) to -= 1;
-    if (to <= from) {
-      segments.push({ from: lineFrom + rawFrom, to: lineFrom + rawTo, cellIndex: i, empty: true });
-    } else {
-      segments.push({ from: lineFrom + from, to: lineFrom + to, cellIndex: i, empty: false });
-    }
+    const empty = to <= from;
+    segments.push({ from: lineFrom + (empty ? rawFrom : from), to: lineFrom + (empty ? rawTo : to),
+      rawFrom: lineFrom + rawFrom, rawTo: lineFrom + rawTo, cellIndex: i, empty });
     segmentStart = rawTo + 1;
   }
 
@@ -2334,6 +2335,103 @@ function parseTableLine(lineNo: number, from: number, to: number, text: string):
   const content = { text: prefix.content, from: from + prefix.prefix.length };
   const { cells, pipes, segments } = parseTableRowCells(content.text, content.from);
   return { lineNo, from, to, text: content.text, cells, pipes, segments };
+}
+
+/** Undefined leaves insertion in the document editor; null denotes an unsafe table target. */
+function sourceTableSnippetTarget(state: EditorState): { header: boolean } | null | undefined {
+  const { main, ranges } = state.selection;
+  const tree = ensureSyntaxTree(state, state.doc.lineAt(ranges.at(-1)!.to).to, 8);
+  if (!tree) return null;
+  const tableAt = (position: number, side: -1 | 1) => {
+    let node: SyntaxNode | null = tree.resolveInner(position, side);
+    while (node && node.name !== 'Table') node = node.parent;
+    return node;
+  };
+  const table = tableAt(main.head, -1) ?? tableAt(main.head, 1);
+  if (!table) {
+    for (const range of ranges) {
+      if (tableAt(range.head, -1) || tableAt(range.head, 1)) return null;
+      let intersects = false;
+      if (!range.empty) tree.iterate({ from: range.from, to: range.to, enter(node) {
+        if (node.name === 'Table' && node.from < range.to && node.to > range.from) intersects = true;
+        return !intersects;
+      } });
+      if (intersects) return null;
+    }
+    return undefined;
+  }
+  if (ranges.length !== 1 || main.from < table.from || main.to > table.to) return null;
+  const line = state.doc.lineAt(main.head);
+  const firstLine = state.doc.lineAt(table.from).number;
+  if (line.number === firstLine + 1 || main.from < line.from || main.to > line.to) return null;
+  const inCell = parseTableLine(line.number, line.from, line.to, line.text).segments
+    .some(({ rawFrom, rawTo }) => rawFrom <= main.from && main.to <= rawTo);
+  return inCell ? { header: line.number === firstLine } : null;
+}
+
+function tableSnippetPreservesRow(line: string, from: number, to: number, insert: string, header: boolean): boolean {
+  if (/[\r\n]/.test(insert)) return false;
+  const changed = line.slice(0, from) + insert + line.slice(to);
+  const before = parseTableLine(0, 0, line.length, line);
+  const after = parseTableLine(0, 0, changed.length, changed);
+  const prefix = line.length - before.text.length;
+  const start = from - prefix;
+  const end = to - prefix;
+  return prefix === changed.length - after.text.length && (!header || !isTableDelimiterLine(after.text))
+    && before.cells.length === after.cells.length && before.pipes.length === after.pipes.length
+    && before.pipes.every((pipe, index) => (pipe < start || pipe >= end)
+      && after.pipes[index] === (pipe < start ? pipe : pipe + insert.length - (to - from)));
+}
+
+export function isSafeCustomShortcutSelection(state: EditorState): boolean {
+  return sourceTableSnippetTarget(state) !== null;
+}
+
+type ShortcutSnippetPlan = { kind: 'document' } | ({ kind: 'sourceCell' } & SourceCellSnippetEdit)
+  | { kind: 'liveCell'; input: HTMLTextAreaElement; value: string; caret: number };
+
+/** Check the actual selection before the key is claimed, and again when the step runs. */
+export function planShortcutSnippet(view: EditorView, template: string, documentId: string, input: HTMLTextAreaElement | null): ShortcutSnippetPlan | null {
+  if (view.state.readOnly || view.compositionStarted || (input ? input.readOnly || input.disabled : !view.hasFocus)) return null;
+  const target = input ? null : sourceTableSnippetTarget(view.state);
+  if (!input && target === undefined) return { kind: 'document' };
+  if (!input && !target) return null;
+
+  const { from, to } = view.state.selection.main;
+  const start = input?.selectionStart ?? from;
+  const end = input?.selectionEnd ?? to;
+  const selection = input ? input.value.slice(start, end) : view.state.sliceDoc(from, to);
+  const expanded = expandTableShortcutSnippet(template, documentId, selection);
+  if (!expanded) return null;
+  const source = tableCellEditorValueToSource(expanded.text);
+  const sourceCursor = tableCellEditorOffsetToSourceOffset(expanded.text, expanded.caret);
+  const pipes = markdownTableSeparatorPipes(source);
+  let text = '';
+  let offset = 0;
+  for (const pipe of pipes) {
+    text += source.slice(offset, pipe) + '\\';
+    offset = pipe;
+  }
+  text += source.slice(offset);
+  const caret = Math.min(text.length, sourceCursor + pipes.filter(pipe => pipe < sourceCursor).length);
+
+  if (input) {
+    const range = tableCellSourceRangeForInput(view, input);
+    if (!range) return null;
+    const value = tableCellSourceToEditorValue(text);
+    const nextValue = input.value.slice(0, start) + value + input.value.slice(end);
+    const nextSource = tableCellEditorValueToSource(nextValue).trim();
+    if (/[\r\n]/.test(nextSource) || markdownTableSeparatorPipes(nextSource).length) return null;
+    const line = view.state.doc.lineAt(range.from);
+    // A normalized blank cell can exist in Live before its short source row contains it.
+    if (!(range.from === line.from && range.to === line.from) && !tableSnippetPreservesRow(line.text,
+      range.from - line.from, range.to - line.from, nextSource, input.dataset.tableRow === '0')) return null;
+    return { kind: 'liveCell', input, value: nextValue, caret: start + tableCellSourceToEditorValue(text.slice(0, caret)).length };
+  }
+
+  const line = view.state.doc.lineAt(from);
+  return target && tableSnippetPreservesRow(line.text, from - line.from, to - line.from, text, target.header)
+    ? { kind: 'sourceCell', from, to, text, caret: from + caret } : null;
 }
 
 function isTableContentLine(lineText: string): boolean {
@@ -7310,16 +7408,17 @@ export function insertTable(
 }
 
 /** Reuses the mounted table's command target, pending-cell commit and selection owner. */
-export function executeMountedTableShortcut(view: EditorView, command: EditorCommandId): boolean {
+export function requestMountedTableShortcut(view: EditorView, command: EditorCommandId, skipIfDisabled: boolean) {
   const active = view.dom.ownerDocument.activeElement;
   const shell = active instanceof Element ? active.closest<HTMLElement>('.meo-md-html-table-shell') : null;
   const owner = shell ? tableDomOwners.get(shell) : null;
-  if (!owner || !shell) return false;
-  const mapped = tableShortcutCommands[command]; if (!mapped) return false;
+  if (!owner || !shell) return null;
+  const mapped = tableShortcutCommands[command]; if (!mapped) return null;
   owner.updateContextMenuState();
   const control = shell.querySelector<HTMLButtonElement>(`[data-command='${mapped}']`);
-  void owner.requestTableCommand(mapped, !!control && !control.disabled);
-  return true;
+  const enabled = !!control && !control.disabled;
+  if (skipIfDisabled && !enabled) return false;
+  return owner.requestTableCommand(mapped, enabled);
 }
 export function mountedTableClipboardText(view: EditorView, format: 'markdown' | 'csv'): string | null {
   const active = view.dom.ownerDocument.activeElement;

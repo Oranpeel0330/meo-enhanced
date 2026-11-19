@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { appearanceCatalog, generalSearchKeywords, imageLocationSearchKeywords, settingsSearchMatches, shortcutSearchKeywords, shortcutSections, typingSearchKeywords } from '../webview/src/application/settingsCatalog';
+import { appearanceCatalog, customShortcutTitle, generalSearchKeywords, imageLocationSearchKeywords, settingsSearchMatches, shortcutSearchKeywords, shortcutSections, typingSearchKeywords } from '../webview/src/application/settingsCatalog';
 import assert from 'node:assert/strict';
 import { mock } from 'bun:test';
-import { defaultInputAssistance, editorCommandIds, isEditingPreferencesChange } from '../src/foundation/editingPreferences';
+import { customShortcutScopes, defaultInputAssistance, editorCommandIds, insertCurrentTimeExampleId, insertCurrentTimeExampleName, isCustomShortcut, isEditingPreferencesChange, shortcutTargetModes, type CustomShortcut, type EditorCommandId, type ShortcutReplacement } from '../src/foundation/editingPreferences';
 import {
-  canBindCommand, changeEditingPreferences, defaultShortcuts, effectiveShortcuts,
-  normalizeEditingPreferences, normalizeShortcut, resolveShortcut, shortcutConflicts, shortcutFromStroke
+  builtinShortcutConflicts, canBindCommand, changeEditingPreferences, customShortcutCanRunAt, customShortcutConflicts, defaultShortcuts, effectiveShortcuts,
+  normalizeEditingPreferences, normalizeShortcut, resolveShortcut, shortcutConflicts, shortcutFromStroke, shortcutReplacements, type ShortcutPlatform
 } from '../src/application/editingPreferences';
 import { createEditingPreferencesHost } from '../src/host/editingPreferences';
 import { decodeHostToWebviewMessage, decodeWebviewToHostMessage } from '../src/protocol/messages';
@@ -37,8 +37,12 @@ const shortcutRule = {
   id: 'notes', name: 'Note template', scope: 'live', strokes: ['Ctrl + K', 'T'],
   actions: [{ type: 'snippet', template: '## ${1:Title}\n$0' }, { type: 'command', command: 'save' }]
 } as const;
-const saveCustom = (shortcut: import('../src/foundation/editingPreferences').CustomShortcut, replaceConflicts = false) =>
-  ({ type: 'saveCustomShortcut', shortcut, replaceConflicts } as const);
+const saveCustom = (shortcut: CustomShortcut, confirmedReplacements: readonly ShortcutReplacement[] = []) =>
+  ({ type: 'saveCustomShortcut', shortcut, confirmedReplacements } as const);
+const confirmCustom = (shortcut: CustomShortcut, preferences: EditingPreferences) =>
+  saveCustom(shortcut, shortcutReplacements(customShortcutConflicts(shortcut, preferences, 'other')));
+const confirmBuiltin = (command: EditorCommandId, keys: readonly string[], preferences: EditingPreferences, platform: ShortcutPlatform = 'other') =>
+  ({ type: 'bind', command, keys, confirmedReplacements: shortcutReplacements(builtinShortcutConflicts(command, keys, preferences, platform)) } as const);
 const custom = changeEditingPreferences(defaults, saveCustom(shortcutRule), 'other');
 assert.deepEqual(normalizeEditingPreferences(custom), custom);
 const sameKeysInSource = { ...shortcutRule, id: 'source-notes', scope: 'source' } as const;
@@ -47,16 +51,90 @@ assert.deepEqual(disjoint.customShortcuts, [shortcutRule, sameKeysInSource]);
 const sharedPrefix = { ...shortcutRule, id: 'other-notes', strokes: ['Ctrl + K', 'O'] };
 assert.equal(changeEditingPreferences(disjoint, saveCustom(sharedPrefix), 'other').customShortcuts?.length, 3);
 assert.throws(() => changeEditingPreferences(disjoint, saveCustom({ ...shortcutRule, id: 'prefix', strokes: ['Ctrl + K'] }), 'other'), /already assigned/);
-assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, strokes: ['Ctrl + C'] }, true), 'other'), /already assigned/);
-assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, scope: 'table' }), 'other'), /Invalid shortcut rule/);
+assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, strokes: ['Ctrl + C'] },
+  [{ type: 'command', command: 'copy', keys: ['Ctrl + C'] }]), 'other'), /already assigned/);
+const tableAction = { type: 'command', command: 'rowDelete' } as const;
+const proseAction = shortcutRule.actions[0];
+const cellSnippet = { type: 'snippet', template: 'Time: ${CURRENT_HOUR}:$0${CURRENT_MINUTE}' } as const;
+const mixed = { ...shortcutRule, id: 'mixed', scope: 'editor', strokes: ['Ctrl + Alt + K'], actions: [proseAction, tableAction] } as const;
+assert.deepEqual(changeEditingPreferences(defaults, saveCustom(mixed), 'other').customShortcuts, [mixed]);
+const disjointSteps = { ...mixed, actions: [tableAction, proseAction] };
+assert.deepEqual(changeEditingPreferences(defaults, saveCustom(disjointSteps), 'other').customShortcuts, [disjointSteps],
+  'A table step can precede a step that is skipped whenever the table step runs');
+assert.throws(() => changeEditingPreferences(defaults,
+  saveCustom({ ...mixed, actions: [tableAction, { type: 'command', command: 'bold' }] }), 'other'), /Invalid shortcut rule/);
+assert.throws(() => changeEditingPreferences(defaults,
+  saveCustom({ ...mixed, actions: [tableAction, cellSnippet] }), 'other'), /Invalid shortcut rule/);
+assert.equal(customShortcutCanRunAt({ ...mixed, scope: 'source' }, 'table', 'source'), true);
+assert.equal(customShortcutCanRunAt({ ...mixed, scope: 'source' }, 'table', 'live'), false);
+const moveLine = { ...mixed, actions: [{ type: 'command', command: 'moveUp' }] } as const;
+assert.equal(customShortcutCanRunAt(moveLine, 'table', 'source'), false);
+assert.equal(customShortcutCanRunAt(moveLine, 'tableInput', 'live'), false);
+assert.equal(customShortcutCanRunAt(mixed, 'tableInput', 'live'), true);
+const proseOnly = { ...mixed, id: 'prose-only', actions: [proseAction] };
+const tableOnly = { ...mixed, id: 'table-only', actions: [tableAction] };
+const separateLocations = changeEditingPreferences(changeEditingPreferences(defaults, saveCustom(proseOnly), 'other'), saveCustom(tableOnly), 'other');
+assert.deepEqual(separateLocations.customShortcuts, [proseOnly, tableOnly], 'The same keys may be used at disjoint editing locations');
+assert.throws(() => changeEditingPreferences(separateLocations, saveCustom(mixed), 'other'), /already assigned/);
+const cellAndProse = { ...proseOnly, actions: [cellSnippet] };
+assert.equal(customShortcutCanRunAt(cellAndProse, 'tableInput', 'live'), true);
+assert.equal(customShortcutCanRunAt(proseOnly, 'tableInput', 'live'), false);
+assert.throws(() => changeEditingPreferences(separateLocations, saveCustom(cellAndProse), 'other'), /already assigned/);
+const reboundRow = changeEditingPreferences(defaults, { type: 'bind', command: 'rowDelete', keys: [...cellAndProse.strokes], confirmedReplacements: [] }, 'other');
+assert.throws(() => changeEditingPreferences(reboundRow, saveCustom(cellAndProse), 'other'), /already assigned/);
 assert.throws(() => changeEditingPreferences(defaults, saveCustom({ ...shortcutRule, actions: [...shortcutRule.actions].reverse() }), 'other'), /Invalid shortcut rule/);
-const overlaps = changeEditingPreferences(disjoint, saveCustom({ ...shortcutRule, id: 'replacement', scope: 'editor' }, true), 'other');
+const overlaps = changeEditingPreferences(disjoint, confirmCustom({ ...shortcutRule, id: 'replacement', scope: 'editor' }, disjoint), 'other');
 assert.deepEqual(overlaps.customShortcuts?.map(rule => rule.strokes), [[], [], ['Ctrl + K', 'T']]);
 const reassignBuiltin = changeEditingPreferences(overlaps,
-  { type: 'bind', command: 'bold', keys: ['Ctrl + K'], replaceConflicts: true }, 'other');
+  confirmBuiltin('bold', ['Ctrl + K'], overlaps), 'other');
 assert.deepEqual(reassignBuiltin.customShortcuts?.map(rule => rule.strokes), [[], [], []]);
+let concurrentPreferences: EditingPreferences = { ...defaults, customShortcuts: [] };
+const concurrentHost = createEditingPreferencesHost({ platform: 'other', read: () => concurrentPreferences,
+  write: async next => { concurrentPreferences = next; } });
+const contender = { ...mixed, id: 'contender', strokes: ['Ctrl + B'] };
+const intended = { ...mixed, id: 'intended', strokes: ['Ctrl + B'] };
+const staleConfirmation = confirmCustom(intended, concurrentHost.read());
+const competingWrite = concurrentHost.update({ type: 'updateEditingPreferences', requestId: 'competitor',
+  change: confirmCustom(contender, concurrentHost.read()) });
+const staleWrite = concurrentHost.update({ type: 'updateEditingPreferences', requestId: 'stale', change: staleConfirmation });
+assert.ok((await competingWrite).result.ok);
+const rejected = await staleWrite;
+assert.ok(!rejected.result.ok && rejected.result.error.code === 'shortcut-conflicts-changed');
+assert.deepEqual(decodeHostToWebviewMessage(rejected), rejected);
+assert.deepEqual(concurrentHost.read().customShortcuts, [contender], 'A stale click cannot clear a newly assigned keybinding');
+const confirmed = await concurrentHost.update({ type: 'updateEditingPreferences', requestId: 'confirmed',
+  change: confirmCustom(intended, concurrentHost.read()) });
+assert.ok(confirmed.result.ok);
+assert.deepEqual(concurrentHost.read().customShortcuts?.map(rule => rule.strokes), [[], ['Ctrl + B']]);
 assert.deepEqual(changeEditingPreferences(disjoint, { type: 'resetShortcuts' }, 'other').customShortcuts,
   [shortcutRule, sameKeysInSource].map(rule => ({ ...rule, strokes: [] })));
+const customRedo = changeEditingPreferences(defaults,
+  confirmCustom({ ...shortcutRule, strokes: ['Ctrl + Shift + Z', 'T'] }, defaults), 'other');
+const changedSave = changeEditingPreferences(customRedo,
+  { type: 'bind', command: 'save', keys: ['Ctrl + Alt + U'], confirmedReplacements: [] }, 'other');
+const resetWithCustom = changeEditingPreferences(changedSave, { type: 'resetShortcuts' }, 'other');
+assert.deepEqual(resetWithCustom.customShortcuts, customRedo.customShortcuts?.map(rule => ({ ...rule, strokes: [] })),
+  'reset clears the chord but preserves the rule and its actions');
+assert.deepEqual(effectiveShortcuts(resetWithCustom.shortcuts, 'other').redo, ['Ctrl + Y', 'Ctrl + Shift + Z'], 'reset restores the claimed default key');
+assert.deepEqual(effectiveShortcuts(resetWithCustom.shortcuts, 'other').save, ['Ctrl + S'], 'reset restores unrelated built-in defaults');
+const cellBreakSequence = { ...mixed, actions: [{ type: 'command', command: 'cellBreak' }, cellSnippet] } as const;
+assert.deepEqual(changeEditingPreferences(defaults, saveCustom(cellBreakSequence), 'other').customShortcuts, [cellBreakSequence]);
+const customShortcutSchema = JSON.parse(readFileSync('package.json', 'utf8')).contributes.configuration.properties['meoEnhanced.editing.preferences'].properties.customShortcuts.items;
+assert.deepEqual(customShortcutSchema.properties.scope.enum, [...customShortcutScopes]);
+const [commandSchema, snippetSchema, modeSchema] = customShortcutSchema.properties.actions.items.oneOf;
+assert.deepEqual(commandSchema.properties.command.enum, editorCommandIds.filter(canBindCommand));
+assert.deepEqual(modeSchema.properties.mode.enum, [...shortcutTargetModes]);
+assert.equal(customShortcutSchema.then.properties.id.const, insertCurrentTimeExampleId);
+for (const [branch, action, required] of [
+  [commandSchema, { type: 'command', command: 'bold' }, 'command'],
+  [snippetSchema, { type: 'snippet', template: 'hello' }, 'template'],
+  [modeSchema, { type: 'mode', mode: 'preview' }, 'mode']
+] as const) {
+  assert.equal(branch.properties.type.const, action.type);
+  assert.deepEqual(branch.required, ['type', required]);
+  assert.ok(isCustomShortcut({ ...shortcutRule, actions: [action] }));
+  assert.equal(isCustomShortcut({ ...shortcutRule, actions: [{ type: action.type }] }), false);
+}
 assert.equal(defaults.input.selectionToolbar, true, 'existing users keep the selection toolbar by default');
 assert.equal(defaults.input.pasteHtml, false, 'HTML paste formatting is disabled by default');
 assert.equal(normalizeEditingPreferences(undefined).input.pasteHtml, false);
@@ -100,7 +178,7 @@ for (const platform of ['mac', 'other'] as const) {
   assert.equal(resolveShortcut(formatStroke, { bold: ['Alt + Shift + F'] }, platform, 'editor'), 'bold', 'new formatting default respects older custom bindings');
   assert.deepEqual(effectiveShortcuts({ bold: ['Alt + Shift + F'] }, platform).formatHtml, []);
   assert.deepEqual(shortcutConflicts('italic', ['Alt + Shift + F'], {}, platform), ['formatHtml']);
-  const formatBinding = changeEditingPreferences(defaults, { type: 'bind', command: 'formatHtml', keys: [`${primary} + Alt + L`], replaceConflicts: false }, platform);
+  const formatBinding = changeEditingPreferences(defaults, { type: 'bind', command: 'formatHtml', keys: [`${primary} + Alt + L`], confirmedReplacements: [] }, platform);
   assert.deepEqual(effectiveShortcuts(formatBinding.shortcuts, platform).formatHtml, [`${primary} + Alt + L`]);
   assert.equal(resolveShortcut(formatStroke, formatBinding.shortcuts, platform, 'editor'), null);
   const saveAsKey = `${primary} + Shift + S`;
@@ -111,7 +189,7 @@ for (const platform of ['mac', 'other'] as const) {
   assert.equal(resolveShortcut({ key: 's', code: 'KeyS', ctrl: platform === 'other', meta: platform === 'mac', alt: false, shift: true },
     legacySaveAsChord, platform, 'editor'), 'bold', 'the existing custom command keeps ownership of the new default chord');
   assert.deepEqual(shortcutConflicts('italic', [saveAsKey], {}, platform), ['saveAs']);
-  const saveAs = changeEditingPreferences(defaults, { type: 'bind', command: 'saveAs', keys: [saveAsKey], replaceConflicts: false }, platform);
+  const saveAs = changeEditingPreferences(defaults, { type: 'bind', command: 'saveAs', keys: [saveAsKey], confirmedReplacements: [] }, platform);
   assert.deepEqual(effectiveShortcuts(saveAs.shortcuts, platform).saveAs, [saveAsKey]);
   assert.deepEqual(shortcutConflicts('saveAs', [`${primary} + S`], {}, platform), ['save']);
   for (const context of ['global', 'editor', 'table'] as const) {
@@ -126,18 +204,19 @@ for (const platform of ['mac', 'other'] as const) {
   }
   assert.deepEqual(shortcutConflicts('italic', [`${primary} + B`], {}, platform), ['bold']);
   assert.deepEqual(shortcutConflicts('cellBreak', ['Shift + Enter'], {}, platform), []);
-  const changed = changeEditingPreferences(defaults, { type: 'bind', command: 'italic', keys: [`${primary} + B`], replaceConflicts: true }, platform);
+  const changed = changeEditingPreferences(defaults, confirmBuiltin('italic', [`${primary} + B`], defaults, platform), platform);
   assert.deepEqual(effectiveShortcuts(changed.shortcuts, platform).bold, []);
   assert.deepEqual(effectiveShortcuts(changed.shortcuts, platform).italic, [`${primary} + B`]);
-  assert.throws(() => changeEditingPreferences(defaults, { type: 'bind', command: 'italic', keys: [`${primary} + B`], replaceConflicts: false }, platform));
-  assert.throws(() => changeEditingPreferences(defaults, { type: 'bind', command: 'italic', keys: [`${primary} + C`], replaceConflicts: true }, platform));
+  assert.throws(() => changeEditingPreferences(defaults, { type: 'bind', command: 'italic', keys: [`${primary} + B`], confirmedReplacements: [] }, platform));
+  assert.throws(() => changeEditingPreferences(defaults, { type: 'bind', command: 'italic', keys: [`${primary} + C`],
+    confirmedReplacements: [{ type: 'command', command: 'copy', keys: [`${primary} + C`] }] }, platform));
   const reset = changeEditingPreferences(changed, { type: 'resetShortcuts' }, platform);
   assert.deepEqual(reset, defaults);
   assert.equal(resolveShortcut({ key: 'b', code: 'KeyB', ctrl: platform === 'other', meta: platform === 'mac', alt: false, shift: false }, {}, platform, 'editor'), 'bold');
   assert.equal(resolveShortcut({ key: 'b', code: 'KeyB', ctrl: platform === 'other', meta: platform === 'mac', alt: false, shift: false }, {}, platform, 'global'), null);
 }
 
-const replacedRedo = changeEditingPreferences(defaults, { type: 'bind', command: 'bold', keys: ['Ctrl + Shift + Z'], replaceConflicts: true }, 'other');
+const replacedRedo = changeEditingPreferences(defaults, confirmBuiltin('bold', ['Ctrl + Shift + Z'], defaults), 'other');
 assert.deepEqual(effectiveShortcuts(replacedRedo.shortcuts, 'other').redo, ['Ctrl + Y']);
 assert.deepEqual(defaults.shortcuts, {});
 assert.equal(normalizeShortcut('shift + control + b'), 'Ctrl + Shift + B');
@@ -210,14 +289,14 @@ const toolbarResponse = await host.update({ type: 'updateEditingPreferences', re
 assert.equal(toolbarResponse.result.ok, true);
 assert.equal(reloaded.read().input.selectionToolbar, false, 'the disabled toolbar survives a new Host instance');
 const saveAsRequest = { type: 'updateEditingPreferences' as const, requestId: 'save-as-binding',
-  change: { type: 'bind' as const, command: 'saveAs' as const, keys: ['Ctrl + Shift + S'], replaceConflicts: false } };
+  change: { type: 'bind' as const, command: 'saveAs' as const, keys: ['Ctrl + Shift + S'], confirmedReplacements: [] } };
 assert.ok(decodeWebviewToHostMessage(saveAsRequest));
 const saveAsResponse = await host.update(saveAsRequest);
 assert.equal(saveAsResponse.result.ok, true);
 assert.ok(decodeHostToWebviewMessage(saveAsResponse));
 assert.deepEqual(reloaded.read().shortcuts.saveAs, ['Ctrl + Shift + S'], 'Save As bindings survive a new Host instance');
 const formatRequest = { type: 'updateEditingPreferences' as const, requestId: 'html-format-binding',
-  change: { type: 'bind' as const, command: 'formatHtml' as const, keys: ['Ctrl + Alt + L'], replaceConflicts: false } };
+  change: { type: 'bind' as const, command: 'formatHtml' as const, keys: ['Ctrl + Alt + L'], confirmedReplacements: [] } };
 assert.ok(decodeWebviewToHostMessage(formatRequest));
 assert.equal((await host.update(formatRequest)).result.ok, true);
 assert.deepEqual(reloaded.read().shortcuts.formatHtml, ['Ctrl + Alt + L'], 'HTML formatting binding persists through Host');
@@ -227,6 +306,36 @@ const failure = await failing.update({ ...request, requestId: 'failed' });
 assert.equal(failure.result.ok, false);
 assert.deepEqual(failing.read(), persisted);
 assert.ok(decodeHostToWebviewMessage(first));
+
+let examplePreferences: EditingPreferences = defaults;
+const openExampleHost = () => createEditingPreferencesHost({
+  platform: 'other', read: () => examplePreferences, write: async value => { examplePreferences = value; }
+});
+const exampleHost = openExampleHost();
+const examples = exampleHost.read().customShortcuts!;
+assert.equal(examples.length, 1);
+const [timeExample] = examples;
+assert.equal(timeExample.id, insertCurrentTimeExampleId);
+assert.equal(timeExample.scope, 'editor');
+assert.deepEqual(timeExample.strokes, ['Ctrl + Alt + T']);
+assert.equal(customShortcutTitle(timeExample, 'zh-CN'), '示例 · 插入当前时间');
+assert.equal(customShortcutTitle(timeExample, 'en'), insertCurrentTimeExampleName);
+assert.equal(customShortcutTitle({ id: 'user-created', name: insertCurrentTimeExampleName }, 'zh-CN'), insertCurrentTimeExampleName);
+assert.equal(examplePreferences.customShortcuts, undefined, 'Reading the default does not write user settings');
+examplePreferences = { ...defaults, shortcuts: { bold: ['Ctrl + Alt + T'] } };
+assert.deepEqual(exampleHost.read().customShortcuts, [{ ...timeExample, strokes: [] }], 'The example yields to a previously assigned key');
+assert.deepEqual(exampleHost.read().shortcuts.bold, ['Ctrl + Alt + T']);
+examplePreferences = custom;
+assert.deepEqual(exampleHost.read(), custom, 'An existing action list is never seeded again');
+examplePreferences = defaults;
+const exampleReset = await exampleHost.update({ ...request, requestId: 'reset-example', change: { type: 'resetShortcuts' } });
+assert.ok(exampleReset.result.ok);
+assert.deepEqual(openExampleHost().read().customShortcuts, [{ ...timeExample, strokes: [] }], 'Reset clears the example binding but preserves the action');
+const exampleRemoval = await exampleHost.update({
+  ...request, requestId: 'delete-example', change: { type: 'deleteCustomShortcut', id: insertCurrentTimeExampleId }
+});
+assert.ok(exampleRemoval.result.ok);
+assert.deepEqual(openExampleHost().read().customShortcuts, [], 'An explicitly removed example stays removed after reopening');
 
 const requests: UpdateEditingPreferencesRequest[] = [];
 const timers = new Map<number, () => void>();

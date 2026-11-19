@@ -63,6 +63,27 @@ try {
   const luminance = (color: string) => channels(color).map(value => {
     const channel = value / 255; return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
   }).reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+  const checkPlaceholders = async (label: string, minimum = 4.5) => {
+    const fields = await page.$$eval('.find-input, .line-jump-input, .settings-search, .appearance-color-hex', elements => elements.map(field => {
+      const style = getComputedStyle(field);
+      const placeholder = getComputedStyle(field, '::placeholder');
+      let background = style.backgroundColor;
+      for (let parent = field.parentElement; parent && background === 'rgba(0, 0, 0, 0)'; parent = parent.parentElement) {
+        background = getComputedStyle(parent).backgroundColor;
+      }
+      return { name: field.getAttribute('placeholder'), background, ink: style.color, hint: placeholder.color, opacity: placeholder.opacity };
+    }));
+    assert.ok(fields.length > 4, `${label}: settings, search, and line jump fields are mounted`);
+    const placeholderColor = await role('text-placeholder');
+    for (const { name, background, ink, hint, opacity } of fields) {
+      const surface = luminance(background);
+      const contrastOnField = (color: string) => (Math.max(luminance(color), surface) + 0.05) / (Math.min(luminance(color), surface) + 0.05);
+      assert.equal(hint, placeholderColor, `${label}/${name}: shared placeholder color`);
+      assert.equal(opacity, '1', `${label}/${name}: the browser does not dim the color again`);
+      assert.ok(contrastOnField(hint) >= minimum, `${label}/${name}: the placeholder remains readable on ${background}`);
+      assert.ok(contrastOnField(ink) > contrastOnField(hint) + 0.25, `${label}/${name}: the placeholder is visibly quieter than entered text`);
+    }
+  };
   const checkSemanticColors = async (label: string) => {
     const surfaces = await Promise.all(['surface', 'surface-raised', 'surface-field', 'surface-hover'].map(role));
     for (const [name, floor] of [['success', 0.60], ['warning', 0.85], ['danger', 0.55]] as const) {
@@ -90,6 +111,7 @@ try {
   assert.equal(await page.$$eval('.meo-tooltip.is-visible', elements => elements.length), 1, 'color guidance uses the one shared hint');
   await page.mouse.move(0, 0);
   await checkSemanticColors('native dark');
+  await checkPlaceholders('native dark');
   assert.deepEqual(await page.$$eval('.settings-tab-label', elements => elements.map(e => e.textContent)), ['常规', '外观', '输入', '预览预设', '快捷键', '关于']);
   assert.equal(await page.$('.settings-tab[data-tab="extensions"]'), null, 'Theme changes keep unpublished Extras hidden');
   await page.click('[data-tab="general"]'); await page.keyboard.press('ArrowLeft');
@@ -189,6 +211,7 @@ try {
   if (screenshots) await page.screenshot({path: path.join(screenshots, '064-default-light.png')});
   const defaultLightRoles = await uiRoles(); const lightSource = await source();
   await checkSemanticColors('default light');
+  await checkPlaceholders('default light');
   if (screenshots) {
     await page.click('[data-section="appearanceAdvanced"]');
     await page.screenshot({path: path.join(screenshots, '066-semantic-light.png')});
@@ -207,6 +230,7 @@ try {
   if (screenshots) await page.screenshot({path: path.join(screenshots, '065-default-dark.png')});
   const defaultDarkRoles = await uiRoles(); const darkSource = await source();
   await checkSemanticColors('default dark');
+  await checkPlaceholders('default dark');
   if (screenshots) {
     await page.click('[data-section="appearanceAdvanced"]');
     await page.screenshot({path: path.join(screenshots, '067-semantic-dark.png')});
@@ -359,6 +383,8 @@ try {
   await page.evaluate(() => { document.body.className = 'vscode-high-contrast'; window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'HC', type: 'dark', colors: {}, tokenColors: []}}})); });
   assert.equal(await role('surface'), 'rgb(34, 39, 46)', 'high contrast uses the native palette');
   assert.ok(await page.$eval('.appearance-note', e => e.textContent?.includes('高对比度')));
+  await checkPlaceholders('native high contrast', 7);
+  if (screenshots) await page.screenshot({ path: path.join(screenshots, 'appearance-high-contrast.png') });
   await page.evaluate(() => { document.body.className = 'vscode-dark'; window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'dark', type: 'dark', colors: {}, tokenColors: []}}})); });
   assert.equal(await value('surface'), '#122739');
   await page.click(resetColors); await saved('dark', 'surface', null); await saved('light', 'surface', null);

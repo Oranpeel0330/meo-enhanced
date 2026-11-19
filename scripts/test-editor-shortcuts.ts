@@ -222,21 +222,56 @@ for (const testCase of cases) {
 
 const effects: string[] = [];
 const target = { closest: () => null, matches: () => false };
+let tableFocused = false;
+let tableInputFocused = false;
+let snippetTargetAvailable = true;
+let rejectedCommand = '';
+let throwingCommand = '';
+const failures: { id: string; step: number }[] = [];
 const customShortcuts: readonly CustomShortcut[] = [
   { id: 'meeting-notes', name: 'Meeting notes', scope: 'editor', strokes: ['Ctrl + K', 'T'],
-    actions: [{ type: 'snippet', template: '## Notes' }, { type: 'command', command: 'save' }] },
+    actions: [{ type: 'snippet', template: '## ${1:Notes}' }, { type: 'command', command: 'save' }] },
   { id: 'to-source', name: 'Open Source', scope: 'global', strokes: ['Ctrl + Alt + J'],
-    actions: [{ type: 'mode', mode: 'source' }] }
+    actions: [{ type: 'mode', mode: 'source' }] },
+  { id: 'mixed', name: 'Format and delete table row', scope: 'editor', strokes: ['Ctrl + Alt + U'],
+    actions: [{ type: 'command', command: 'bold' }, { type: 'command', command: 'rowDelete' }] },
+  { id: 'table-chord', name: 'Add a row', scope: 'live', strokes: ['Ctrl + Alt + P', 'R'],
+    actions: [{ type: 'command', command: 'rowAbove' }] },
+  { id: 'cell-snippet', name: 'Cell snippet', scope: 'editor', strokes: ['Ctrl + Alt + H', 'R'],
+    actions: [{ type: 'snippet', template: 'Time: ${CURRENT_HOUR}' }] },
+  { id: 'move-line-chord', name: 'Move document line', scope: 'editor', strokes: ['Ctrl + Alt + W', 'R'],
+    actions: [{ type: 'command', command: 'moveUp' }] },
+  { id: 'mixed-table-input', name: 'Move line and delete row', scope: 'editor', strokes: ['Ctrl + Alt + Y'],
+    actions: [{ type: 'command', command: 'moveUp' }, { type: 'command', command: 'rowDelete' }] },
+  { id: 'dynamic-step', name: 'Move and insert', scope: 'editor', strokes: ['Ctrl + Alt + M'],
+    actions: [{ type: 'command', command: 'moveUp' }, { type: 'snippet', template: 'inserted' }] },
+  { id: 'no-op', name: 'Move up', scope: 'editor', strokes: ['Ctrl + Alt + N'],
+    actions: [{ type: 'command', command: 'moveUp' }] },
+  { id: 'async-error', name: 'Save a copy', scope: 'editor', strokes: ['Ctrl + Alt + S'],
+    actions: [{ type: 'command', command: 'saveAs' }] }
 ];
 const customShortcutMatcher = createCustomShortcutMatcher();
 const context = {
-  editor: { hasFocus: () => true, view: { hasFocus: true, contentDOM: { contains: (element: unknown) => element === target } } },
+  editor: {
+    hasFocus: () => true,
+    isTableFocused: () => tableFocused,
+    isTableInputFocused: () => tableInputFocused,
+    executeCommand: (command: string) => {
+      if (command === throwingCommand) throw new Error('step failure');
+      if (command === rejectedCommand) return false;
+      effects.push(command); return true;
+    },
+    view: { hasFocus: true, contentDOM: { contains: (element: unknown) => element === target } }
+  },
   editableMode: 'live' as const,
   editorSurfaceActive: true,
   customShortcuts,
   customShortcutMatcher,
+  reportCustomShortcutError: (rule: CustomShortcut, step: number) => { failures.push({ id: rule.id, step }); },
+  canInsertSnippet: () => snippetTargetAvailable,
   insertSnippet: (template: string) => { effects.push('insert:' + template); return true; },
   requestSave: () => { effects.push('save'); },
+  requestSaveAs: async () => { throw new Error('asynchronous step failure'); },
   setMode: (mode: string) => { effects.push('mode:' + mode); },
   openFindPanel: () => {},
   requestMode: () => {}
@@ -248,7 +283,7 @@ const keydown = (key: string, timeStamp: number, extra: Partial<KeyboardEvent> =
 assert.equal(keydown('k', 0, { ctrlKey: true }), true);
 assert.deepEqual(effects, []);
 assert.equal(keydown('t', 200), true);
-assert.deepEqual(effects, ['insert:## Notes', 'save'], 'Actions dispatch in order');
+assert.deepEqual(effects, ['insert:## ${1:Notes}', 'save'], 'Actions dispatch in order');
 assert.equal(keydown('k', 300, { ctrlKey: true }), true);
 assert.equal(keydown('t', 2000), false, 'An expired prefix cannot consume a typed character');
 assert.equal(keydown('k', 2100, { ctrlKey: true }), true);
@@ -257,6 +292,49 @@ assert.equal(keydown('t', 2300), false);
 assert.equal(keydown('j', 2400, { ctrlKey: true, altKey: true }), true);
 assert.equal(effects.at(-1), 'mode:source', 'The explicit mode argument reaches the command');
 assert.equal(keydown('j', 2500, { ctrlKey: true, altKey: true, repeat: true }), true);
-assert.deepEqual(effects, ['insert:## Notes', 'save', 'mode:source'], 'Repeating the key does not replay custom actions');
+assert.deepEqual(effects, ['insert:## ${1:Notes}', 'save', 'mode:source'], 'Repeating the key does not replay custom actions');
+
+const ctrlAlt = { ctrlKey: true, altKey: true };
+effects.length = 0;
+assert.equal(keydown('u', 2600, ctrlAlt), true);
+assert.deepEqual(effects, ['bold'], 'In prose the table step is skipped');
+assert.equal(keydown('p', 2700, ctrlAlt), false, 'A table-only chord cannot consume its prefix in prose');
+assert.equal(keydown('r', 2800), false);
+effects.length = 0;
+tableFocused = true;
+assert.equal(keydown('u', 3000, ctrlAlt), true);
+assert.deepEqual(effects, ['bold', 'rowDelete']);
+assert.equal(keydown('p', 3100, ctrlAlt), true, 'The same chord can start in a table in the selected mode');
+assert.equal(keydown('r', 3200), true);
+snippetTargetAvailable = false;
+assert.equal(keydown('h', 3250, ctrlAlt), false, 'An ambiguous table selection does not consume the prefix');
+snippetTargetAvailable = true;
+assert.equal(keydown('h', 3300, ctrlAlt), true);
+assert.deepEqual(effects, ['bold', 'rowDelete', 'rowAbove']);
+assert.equal(keydown('r', 3400), true);
+assert.deepEqual(effects, ['bold', 'rowDelete', 'rowAbove', 'insert:Time: ${CURRENT_HOUR}']);
+assert.equal(keydown('k', 3500, { ctrlKey: true }), true);
+assert.equal(keydown('t', 3600), true);
+assert.equal(effects.at(-1), 'save', 'An inapplicable first step does not stop a later applicable step');
+tableInputFocused = true;
+effects.length = 0;
+assert.equal(keydown('w', 3700, ctrlAlt), false, 'A document-only chord does not start inside a native table input');
+assert.equal(keydown('r', 3800), false);
+assert.equal(keydown('y', 3900, ctrlAlt), true);
+assert.deepEqual(effects, ['rowDelete'], 'An unavailable document command does not block a later table command');
+tableFocused = tableInputFocused = false;
+effects.length = 0;
+rejectedCommand = 'moveUp';
+assert.equal(keydown('m', 4000, ctrlAlt), true);
+assert.deepEqual(effects, ['insert:inserted'], 'A command returning false lets a later applicable step run');
+assert.equal(keydown('n', 4100, ctrlAlt), false, 'If every step returns false, the key falls through');
+effects.length = 0;
+throwingCommand = 'moveUp';
+assert.equal(keydown('m', 4200, ctrlAlt), true);
+assert.deepEqual(effects, [], 'A thrown step stops later steps');
+assert.deepEqual(failures, [{ id: 'dynamic-step', step: 0 }]);
+assert.equal(keydown('s', 4300, ctrlAlt), true);
+await Promise.resolve();
+assert.deepEqual(failures, [{ id: 'dynamic-step', step: 0 }, { id: 'async-error', step: 0 }]);
 
 console.log('Editor shortcut tests passed');

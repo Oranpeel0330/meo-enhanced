@@ -6,6 +6,7 @@ export type TooltipContent =
   | { readonly text: string; readonly shortcut?: string; readonly kind?: 'hint' }
   | { readonly text: string; readonly shortcut?: never; readonly kind: 'fulltext' | 'link' }
   | { readonly text: string; readonly shortcut?: never; readonly kind: 'description';
+      readonly detail?: string;
       readonly rows?: readonly { readonly label: string; readonly value: string }[];
       readonly error?: { readonly title: string; readonly text: string } };
 
@@ -165,7 +166,7 @@ export function createTooltip(anchor: HTMLElement, options: {
   focusTarget.setAttribute('aria-describedby', [...descriptions, tooltip.id].join(' '));
   ownedAnchors.set(anchor, options.manual ? 'manual' : 'automatic');
   const events = new view.AbortController();
-  let content = options.content;
+  let content: TooltipContent = { text: '' };
   let hovering = anchor.matches(':hover'), visible = false, disposed = false;
   let engaged = false;
   let pointerSession = false;
@@ -401,8 +402,8 @@ export function createTooltip(anchor: HTMLElement, options: {
 
   function setContent(next: TooltipContent) {
     if (disposed) return;
-    const previousDetails = content.kind === 'description' ? [content.rows, content.error] : [];
-    const nextDetails = next.kind === 'description' ? [next.rows, next.error] : [];
+    const previousDetails = content.kind === 'description' ? [content.detail, content.rows, content.error] : [];
+    const nextDetails = next.kind === 'description' ? [next.detail, next.rows, next.error] : [];
     const detailsChanged = JSON.stringify(previousDetails) !== JSON.stringify(nextDetails);
     const changed = content.text !== next.text || content.shortcut !== next.shortcut || content.kind !== next.kind || detailsChanged;
     content = next;
@@ -413,13 +414,17 @@ export function createTooltip(anchor: HTMLElement, options: {
     if (shortcut.textContent !== (content.shortcut ?? '')) shortcut.textContent = content.shortcut ?? '';
     if (shortcut.hidden !== !content.shortcut) shortcut.hidden = !content.shortcut;
     tooltip.classList.toggle('meo-tooltip--shortcut', !!content.shortcut);
+    const detail = content.kind === 'description' ? content.detail : undefined;
     const rows = content.kind === 'description' ? content.rows ?? [] : [];
     const error = content.kind === 'description' ? content.error : undefined;
-    tooltip.classList.toggle('meo-tooltip--details', rows.length > 0 || !!error);
-    if (details.hidden !== (rows.length === 0)) details.hidden = rows.length === 0;
+    const hasDetails = !!detail || rows.length > 0;
+    tooltip.classList.toggle('meo-tooltip--details', hasDetails || !!error);
+    if (details.hidden !== !hasDetails) details.hidden = !hasDetails;
     if (errorDetails.hidden !== !error) errorDetails.hidden = !error;
     if (detailsChanged) {
       details.replaceChildren();
+      if (hasDetails) details.append(doc.createElement('hr'));
+      if (detail) details.append(doc.createTextNode(detail));
       if (rows.length) {
         const list = doc.createElement('dl');
         for (const row of rows) {
@@ -427,7 +432,7 @@ export function createTooltip(anchor: HTMLElement, options: {
           const value = doc.createElement('dd'); value.textContent = row.value;
           list.append(name, value);
         }
-        details.append(doc.createElement('hr'), list);
+        details.append(list);
       }
       errorDetails.replaceChildren();
       if (error) {
@@ -458,7 +463,7 @@ export function createTooltip(anchor: HTMLElement, options: {
     focusTarget.addEventListener('keydown', event => { if (event.key === 'Escape' || event.key === 'Tab') hide(); }, { signal: events.signal });
   }
   view.addEventListener('blur', () => hide(), { signal: events.signal });
-  setContent(content);
+  setContent(options.content);
   return {
     show, hide, setContent, setPointerPosition,
     /** Moving a manually owned tooltip retains its content surface and reveal state. */

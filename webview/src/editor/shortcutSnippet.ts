@@ -2,9 +2,9 @@ import { snippet } from '@codemirror/autocomplete';
 import { isolateHistory } from '@codemirror/commands';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
+import { parseShortcutSnippet, shortcutSnippetFinalField as finalField, shortcutSnippetSupportsTable, type ShortcutSnippetPart } from '../../../src/foundation/shortcutSnippet';
 
 type Part = string | { field: number; initial?: string };
-const finalField = 100;
 
 function documentName(documentId: string): string {
   try {
@@ -12,23 +12,6 @@ function documentName(documentId: string): string {
   } catch {
     return documentId.split(/[\\/]/).at(-1) ?? '';
   }
-}
-
-function parseTemplate(template: string, variables: Readonly<Record<string, string>>): Part[] {
-  const tokens = /\\([$\\}])|\$\{(?:(\d{1,2})(?::([^{}\r\n]*))?|([A-Z_][A-Z_0-9]*))\}|\$(\d{1,2})(?!\d)|\$([A-Z_][A-Z_0-9]*)/g;
-  const parts: Part[] = [];
-  let offset = 0;
-  for (const match of template.matchAll(tokens)) {
-    parts.push(template.slice(offset, match.index));
-    const [raw, escaped, field, initial, variable, shortField, shortVariable] = match;
-    const name = variable ?? shortVariable;
-    if (escaped) parts.push(escaped);
-    else if (name) parts.push(variables[name] ?? raw);
-    else parts.push({ field: Number(field ?? shortField) || finalField, initial });
-    offset = match.index + raw.length;
-  }
-  parts.push(template.slice(offset));
-  return parts;
 }
 
 function defaultsFor(parts: readonly Part[]): ReadonlyMap<number, string> {
@@ -43,12 +26,11 @@ function defaultsFor(parts: readonly Part[]): ReadonlyMap<number, string> {
 
 const escapeBraces = (value: string): string => value.replace(/[{}]/g, '\\$&');
 
-export function insertShortcutSnippet(view: EditorView, template: string, documentId: string): boolean {
-  if (!view.hasFocus || view.state.readOnly || view.compositionStarted) return false;
+function snippetVariables(documentId: string): Readonly<Record<string, string>> {
   const now = new Date();
   const padded = (value: number) => String(value).padStart(2, '0');
   const filename = documentName(documentId);
-  const variables = {
+  return {
     CURRENT_YEAR: String(now.getFullYear()),
     CURRENT_MONTH: padded(now.getMonth() + 1),
     CURRENT_DATE: padded(now.getDate()),
@@ -58,10 +40,38 @@ export function insertShortcutSnippet(view: EditorView, template: string, docume
     TM_FILENAME: filename,
     TM_FILENAME_BASE: filename.replace(/(?<=.)\.[^.]*$/, '')
   };
+}
+
+function expandSnippet(parts: readonly ShortcutSnippetPart[], variables: Readonly<Record<string, string>>, selection: string): Part[] {
+  return parts.map(part => typeof part === 'string' || 'field' in part ? part
+    : part.variable === 'TM_SELECTED_TEXT' ? selection : variables[part.variable] ?? part.raw);
+}
+
+export function expandTableShortcutSnippet(template: string, documentId: string, selection: string): { text: string; caret: number } | null {
+  const parts = parseShortcutSnippet(template);
+  if (!shortcutSnippetSupportsTable(parts)) return null;
+  let text = '';
+  let finalCursor: number | undefined;
+  for (const part of expandSnippet(parts, snippetVariables(documentId), selection)) {
+    if (typeof part === 'string') text += part;
+    else finalCursor = text.length;
+  }
+  return { text, caret: finalCursor ?? text.length };
+}
+
+export type SourceCellSnippetEdit = { from: number; to: number; text: string; caret: number };
+
+export function insertSourceCellSnippet(view: EditorView, plan: SourceCellSnippetEdit): void {
+  view.dispatch({ changes: { from: plan.from, to: plan.to, insert: plan.text }, selection: EditorSelection.cursor(plan.caret),
+    annotations: [Transaction.userEvent.of('input.snippet'), isolateHistory.of('full')], scrollIntoView: true });
+}
+
+export function insertShortcutSnippet(view: EditorView, template: string, documentId: string): boolean {
+  if (!view.hasFocus || view.state.readOnly || view.compositionStarted) return false;
+  const variables = snippetVariables(documentId);
+  const templateParts = parseShortcutSnippet(template);
   const { state } = view;
-  const partsFor = (from: number, to: number) => parseTemplate(template, {
-    ...variables, TM_SELECTED_TEXT: state.sliceDoc(from, to)
-  });
+  const partsFor = (from: number, to: number) => expandSnippet(templateParts, variables, state.sliceDoc(from, to));
   const annotations = [Transaction.userEvent.of('input.snippet'), isolateHistory.of('full')];
   const { main, ranges } = state.selection;
   const parts = partsFor(main.from, main.to);
