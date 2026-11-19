@@ -311,15 +311,21 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
     before: string,
     selection: [number, number],
     key: 'Backspace' | 'Delete' | 'Shift+Enter' | 'cellBreak',
-    expected: { value: string; caret: number; source: string }
+    expected: { value: string; caret: number; source: string },
+    large = false
   ) => {
-    const original = table(before.replaceAll('\n', ''));
+    const suffix = large ? '\n\n' + 'padding text\n'.repeat(8100) : '';
+    const original = table(before.replaceAll('\n', '')) + suffix;
     await page.evaluate(text => {
       (window as any).__tableCellEditor?.destroy();
       (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
         parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
       });
     }, original);
+    await page.waitForFunction(expected => {
+      const app = window as any;
+      return app.TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(app.__tableCellEditor.view.state) === expected;
+    }, {}, large);
     await page.waitForSelector(preview, { visible: true });
     await page.click(preview);
     const initial = await page.$eval(cell, (input, [from, to]) => {
@@ -344,7 +350,7 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
     assert.deepEqual(edited, { value: expected.value, start: expected.caret, end: expected.caret }, label);
     await page.keyboard.press('Escape');
     const source = await page.evaluate(() => (window as any).__tableCellEditor.getText());
-    assert.equal(source, table(expected.source), `${label} commits the edited cell`);
+    assert.equal(source, table(expected.source) + suffix, `${label} commits the edited cell`);
     if (cases === 'structure') {
       const history = await page.evaluate(async () => {
         const editor = (window as any).__tableCellEditor;
@@ -360,7 +366,7 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
 
   if (cases === 'structure') {
     const withCaret = (marked: string) => ({ value: marked.replace('|', ''), caret: marked.indexOf('|') });
-    for (const [before, key, after] of [
+    for (const large of [false, true]) for (const [before, key, after] of [
       ['1. First<BR />\n2. |Second<br/>\n3. Third', 'Backspace', '1. First<BR />\n|Second<br/>\n3. Third'],
       ['1. First<BR />\n2. |<br/>\n3. Third', 'Backspace', '1. First<BR />\n2. |Third'],
       ['1. First<br>\n2. |Second<br>\n    - Child', 'Backspace', '1. First<br>\n|Second<br>\n- Child'],
@@ -368,12 +374,16 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
       ['- Top<br/>\n  - [x] |Nested<br>\n- Last', 'Shift+Enter', '- Top<br/>\n  - [ ] |<br>\n  - [x] Nested<br>\n- Last'],
       ['> Start<br>\n> > Nested|<BR />\n> End', 'Shift+Enter', '> Start<br>\n> > Nested<br>\n> > |<BR />\n> End'],
       ['One<br>\n> Quote|', 'cellBreak', 'One<br>\n> Quote<br>\n> |'],
-      ['1. First<br/>\n2. Second|<br>\n3. Third', 'Shift+Enter', '1. First<br/>\n2. Second<br>\n3. |<br>\n4. Third']
+      ['1. First<br/>\n2. Second|<br>\n3. Third', 'Shift+Enter', '1. First<br/>\n2. Second<br>\n3. |<br>\n4. Third'],
+      ['- Al|pha', 'Shift+Enter', '- Al<br>\n- |pha'],
+      ['9. Al|pha<BR />\n10. Beta', 'Shift+Enter', '9. Al<br>\n10. |pha<BR />\n11. Beta'],
+      ['> - [x] Al|pha<BR />\n> - Beta', 'Shift+Enter', '> - [x] Al<br>\n> - [ ] |pha<BR />\n> - Beta'],
+      ['3) [x] Al|pha<BR />\n4) Beta', 'cellBreak', '3) [x] Al<br>\n4) [ ] |pha<BR />\n5) Beta']
     ] as const) {
       const initial = withCaret(before);
       const expected = withCaret(after);
       await checkEdit(initial.value, [initial.caret, initial.caret], key,
-        { ...expected, source: expected.value.replaceAll('\n', '').trim() });
+        { ...expected, source: expected.value.replaceAll('\n', '').trim() }, large);
     }
     await page.evaluate(() => (window as any).__tableCellEditor.destroy());
     console.log('table list and quote editing passed');

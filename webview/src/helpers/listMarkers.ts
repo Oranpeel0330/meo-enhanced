@@ -4,6 +4,7 @@ import type { ChangeDesc } from '@codemirror/state';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { sourcePresentationSelection } from '../editor/livePointerSelection';
 import { isolateHistory } from '@codemirror/commands';
+import { insertNewlineContinueMarkup } from '@codemirror/lang-markdown';
 import { listHistoryFocusEffect } from '../adapters/codeMirrorListHistoryFocus';
 import {
   StateField,
@@ -661,12 +662,12 @@ export function projectChangedListMarkerDecoration(
     && (range.value.spec.widget instanceof CheckboxWidget) === (decoration.spec.widget instanceof CheckboxWidget));
 }
 
-export function continuedListMarker(lineText: string): string | null {
+export function continuedListMarker(lineText: string, advance = true): string | null {
   const marker = readMarkdownListPrefix(lineText, quotePrefixOffset(lineText));
-  return marker && lineText.slice(marker.toOffset).trim() ? siblingListPrefix(lineText, marker, true) : null;
+  return marker && lineText.slice(marker.toOffset).trim() ? siblingListPrefix(lineText, marker, advance) : null;
 }
 
-/** Empty item exits; body start inserts above; body end continues below. */
+/** Empty items exit, body start inserts above, and body end continues below. */
 export const handleEnterInList: StateCommand = ({ state, dispatch }) => {
   const selection = state.selection.main;
   if (state.readOnly || state.selection.ranges.length !== 1 || !selection.empty) return false;
@@ -685,12 +686,21 @@ export const handleEnterInList: StateCommand = ({ state, dispatch }) => {
     return true;
   }
   const atStart = selection.head === contentStart;
-  if (!atStart && selection.head !== line.to) return false;
+  const insideBody = selection.head > contentStart && selection.head < line.to;
+  if (!atStart && selection.head !== line.to && !insideBody) return false;
+  const needsTaskPrefix = marker.taskMarker !== undefined &&
+    (marker.orderedNumber !== undefined || line.text.slice(marker.fromOffset, marker.toOffset).includes('\t'));
+  if (insideBody && !needsTaskPrefix) {
+    // Use the existing Markdown split semantics for nested containers, loose
+    // lists and spaces at the split. Cells pass their logical lines here too.
+    return insertNewlineContinueMarkup({ state, dispatch });
+  }
   const prefix = siblingListPrefix(line.text, marker, !atStart);
   if (prefix === null) return false;
-  const from = atStart ? line.from : line.to;
+  const to = atStart ? line.from : selection.head;
+  const from = insideBody ? contentStart + line.text.slice(marker.toOffset, to - line.from).trimEnd().length : to;
   dispatch(state.update({
-    changes: { from, insert: atStart ? prefix + '\n' : '\n' + prefix },
+    changes: { from, to, insert: atStart ? prefix + '\n' : '\n' + prefix },
     selection: { anchor: from + prefix.length + (atStart ? 0 : 1) },
     userEvent: 'input.list'
   }));

@@ -15,7 +15,7 @@ import { blockStickyHeaderExtension } from './helpers/blockStickyHeader';
 import { livePointerSelectionActiveField, setLivePointerSelectionActiveEffect, sourcePresentationSelection } from './editor/livePointerSelection';
 import { blockReadingFocusAt, enterBlockSource, isBlockInteractionEffect } from './editor/blockInteraction';
 import { bindWidgetClick, disposeWidgetClick } from './editor/widgetPointer';
-import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection, type Transaction } from '@codemirror/state';
+import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { Language, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
@@ -3418,8 +3418,87 @@ function blockquoteLineDecorationsAtInputPosition(
   return [...decorations.values()];
 }
 
-/** Keep accepted prefixes through indentation edits, renumbering and continuation.
- * The deferred builder still owns all structural interpretation. */
+/** Paint a proven sibling split while the full structure refresh is pending. */
+function projectListEnter(
+  decorations: DecorationSet,
+  mapped: DecorationSet,
+  transaction: Transaction
+): DecorationSet {
+  const event = transaction.annotation(Transaction.userEvent);
+  if (event !== 'input.list' && event !== 'input') return mapped;
+  const { startState, state, changes } = transaction;
+  if (state.doc.lines <= startState.doc.lines) return mapped;
+  const before = startState.selection;
+  const after = state.selection;
+  if (before.ranges.length !== 1 || after.ranges.length !== 1 || !before.main.empty || !after.main.empty) return mapped;
+  const source = startState.doc.lineAt(before.main.head);
+  if (source.length > 4_096) return mapped;
+  const previous = listMarkerDataInContainerLine(source.text);
+  if (!previous) return mapped;
+  const split = before.main.head - source.from;
+  const above = split === previous.toOffset;
+  if (split < previous.toOffset || (above && event !== 'input.list')) return mapped;
+  const prefix = continuedListMarker(source.text, !above);
+  if (!prefix) return mapped;
+
+  const entered = state.doc.lineAt(after.main.head);
+  const first = state.doc.lineAt(changes.mapPos(source.from, -1));
+  const enteredOffset = after.main.head - entered.from;
+  const enteredPrefix = entered.text.slice(0, enteredOffset);
+  // Number normalization belongs to the input transaction. Validate the
+  // surrounding prefix, then render the ordinal from the accepted document.
+  if (enteredPrefix !== prefix) {
+    const withoutOrdinal = (value: string) => value.slice(0, previous.fromOffset) +
+      value.slice(previous.fromOffset).replace(/^\d+/, '');
+    if (!previous.orderedNumber || withoutOrdinal(enteredPrefix) !== withoutOrdinal(prefix)) return mapped;
+  }
+  if (entered.text.slice(enteredOffset) !== (above ? '' : source.text.slice(split))) return mapped;
+  if (above ? entered.number !== first.number || entered.number === state.doc.lines
+    : entered.number <= first.number || entered.number > first.number + 2) return mapped;
+  const last = above ? state.doc.line(entered.number + 1) : entered;
+  const retained = above ? last : first;
+  const retainedMarker = listMarkerDataInContainerLine(retained.text);
+  if (!retainedMarker || retainedMarker.fromOffset !== previous.fromOffset) return mapped;
+  const retainedBody = retained.text.slice(retainedMarker.toOffset);
+  const beforeBody = source.text.slice(previous.toOffset, above ? source.length : split);
+  if (above ? retainedBody !== beforeBody : retainedBody !== beforeBody && retainedBody !== beforeBody.trimEnd()) return mapped;
+
+  let layout: ListLineLayout | undefined;
+  let markerOffset: number | undefined;
+  const indents: Range<Decoration>[] = [];
+  decorations.between(source.from, source.to, (from, to, value) => {
+    if (from === to && from === source.from) layout = value.spec.listLineLayout ?? layout;
+    if (isListMarkerDecoration(value)) markerOffset = from - source.from;
+    if (value.spec.widget instanceof ListIndentWidget && to <= source.from + previous.fromOffset) {
+      indents.push(value.range(from - source.from, to - source.from));
+    }
+  });
+  if (!layout || markerOffset !== previous.fromOffset) return mapped;
+
+  const style = { columns: layout.guideStepColumns, insert: ' '.repeat(layout.guideStepColumns) };
+  const prefixOffset = indents[0]?.from ?? markerOffset;
+  const add: Range<Decoration>[] = [];
+  for (const row of [first, last]) {
+    const marker = listMarkerData(row.text, null, style, prefixOffset);
+    if (!marker || marker.fromOffset !== markerOffset) return mapped;
+    const indent = countColumn(row.text, state.tabSize, marker.fromOffset)
+      - countColumn(row.text, state.tabSize, prefixOffset);
+    const content = countColumn(row.text, state.tabSize, marker.toOffset) + marker.displayExtraColumns;
+    for (const { from, to, value } of indents) add.push(value.range(row.from + from, row.from + to));
+    add.push(listLineDeco(content, indent, style.columns, false, marker.isTask,
+      marker.taskHiddenPrefixColumns, Boolean(marker.orderedNumber)).range(row.from));
+    addListMarkerDecoration(add, state, row.from, null, style, null, prefixOffset);
+  }
+  return updateLivePresentationRanges(mapped, {
+    filterFrom: first.from,
+    filterTo: last.to,
+    filter: (_from, _to, value) => !value.spec.listLineLayout && !isListMarkerDecoration(value)
+      && !(value.spec.widget instanceof ListIndentWidget) && value.spec.class !== 'meo-task-complete',
+    add
+  });
+}
+
+/** Keep accepted prefixes through indentation edits, renumbering and continuation. */
 function projectInputListMarkers(
   decorations: DecorationSet,
   mapped: DecorationSet,
@@ -3439,46 +3518,6 @@ function projectInputListMarkers(
         changedLines.add(transaction.startState.doc.lineAt(start).from);
       }
     });
-    // List continuation already owns this exact prefix. Project its new row
-    // from the accepted row without waiting for the full Markdown refresh.
-    if (from !== to || !transaction.isUserEvent('input.list') || nextTo - nextFrom > 4_096) return;
-    const line = transaction.startState.doc.lineAt(from);
-    if (line.length > 4_096) return;
-    const prefix = continuedListMarker(line.text);
-    if (!prefix || transaction.newDoc.sliceString(nextFrom, nextTo) !== '\n' + prefix) return;
-    let layout: ListLineLayout | undefined;
-    let markerOffset: number | undefined;
-    let indentOffset: number | undefined;
-    decorations.between(line.from, from, (start, end, decoration) => {
-      if (start === end && start === line.from) layout = decoration.spec.listLineLayout ?? layout;
-      if (isListMarkerDecoration(decoration)) markerOffset = start - line.from;
-      if (decoration.spec.widget instanceof ListIndentWidget) indentOffset = start - line.from;
-    });
-    if (!layout || markerOffset === undefined) return;
-    const nextLine = transaction.newDoc.lineAt(nextFrom + 1);
-    const style = { columns: layout.guideStepColumns, insert: ' '.repeat(layout.guideStepColumns) };
-    const previousMarker = listMarkerDataInContainerLine(line.text);
-    if (!previousMarker || previousMarker.fromOffset !== markerOffset) return;
-    const prefixOffset = indentOffset ?? markerOffset;
-    const marker = listMarkerData(nextLine.text, null, style, prefixOffset);
-    if (!marker) return;
-    marker.indentColumns = countColumn(nextLine.text, transaction.state.tabSize, marker.fromOffset)
-      - countColumn(nextLine.text, transaction.state.tabSize, prefixOffset);
-    marker.contentOffsetColumns = countColumn(nextLine.text, transaction.state.tabSize, marker.toOffset) + marker.displayExtraColumns;
-    if (markerOffset > 0) {
-      // Retain the accepted indentation widget at the new source position.
-      const indentTo = line.from + markerOffset;
-      decorations.between(line.from, indentTo, (start, end, decoration) => {
-        if (start < end && end <= indentTo && decoration.spec.widget instanceof ListIndentWidget) {
-          additions.push(decoration.range(nextLine.from + start - line.from, nextLine.from + end - line.from));
-        }
-      });
-    }
-    additions.push(listLineDeco(marker.contentOffsetColumns, marker.indentColumns,
-      layout.guideStepColumns, false, marker.isTask, marker.taskHiddenPrefixColumns,
-      Boolean(marker.orderedNumber)).range(nextLine.from));
-    addListMarkerDecoration(additions, transaction.state, nextLine.from, null, style, null,
-      prefixOffset);
   });
   const linePositions = new Set<number>();
   for (const from of changedLines) {
@@ -3505,13 +3544,14 @@ function projectInputListMarkers(
       layout.taskHiddenPrefixColumns + hiddenColumns, layout.isOrdered).range(nextLine.from));
     linePositions.add(nextLine.from);
   }
-  return additions.length ? updateLivePresentationRanges(mapped, {
+  const updated = additions.length ? updateLivePresentationRanges(mapped, {
     filter: (from, to, value) => !(from === to && linePositions.has(from) && value.spec.listLineLayout)
       && !(replacedMarkers.has(`${from}:${to}`) && isListMarkerDecoration(value)),
     filterFrom: Math.min(...additions.map(range => range.from)),
     filterTo: Math.max(...additions.map(range => range.to)),
     add: additions, sort: true
   }) : mapped;
+  return projectListEnter(decorations, updated, transaction);
 }
 
 /**

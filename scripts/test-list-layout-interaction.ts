@@ -284,6 +284,8 @@ async function assertListEnterRules(page: import('puppeteer-core').Page): Promis
     { source: '7. body', head: 3, expected: '7. \n8. body', after: 3 },
     { source: '3) [x] body', head: 7, expected: '3) [ ] \n4) [x] body', after: 7 },
     { source: '> - [X] body', head: 8, expected: '> - [ ] \n> - [X] body', after: 8 },
+    { source: '- alpha', head: 4, expected: '- al\n- pha', after: 7 },
+    { source: '3) [x] alpha', head: 9, expected: '3) [x] al\n4) [ ] pha', after: 17 },
     { source: '  - [ ] ', head: 8, expected: '', after: 0 },
     { source: '> - [X] ', head: 8, expected: '> ', after: 2 },
     { source: '-', head: 1, expected: '', after: 0 }
@@ -344,14 +346,29 @@ async function assertListContinuationFrames(page: import('puppeteer-core').Page)
     { first: '1. Before', item: '2. Child', empty: '3. ' },
     { first: '98. Before', item: '99. Child', empty: '100. ' },
     { first: '- Before', item: '- [x] Child', empty: '- [ ] ' },
-    { first: '> 1. Parent', item: '>    - Child', empty: '>    - ' }
+    { first: '> 1. Parent', item: '>    - Child', empty: '>    - ' },
+    { first: '- Before', item: '- Child', prefix: '- ', split: 2, above: true },
+    { first: '9. Before', item: '10. Child', prefix: '10. ', split: 4, above: true,
+      successor: '11. Child' },
+    { first: '8. Before', item: '133333333. Child', prefix: '9. ', split: 11, above: true,
+      successor: '10. Child' },
+    { first: '8. Before', item: '133333333. Child', prefix: '10. ', split: 13, retained: '9. Ch' },
+    { first: '- Before', item: '- Child', prefix: '- ', split: 4 },
+    { first: '98. Before', item: '99. Child', prefix: '100. ', split: 6 },
+    { first: '> - Before', item: '> - [x] Child', prefix: '> - [ ] ', split: 10 },
+    { first: '98. Before', item: '99. [x] Child', prefix: '100. [ ] ', split: 10 }
   ];
   for (const large of [false, true]) for (const [index, fixture] of fixtures.entries()) {
     const source = fixture.first + '\n' + fixture.item + '\n\nKEEP NODE'
       + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
     const label = `${large ? 'optimized' : 'ordinary'}/continuation/${index}`;
-    const before = fixture.first.length + 1 + fixture.item.length;
-    const entered = source.slice(0, before) + '\n' + fixture.empty + source.slice(before);
+    const lineFrom = fixture.first.length + 1;
+    const before = lineFrom + (fixture.split ?? fixture.item.length);
+    const entered = fixture.above
+      ? source.slice(0, lineFrom) + fixture.prefix + '\n' + (fixture.successor ?? fixture.item)
+        + source.slice(lineFrom + fixture.item.length)
+      : source.slice(0, lineFrom) + (fixture.retained ?? source.slice(lineFrom, before))
+        + '\n' + (fixture.prefix ?? fixture.empty) + source.slice(before);
     const optimized = await page.evaluate(async ({ source, before }) => {
       const scope = window as any, harness = scope.ListEditingHarness;
       const editor = scope.__listContinueEditor = harness.createEditor({
@@ -366,8 +383,14 @@ async function assertListContinuationFrames(page: import('puppeteer-core').Page)
         const dom = view.domAtPos(line.to).node;
         const element = (dom.nodeType === 1 ? dom : dom.parentElement).closest('.cm-line');
         const marker = element?.querySelector('.meo-md-list-marker, .meo-task-checkbox');
+        const companionNumber = line.number === 2 ? 3 : 2;
+        const companion = view.domAtPos(view.state.doc.line(companionNumber).to).node;
+        const companionRow = (companion.nodeType === 1 ? companion : companion.parentElement).closest('.cm-line');
         const rect = view.coordsAtPos(line.to);
-        return { text, marker: !!marker, markerClass: marker?.className, x: rect?.left, y: rect?.top,
+        return { text, marker: !!marker, markerClass: marker?.className, markerText: marker?.textContent,
+          finishedTaskStyle: !!element?.querySelector('.meo-task-complete'),
+          companionMarker: !!companionRow?.querySelector('.meo-md-list-marker, .meo-task-checkbox'),
+          x: rect?.left, y: rect?.top,
           keeper: view.domAtPos(text.indexOf('KEEP NODE')).node === keeper };
       };
       scope.__armListContinue = () => {
@@ -389,10 +412,14 @@ async function assertListContinuationFrames(page: import('puppeteer-core').Page)
       assert.ok(accepted.length > 0, label + '/accepted frames');
       for (const sample of accepted) {
         assert.equal(sample.marker, true, label + '/first-frame marker');
+        if (fixture.split !== undefined) assert.equal(sample.companionMarker, true, label + '/companion marker');
+        assert.equal(sample.finishedTaskStyle, false, label + '/new item does not inherit completed task styling');
         assert.equal(sample.keeper, true, label + '/unchanged paragraph identity');
         assert.equal(sample.markerClass, accepted.at(-1).markerClass, label + '/marker appearance');
+        assert.equal(sample.markerText, accepted.at(-1).markerText, label + '/marker text');
         assert.ok(Math.abs(sample.x - accepted.at(-1).x) <= 1, label + '/stable caret x');
       }
+      if (fixture.split !== undefined) continue;
       await page.evaluate(before => {
         const view = (window as any).__listContinueEditor.view;
         view.dispatch({ selection: { anchor: before } });
@@ -411,7 +438,7 @@ async function assertListContinuationFrames(page: import('puppeteer-core').Page)
       }
     } finally { await page.evaluate(() => (window as any).__listContinueEditor.destroy()); }
   }
-  console.log('list continuation frames and empty-item Delete passed: nested/tab/ordered/task/quoted, node identity, native history, ordinary/optimized');
+  console.log('list split and continuation frames and empty-item Delete passed: nested/tab/ordered/task/quoted, node identity, native history, ordinary/optimized');
   for (const fixture of [
     { source: '- Body\n- ', mode: 'source', target: '- Body' },
     { source: '- Body\n- Next', mode: 'live', target: '- Body' },
