@@ -54,6 +54,7 @@ export function createInputSuggestions(options: {
   readonly replaceCell?: (input: HTMLTextAreaElement, value: string, anchor: number, head?: number) => boolean;
   readonly focusTable?: () => void;
   readonly focusMath?: () => boolean;
+  /** Viewport coordinates of the painted cell caret. */
   readonly cellCoords?: (input: HTMLTextAreaElement, offset: number) => { left: number; top: number };
   readonly currentHeadings: () => readonly LinkCandidate[];
 }): Extension {
@@ -463,10 +464,10 @@ export function createInputSuggestions(options: {
         : this.head - (this.context?.length ?? 0);
       const native = this.cellInput ? options.cellCoords?.(this.cellInput, anchor) : null;
       const coords = native ? {
-        left: native.left - this.cellInput!.scrollLeft,
-        right: native.left - this.cellInput!.scrollLeft + this.view.defaultCharacterWidth,
-        top: native.top - this.cellInput!.scrollTop,
-        bottom: native.top - this.cellInput!.scrollTop + (parseFloat(getComputedStyle(this.cellInput!).lineHeight) || this.view.defaultLineHeight)
+        left: native.left,
+        right: native.left + this.view.defaultCharacterWidth,
+        top: native.top,
+        bottom: native.top + (parseFloat(getComputedStyle(this.cellInput!).lineHeight) || this.view.defaultLineHeight)
       } : this.view.coordsAtPos(anchor);
       if (!coords) { close(); return; }
       const viewport = document.documentElement;

@@ -1383,7 +1383,7 @@ export function createEditor({
     const mirrorRect = mirror.getBoundingClientRect();
     const inputRect = input.getBoundingClientRect();
     const coords = {
-      left: inputRect.left + (markerRect.left - mirrorRect.left),
+      left: inputRect.left + (markerRect.left - mirrorRect.left) - input.scrollLeft,
       top: inputRect.top + (markerRect.top - mirrorRect.top) - input.scrollTop
     };
 
