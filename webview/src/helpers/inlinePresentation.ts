@@ -52,18 +52,31 @@ function readInlineSourceRange(element: Element | null): InlineSourceRange | nul
 /** Project a source selection onto rendered text, including partially selected inline labels. */
 export function inlineSourceSelectionRanges(root: HTMLElement, from: number, to: number): Range[] {
   const ranges: Range[] = [];
+  const selectedAtoms = new Set<HTMLElement>();
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const mapped = mappedElementForNode(root, node);
     const source = readInlineSourceRange(mapped);
     if (!mapped || !source || from >= source.to || to <= source.from) continue;
-    const length = mapped.textContent?.length ?? 0;
-    if (!length) continue;
-    const prefix = root.ownerDocument.createRange();
-    prefix.selectNodeContents(mapped);
-    prefix.setEnd(node, 0);
-    const before = prefix.toString().length;
+    if (mapped.dataset.meoSourceAtom === 'true') {
+      if (selectedAtoms.has(mapped)) continue;
+      selectedAtoms.add(mapped);
+      const range = root.ownerDocument.createRange();
+      range.selectNode(mapped);
+      ranges.push(range);
+      continue;
+    }
+
     const size = node.textContent?.length ?? 0;
+    let length = size;
+    let before = 0;
+    if (mapped.firstChild !== node || mapped.lastChild !== node) {
+      length = mapped.textContent?.length ?? 0;
+      const prefix = root.ownerDocument.createRange();
+      prefix.selectNodeContents(mapped);
+      prefix.setEnd(node, 0);
+      before = prefix.toString().length;
+    }
     const fromOffset = Math.max(0, Math.floor((from - source.from) * length / (source.to - source.from)) - before);
     const toOffset = Math.min(size, Math.ceil((to - source.from) * length / (source.to - source.from)) - before);
     if (fromOffset >= toOffset) continue;

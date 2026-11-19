@@ -1058,9 +1058,20 @@ export function tableCellEditorOffsetToSourceOffset(value: string, offset: numbe
   return tableCellEditorValueToSource(value.slice(0, Math.max(0, offset))).length;
 }
 
+function tableCellDisplayOffset(source: string, offset: number): number {
+  const target = Math.min(source.length, Math.max(0, offset));
+  let displayOffset = target;
+  // A cursor can split an inline code span or link. Classify breaks from the
+  // complete cell so a literal tag before that cursor stays literal.
+  for (const line of splitTableCellLogicalLines(source)) {
+    if (!line.breakText || line.from + line.text.length + line.breakText.length > target) break;
+    displayOffset++;
+  }
+  return displayOffset;
+}
+
 export function tableCellSourceOffsetToEditorOffset(value: string, offset: number): number {
-  const source = tableCellEditorValueToSource(value);
-  return tableCellSourceToEditorValue(source.slice(0, Math.max(0, offset))).length;
+  return tableCellDisplayOffset(tableCellEditorValueToSource(value), offset);
 }
 
 function writeTableCellTextSelection(event: ClipboardEvent, input: HTMLTextAreaElement): boolean {
@@ -2686,15 +2697,17 @@ export function planShortcutSnippet(view: EditorView, template: string, document
   if (input) {
     const range = tableCellSourceRangeForInput(view, input);
     if (!range) return null;
-    const value = tableCellSourceToEditorValue(text);
-    const nextValue = input.value.slice(0, start) + value + input.value.slice(end);
-    const nextSource = tableCellEditorValueToSource(nextValue).trim();
+    const currentSource = tableCellEditorValueToSource(input.value);
+    const sourceStart = tableCellEditorOffsetToSourceOffset(input.value, start);
+    const sourceEnd = tableCellEditorOffsetToSourceOffset(input.value, end);
+    const nextSource = currentSource.slice(0, sourceStart) + text + currentSource.slice(sourceEnd);
     if (/[\r\n]/.test(nextSource) || markdownTableSeparatorPipes(nextSource).length) return null;
     const line = view.state.doc.lineAt(range.from);
     // A normalized blank cell can exist in Live before its short source row contains it.
     if (!(range.from === line.from && range.to === line.from) && !tableSnippetPreservesRow(line.text,
-      range.from - line.from, range.to - line.from, nextSource, input.dataset.tableRow === '0')) return null;
-    return { kind: 'liveCell', input, value: nextValue, caret: start + tableCellSourceToEditorValue(text.slice(0, caret)).length };
+      range.from - line.from, range.to - line.from, nextSource.trim(), input.dataset.tableRow === '0')) return null;
+    return { kind: 'liveCell', input, value: tableCellSourceToEditorValue(nextSource),
+      caret: tableCellDisplayOffset(nextSource, sourceStart + caret) };
   }
 
   const line = view.state.doc.lineAt(from);

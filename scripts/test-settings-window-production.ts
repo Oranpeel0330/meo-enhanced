@@ -809,9 +809,20 @@ try {
       const cellBreak = { id: 'cell-break-then-insert', name: 'Cell break and insert', scope: 'editor', strokes: ['Ctrl + Alt + X'], actions: [
         { type: 'command', command: 'cellBreak' }, { type: 'snippet', template: 'Time' }
       ] };
-      const preferences = { ...global.__preferences, customShortcuts: [...(global.__preferences.customShortcuts ?? []), mixed, cell, cellBreak] };
+      const literalBreak = { id: 'cell-code', name: 'Cell code', scope: 'editor', strokes: ['Ctrl + Alt + Q'], actions: [
+        { type: 'snippet', template: '`a<br>$0XY`' }
+      ] };
+      const breakFragment = { id: 'cell-code-fragment', name: 'Code fragment', scope: 'editor', strokes: ['Ctrl + Alt + W'], actions: [
+        { type: 'snippet', template: 'c<br>$0D' }
+      ] };
+      const preferences = { ...global.__preferences, customShortcuts: [...(global.__preferences.customShortcuts ?? []), mixed, cell, cellBreak, literalBreak, breakFragment] };
       global.__preferences = preferences;
       window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged', preferences, revision: ++global.__revision } }));
+    });
+    const textBeforeCaret = () => page.evaluate(() => {
+      if (document.activeElement instanceof HTMLTextAreaElement) return document.activeElement.value.slice(0, document.activeElement.selectionStart);
+      const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      return view.state.sliceDoc(view.state.doc.lineAt(view.state.selection.main.head).from, view.state.selection.main.head);
     });
     for (const mode of ['source', 'live'] as const) {
       let text = tableFixture;
@@ -843,14 +854,22 @@ try {
       assert.equal(insertedCell.replace(/\|\s*A \\\| first cell<br>Z\s*\|/, '| first cell |'), text,
         `${mode}: selection replacement escapes pipes, keeps line breaks inside the cell and preserves the document`);
       assert.notEqual(insertedCell, text);
-      const caretText = await page.evaluate(() => {
-        if (document.activeElement instanceof HTMLTextAreaElement) return document.activeElement.value.slice(0, document.activeElement.selectionStart);
-        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
-        return view.state.sliceDoc(view.state.doc.lineAt(view.state.selection.main.head).from, view.state.selection.main.head);
-      });
+      const caretText = await textBeforeCaret();
       assert.ok(caretText.endsWith('A \\| '), `${mode}: the final marker places the caret before the selected-text variable`);
       await chord('z');
       assert.equal(await documentText(), text, `${mode}: one undo restores the replaced selection`);
+      await focusCell(mode, true);
+      await bind('q');
+      const insertedCode = text.replace('first cell', '`a<br>XY`');
+      assert.equal(await documentText(), insertedCode);
+      assert.ok((await textBeforeCaret()).endsWith('`a<br>'), `${mode}: the literal break in code does not move the snippet cursor`);
+      await bind('w');
+      assert.equal(await documentText(), insertedCode.replace('a<br>XY', 'a<br>c<br>DXY'));
+      assert.ok((await textBeforeCaret()).endsWith('`a<br>c<br>'), `${mode}: a fragment uses the surrounding inline code syntax`);
+      await chord('z');
+      assert.equal(await documentText(), insertedCode);
+      await chord('z');
+      assert.equal(await documentText(), text);
       await focusStart();
       await bind('y');
       const withProse = text.replace('target', '# Prose: target');

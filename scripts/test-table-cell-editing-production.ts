@@ -1117,8 +1117,9 @@ async function checkCellEditingAudit(page: import('puppeteer-core').Page) {
     .cm-editor .meo-md-html-table { width: 118px !important; table-layout: fixed !important; }
     .cm-editor .meo-md-html-table :is(th, td) { width: 118px !important; }
   ` });
-  const open = async (content: string, alignment = '---') => {
-    const text = `before\n\n| A |\n| ${alignment} |\n| ${content} |\n| next |\n\nafter`;
+  const open = async (content: string, alignment = '---', large = false) => {
+    const text = `before\n\n| A |\n| ${alignment} |\n| ${content} |\n| next |\n\nafter`
+      + (large ? '\n\npadding\n'.repeat(8100) : '');
     await page.evaluate(text => {
       const app = window as any;
       app.__tableCellEditor?.destroy();
@@ -1129,11 +1130,11 @@ async function checkCellEditingAudit(page: import('puppeteer-core').Page) {
     await page.waitForSelector(input);
     return text;
   };
-  const select = (from: number, to = from) => page.$eval(input, (textarea, from, to) => {
+  const select = (from: number, to = from, direction: 'none' | 'backward' = 'none') => page.$eval(input, (textarea, from, to, direction) => {
     textarea.focus();
-    textarea.setSelectionRange(from, to);
+    textarea.setSelectionRange(from, to, direction);
     return new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-  }, from, to);
+  }, from, to, direction);
   const press = async (key: import('puppeteer-core').KeyInput, modifier?: 'Control' | 'Shift') => {
     if (modifier) await page.keyboard.down(modifier);
     await page.keyboard.press(key);
@@ -1385,6 +1386,46 @@ async function checkCellEditingAudit(page: import('puppeteer-core').Page) {
       await table.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-mixed-styles-active.png') });
       await press('Escape');
       await table.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-mixed-styles-reading.png') });
+    }
+
+    for (const large of [false, true]) {
+      const content = 'Top<br>`a<br>XY`<BR />Bottom';
+      const source = await open(content, '---', large);
+      await page.waitForFunction(expected => {
+        const app = window as any;
+        return app.TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(app.__tableCellEditor.view.state) === expected;
+      }, {}, large);
+      const glyph = await page.$eval(`${preview} code`, element => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let text = walker.nextNode();
+        while (text && !text.textContent?.includes('X')) text = walker.nextNode();
+        if (!text) throw new Error('The rendered code must contain the target glyph');
+        const index = text.textContent!.indexOf('X');
+        const range = document.createRange();
+        range.setStart(text, index);
+        range.setEnd(text, index + 1);
+        const rect = range.getBoundingClientRect();
+        return { x: Math.ceil(rect.left + rect.width / 5), y: Math.floor(rect.top + rect.height / 2) };
+      });
+      await page.mouse.click(glyph.x, glyph.y);
+      const expected = content.indexOf('X') + 1; // Only the first real break adds a display newline.
+      assert.deepEqual(await selection(), { from: expected, to: expected }, `optimized=${large}: a literal <br> inside code adds no caret offset`);
+      await page.keyboard.type('Z');
+      await press('Escape');
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), source.replace('XY', 'ZXY'));
+
+      await open('Lead<br>$a+b+c+d$', '---', large);
+      await select(1, 'Lead<br>\n$a'.length, 'backward');
+      assert.equal(await lineText(), 'Lead<br>');
+      const coveredMath = await page.$eval(`${preview} .katex-html`, math => {
+        const documentRange = document.createRange();
+        documentRange.selectNodeContents(math);
+        return [...CSS.highlights.get('meo-table-cell-selection') ?? []]
+          .filter((range): range is Range => range instanceof Range && range.intersectsNode(math))
+          .map(range => range.compareBoundaryPoints(Range.START_TO_START, documentRange) <= 0
+            && range.compareBoundaryPoints(Range.END_TO_END, documentRange) >= 0);
+      });
+      assert.deepEqual(coveredMath, [true], `optimized=${large}: a selection overlapping rendered math highlights the whole formula exactly once`);
     }
   } finally {
     await fixedWidth.evaluate(style => style.remove());
