@@ -9,6 +9,7 @@ import { createDocumentBlocks } from './documentBlocks';
 import { createDocumentContentTransport } from './adapters/documentContentTransport';
 import { createLoadingPresentation } from './adapters/loadingPresentation';
 import { effectiveShortcuts } from '../../src/application/editingPreferences';
+import { customShortcutActionTitle, customShortcutTitle, settingsText } from './application/settingsCatalog';
 import { version as productVersion } from '../../package.json';
 import type { DocumentText, DocumentTextEdit } from '../../src/foundation/documentSnapshot';
 import { createDocumentStatisticsReporter } from './adapters/documentStatistics';
@@ -44,7 +45,7 @@ import { setGitDiffLineHighlightsEnabled } from './helpers/gitDiffLineHighlights
 import { applyBuiltInVisualBaseline, applyUiVisualBaseline } from './helpers/theme';
 import { setShikiTheme } from './helpers/shikiHighlighter';
 import { createFailureNoticeManager, getErrorMessage, isTransientMermaidRuntimeError, shouldAutoFallbackToSourceForLiveError, logWebviewRenderError, type EditorNoticeAction, type FailureNoticeManager } from './helpers/errors';
-import { isPrimaryModifier, isShortcutKey, handleEditorShortcut, type ShortcutHandlerContext } from './helpers/shortcuts';
+import { createCustomShortcutMatcher, isPrimaryModifier, isShortcutKey, handleEditorShortcut, type ShortcutHandlerContext } from './helpers/shortcuts';
 import { normalizeDocumentText } from '../../src/foundation/documentText';
 import { createFindPanel, createFindPanelController, type FindPanelController } from './helpers/findPanel';
 import { createSelectionMenu, createSelectionMenuController, type SelectionMenuController } from './helpers/selectionMenu';
@@ -3164,20 +3165,37 @@ for (const [button, direction] of [[undoBtn, 'undo'], [redoBtn, 'redo']] as cons
   });
 }
 
+const customShortcutMatcher = createCustomShortcutMatcher();
 const shortcutHandlerContext: ShortcutHandlerContext = {
   get editor() { return editor; },
   get editableMode() { return getActiveEditableMode(); },
   get shortcuts() { return editingPreferences.shortcuts; },
-  requestPreview: () => { void editorModeRuntime.dispatch({ type: 'requestMode', mode: getActiveEditorMode() === 'preview' ? getActiveEditableMode() : 'preview', source: 'user' }); },
-  requestPlainPaste: () => { void pastePlainFromHost(); },
-  requestTableCopy: format => { void copyTableToHost(format); },
+  get customShortcuts() { return editingPreferences.customShortcuts; },
+  customShortcutMatcher,
+  reportCustomShortcutError(rule, index, error) {
+    console.error('[MEO webview] Custom action step failed', { id: rule.id, step: index + 1, error });
+    failureNotice.setFailureNotice(() => {
+      const language = activeUiLanguage;
+      const name = customShortcutTitle(rule, language);
+      const step = customShortcutActionTitle(rule.actions[index], language);
+      return {
+        title: settingsText(language, '自定义动作执行失败', 'Custom action failed'),
+        message: settingsText(language, `「${name}」在第 ${index + 1} 步「${step}」停止。前面已完成的修改会保留。`,
+          `“${name}” stopped at step ${index + 1}, “${step}”. Changes already made are kept.`)
+      };
+    }, 'error');
+  },
+  canInsertSnippet: template => editor?.canInsertSnippet(template, imageDimensionDocumentId ?? '') ?? false,
+  insertSnippet: template => editor?.insertSnippet(template, imageDimensionDocumentId ?? '') ?? false,
+  setMode: mode => editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' }),
+  requestPreview: () => editorModeRuntime.dispatch({ type: 'requestMode', mode: getActiveEditorMode() === 'preview' ? getActiveEditableMode() : 'preview', source: 'user' }),
+  requestPlainPaste: () => pastePlainFromHost(),
+  requestTableCopy: format => copyTableToHost(format),
   get editorSurfaceActive() { return getActiveEditorMode() !== 'preview'; },
   requestSave,
   requestSaveAs,
   openFindPanel: (target) => findPanelController.open(target),
-  requestMode: (mode) => {
-    void editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' });
-  }
+  requestMode: mode => editorModeRuntime.dispatch({ type: 'requestMode', mode, source: 'user' })
 };
 
 const handleLocalEditorChange = (edit: DocumentTextEdit) => {
@@ -4248,6 +4266,10 @@ window.addEventListener('keydown', (event) => {
   if (event.target instanceof HTMLIFrameElement && event.target.classList.contains('preview-frame')) return;
   handleEditorShortcut(event, shortcutHandlerContext);
 }, { capture: true });
+
+for (const type of ['blur', 'focusout', 'pointerdown', 'compositionstart']) {
+  window.addEventListener(type, customShortcutMatcher.cancel, { capture: true });
+}
 
 window.addEventListener('paste', async (event) => {
   if (!editor || getActiveEditorMode() === 'preview' || !(event.target instanceof Node) || !editor.view.dom.contains(event.target)) {

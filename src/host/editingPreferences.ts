@@ -1,4 +1,4 @@
-import { normalizeEditingPreferences, changeEditingPreferences, type ShortcutPlatform } from '../application/editingPreferences';
+import { normalizeEditingPreferences, changeEditingPreferences, ShortcutConflictsChangedError, withDefaultCustomShortcuts, type ShortcutPlatform } from '../application/editingPreferences';
 import type { EditingPreferences } from '../foundation/editingPreferences';
 import type { UpdateEditingPreferencesRequest, UpdatedEditingPreferencesResponse } from '../protocol/editingPreferences';
 
@@ -15,7 +15,7 @@ export function createEditingPreferencesHost(options: {
   let revision = 0;
   let signature = '';
   const snapshot = () => {
-    const preferences = normalizeEditingPreferences(options.read());
+    const preferences = withDefaultCustomShortcuts(normalizeEditingPreferences(options.read()), options.platform);
     const next = JSON.stringify(preferences);
     if (signature && next !== signature) revision++;
     signature = next;
@@ -34,9 +34,12 @@ export function createEditingPreferencesHost(options: {
           const current = snapshot();
           return { type: 'updatedEditingPreferences', requestId: request.requestId, revision: current.revision, result: { ok: true, value: current.preferences } };
         } catch (error) {
-          return { type: 'updatedEditingPreferences', requestId: request.requestId, revision: snapshot().revision, result: {
-            ok: false, error: { code: 'operation-failed', message: error instanceof Error ? error.message : 'Unable to save editing preferences' }
-          } };
+          const current = snapshot();
+          return { type: 'updatedEditingPreferences', requestId: request.requestId, revision: current.revision,
+            result: error instanceof ShortcutConflictsChangedError
+              ? { ok: false, error: { code: 'shortcut-conflicts-changed', message: error.message }, preferences: current.preferences }
+              : { ok: false, error: { code: 'operation-failed', message: error instanceof Error ? error.message : 'Unable to save editing preferences' } }
+          };
         }
       });
       tail = response;

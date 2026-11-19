@@ -1,4 +1,4 @@
-import type { EditorCommandId, InputAssistance } from '../../../src/foundation/editingPreferences';
+import { insertCurrentTimeExampleId, insertCurrentTimeExampleName, type CustomShortcut, type CustomShortcutAction, type EditorCommandId, type InputAssistance } from '../../../src/foundation/editingPreferences';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
 export type SettingsTab = 'general' | 'appearance' | 'typing' | 'presets' | 'shortcuts' | 'extensions' | 'about';
 
@@ -38,9 +38,21 @@ export const previewPresetSearchKeywords = {
   guide: ['预览 预设 制作 指南 帮助 示例 GitHub Preview presets creation guide help authoring examples']
 } as const;
 export const settingsText = (language: UiLanguage, chinese: string, english: string) => language === 'zh-CN' ? chinese : english;
+export function customShortcutTitle(shortcut: Pick<CustomShortcut, 'id' | 'name' | 'useDefaultName'>, language: UiLanguage): string {
+  return shortcut.id === insertCurrentTimeExampleId && shortcut.useDefaultName
+    ? settingsText(language, '示例 · 插入当前时间', insertCurrentTimeExampleName)
+    : shortcut.name;
+}
+export const shortcutTargetModeLabels = { live: 'Live', source: 'Source', preview: 'Preview' } as const;
+export function customShortcutActionTitle(action: CustomShortcutAction, language: UiLanguage): string {
+  if (action.type === 'command') return commandTitle(action.command, language);
+  if (action.type === 'snippet') return settingsText(language, ...customShortcutActionTitles.snippet);
+  return settingsText(language, '切换到 ', 'Switch to ') + shortcutTargetModeLabels[action.mode];
+}
 export const typingSections = ['symbols', 'structure', 'paste', 'candidates'] as const;
 export type TypingSection = typeof typingSections[number];
 export const sectionTitles = {
+  customShortcuts: ['自定义动作', 'Custom actions'],
   appearanceMode: ['界面模式', 'Interface mode'], appearanceTypography: ['文档排版', 'Document typography'], appearanceColors: ['基础颜色', 'Basic colors'], appearanceAdvanced: ['高级颜色', 'Advanced colors'],
   math: ['公式语法', 'Math syntax'],
   display: ['文档设置', 'Document settings'], opening: ['打开文档时', 'Opening documents'], interface: ['界面设置', 'Interface'],
@@ -49,6 +61,20 @@ export const sectionTitles = {
   symbols: ['符号与选区', 'Symbols and selections'], structure: ['列表与结构', 'Lists and structure'], paste: ['粘贴', 'Pasting'], candidates: ['输入候选', 'Suggestions'],
   document: ['文档与编辑', 'Document and editing'], format: ['文字格式', 'Text formatting'], blocks: ['段落与块', 'Paragraphs and blocks'],
   table: ['表格', 'Tables'], selection: ['选择与光标', 'Selections and cursors'], lines: ['行操作', 'Line operations'], navigation: ['模式与导航', 'Modes and navigation']
+} as const;
+export const customShortcutScopeTitles = {
+  global: ['编辑器全局', 'Editor-wide'],
+  editor: ['编辑区（Live / Source）', 'Editing area (Live / Source)'],
+  live: ['仅 Live 编辑区', 'Live editing area only'],
+  source: ['仅 Source 编辑区', 'Source editing area only']
+} as const;
+export const customShortcutSearchKeywords = [
+  '自定义快捷键 自定义命令 快捷键 按键 绑定 多段按键 动作 命令 模板 片段 序列',
+  'custom shortcuts custom commands keybindings keyboard chord action command template snippet sequence'
+] as const;
+export const customShortcutActionTitles = {
+  snippet: ['插入片段', 'Insert snippet'],
+  mode: ['切换到指定模式', 'Switch to a specific mode']
 } as const;
 export const typingCatalog: readonly { key: keyof InputAssistance; section: TypingSection; title: readonly [string, string]; description: readonly [string, string] }[] = [
   { key: 'selectionToolbar', section: 'symbols', title: ['选区工具栏', 'Selection toolbar'], description: ['选中文字后显示常用格式工具栏。', 'Show common formatting actions when text is selected.'] },
@@ -139,9 +165,17 @@ export const typingSearchKeywords: Readonly<Record<keyof InputAssistance, Search
   math: ['公式 自动补全 数学 LaTeX TeX KaTeX 分式 根式 希腊字母 参数 模板', 'math autocomplete completion formula latex tex katex fraction square root greek snippet template arguments'],
   emoji: ['表情符号 颜文字 小黄脸 图标 笑脸 冒号', 'emoji emoticon smiley face colon shortcode suggestions']
 };
+export const imageLocationVariables = [
+  ['fileDirname', '当前文档目录', 'Document directory'],
+  ['fileBasename', '文档名，含扩展名', 'File name with extension'],
+  ['fileBasenameNoExtension', '文档名，不含扩展名', 'File name without extension'],
+  ['fileExtname', '扩展名，含点号', 'Extension including the dot']
+] as const;
 export const imageLocationSearchKeywords: SearchKeywords = [
-  '图片命名 自动重命名 文件名 日期时间 图片序号 文档名＋序号（默认） 文档名＋序号 文档名加序号 毫秒时间戳 保存示例 图片保存位置 图片存储 截图保存 自动保存图片 文档旁的文件夹（默认） 文档旁，按文档名分开 自定义路径（高级） 文件夹名称 图片目录或路径规则 选择文件夹… 图片目录 图片文件夹 自定义路径 高级路径 相对路径 绝对路径 文档旁 文档名 扩展名 路径变量 ${fileDirname} ${fileBasename} ${fileBasenameNoExtension} ${fileExtname} assets images',
-  'Image naming Date and time Image number Document name + number (default) Timestamp in milliseconds Save example rename filename sequence Image save location Beside document (default) Beside document, by name Custom path (advanced) Folder name Image folder or path rule Choose folder… storage pasted screenshot save folder directory custom advanced path relative absolute beside document file name extension variables assets images'
+  '图片命名 自动重命名 文件名 日期时间 图片序号 文档名＋序号（默认） 文档名＋序号 文档名加序号 毫秒时间戳 保存示例 图片保存位置 图片存储 截图保存 自动保存图片 文档旁的文件夹（默认） 文档旁，按文档名分开 自定义路径（高级） 文件夹名称 图片目录或路径规则 选择文件夹… 图片目录 图片文件夹 自定义路径 高级路径 相对路径 绝对路径 文档旁 文档名 扩展名 路径变量 ${fileDirname} ${fileBasename} ${fileBasenameNoExtension} ${fileExtname} assets images '
+    + imageLocationVariables.map(([, zh]) => zh).join(' '),
+  'Image naming Date and time Image number Document name + number (default) Timestamp in milliseconds Save example rename filename sequence Image save location Beside document (default) Beside document, by name Custom path (advanced) Folder name Image folder or path rule Choose folder… storage pasted screenshot save folder directory custom advanced path relative absolute beside document file name extension variables assets images '
+    + imageLocationVariables.map(([, , en]) => en).join(' ')
 ];
 export const shortcutSearchKeywords: Readonly<Record<EditorCommandId, SearchKeywords>> = {
   formatHtml: ['整理代码 排版 缩进 换行 HTML片段 块状公式 数学 LaTeX 源码 美化', 'format HTML fragment formula math LaTeX source code pretty print indentation line breaks'],

@@ -8,7 +8,7 @@ assert.equal(planHtmlCommentToggle('<!--unfinished', [{ anchor: 8, head: 8 }], f
 assert.equal(planHtmlCommentToggle('text <!--note--> tail', [{ anchor: 2, head: 18 }], false).blocked, true);
 assert.deepEqual(defaultShortcuts('mac').lineComment, ['Cmd + /']);
 assert.deepEqual(defaultShortcuts('other').selectionComment, ['Alt + Shift + A']);
-const changedPreferences = changeEditingPreferences({ input: defaultInputAssistance, shortcuts: {} }, { type: 'bind', command: 'lineComment', keys: ['Ctrl + J'], replaceConflicts: false }, 'other');
+const changedPreferences = changeEditingPreferences({ input: defaultInputAssistance, shortcuts: {} }, { type: 'bind', command: 'lineComment', keys: ['Ctrl + J'], confirmedReplacements: [] }, 'other');
 assert.deepEqual(changedPreferences.shortcuts.lineComment, ['Ctrl + J']);
 
 const build = await Bun.build({ entrypoints: ['scripts/test-editing-features-entry.ts'], target: 'browser', format: 'iife' });

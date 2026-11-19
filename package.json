@@ -266,6 +266,60 @@
           },
           "additionalProperties": false,
           "properties": {
+            "customShortcuts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "name", "scope", "strokes", "actions"],
+                "if": { "required": ["useDefaultName"] },
+                "then": { "properties": { "id": { "const": "example-insert-current-time" } } },
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-zA-Z0-9_-]{1,80}$" },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" },
+                  "useDefaultName": { "enum": [true] },
+                  "scope": { "enum": ["global", "editor", "live", "source"] },
+                  "strokes": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+                  },
+                  "actions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 12,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "object", "additionalProperties": false, "required": ["type", "command"],
+                          "properties": {
+                            "type": { "const": "command" },
+                            "command": { "enum": [
+                              "save", "saveAs", "undo", "redo", "find", "replace", "all", "plain",
+                              "bold", "italic", "inlineCode", "strike", "highlight", "underline", "kbd", "link", "wikiLink", "image", "inlineMath", "blockMath", "formatHtml",
+                              "heading1", "heading2", "heading3", "heading4", "heading5", "heading6", "headingUp", "headingDown",
+                              "bullet", "ordered", "taskList", "taskDone", "quote", "codeBlock", "rule", "insertTable",
+                              "cellBreak", "rowAbove", "rowBelow", "rowDelete", "columnBefore", "columnAfter", "columnDelete",
+                              "moveRowUp", "moveRowDown", "moveColumnLeft", "moveColumnRight", "alignLeft", "alignCenter", "alignRight", "copyMarkdown", "copyCsv", "convert",
+                              "expandSelection", "shrinkSelection", "nextOccurrence", "skipOccurrence", "addCursor", "splitCursors",
+                              "lineComment", "selectionComment", "moveUp", "moveDown", "copyUp", "copyDown", "deleteLine", "blankAbove", "blankBelow", "mode", "preview"
+                            ] }
+                          }
+                        },
+                        {
+                          "type": "object", "additionalProperties": false, "required": ["type", "template"],
+                          "properties": { "type": { "const": "snippet" }, "template": { "type": "string", "minLength": 1, "maxLength": 20000 } }
+                        },
+                        {
+                          "type": "object", "additionalProperties": false, "required": ["type", "mode"],
+                          "properties": { "type": { "const": "mode" }, "mode": { "enum": ["live", "source", "preview"] } }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
             "input": {
               "type": "object",
               "additionalProperties": false,

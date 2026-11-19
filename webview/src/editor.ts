@@ -11,13 +11,14 @@ import { sourceLinePositionAtTarget } from './editor/domSourceLine';
 import { currentHeadingSuggestions } from './editor/headingSuggestions';
 import { markdownSyntaxContext, type MarkdownInputContext } from './editor/blockInsertion';
 import { createInputSuggestions, refreshInputSuggestions } from './editor/inputSuggestions';
+import { insertShortcutSnippet, insertSourceCellSnippet } from './editor/shortcutSnippet';
 import type { LinkCandidate } from '../../src/protocol/editorServices';
 import { sourceTableAt, createSourceTableCommandTarget, tableShortcutCommands } from './editor/sourceTableCommands';
 import { parseMarkdownTable, serializeDelimitedTable } from './application/delimitedTable';
-import { executeMountedTableShortcut, mountedTableClipboardText } from './helpers/tables';
+import { requestMountedTableShortcut, mountedTableClipboardText } from './helpers/tables';
 import { htmlCommentEditing } from './editor/htmlCommentEditing';
 import { nativeSymbolInput, planNativeHtmlCommentToggle } from './editor/nativeTypingAssistance';
-import { formatMultipleSelections, toggleHtmlComment, runEditorCommand, secondarySelections } from './editor/commands';
+import { canRunCustomEditorCommand, formatMultipleSelections, toggleHtmlComment, runEditorCommand, secondarySelections } from './editor/commands';
 import type { EditorCommandId } from '../../src/foundation/editingPreferences';
 import { pasteAssistance, insertPlainClipboardText } from './editor/pasteAssistance';
 import { ChangeSet, EditorState, Compartment, Prec, Transaction, StateEffect, type Annotation, type ChangeDesc, type ChangeSpec, type TransactionSpec, EditorSelection, type Extension, type SelectionRange, type Text } from '@codemirror/state';
@@ -121,6 +122,7 @@ import {
   tableCellProjectedSourceAtPoint,
   tableCellSourceOffsetToEditorOffset,
   tableCellSourceRangeForInput,
+  planShortcutSnippet, isSafeCustomShortcutSelection,
   mountedTableStatisticsSelection,
   tableHeaderAlignmentOverrideField,
   commitPendingTableEdits,
@@ -1192,6 +1194,9 @@ export function createEditor({
     return active.closest('.meo-md-html-table-wrap') ? active : null;
   };
 
+  const prepareShortcutSnippet = (template: string, documentId: string) =>
+    imeCompositionActive || historyCompositionActive ? null : planShortcutSnippet(view, template, documentId, getActiveTableInput());
+
   const getEditorReturnTarget = (): HTMLElement | null => {
     if (tablePointerFocus?.released && (tablePointerFocus.isCurrent?.() === false ||
       tablePointerFocus.nativeTarget?.isConnected === false)) tablePointerFocus = null;
@@ -1240,17 +1245,20 @@ export function createEditor({
   };
   let historyCompositionActive = false;
   let previousHistoryAvailability = '';
-  const emitHistoryAvailability = () => {
-    if (!view || !onHistoryAvailabilityChange) return;
+  const readHistoryAvailability = () => {
     const input = getActiveTableInput();
     const range = input ? getTableInputSourceRange(input) : null;
     const pendingCell = input && range
       ? tableCellEditorValueToSource(input.value) !== view.state.doc.sliceString(range.from, range.to) : false;
     const composing = historyCompositionActive || imeCompositionActive;
-    const availability = {
+    return {
       undo: !composing && (pendingCell || undoDepth(view.state) > 0),
       redo: !composing && !pendingCell && redoDepth(view.state) > 0
     };
+  };
+  const emitHistoryAvailability = () => {
+    if (!view || !onHistoryAvailabilityChange) return;
+    const availability = readHistoryAvailability();
     const key = `${availability.undo}:${availability.redo}`;
     if (key === previousHistoryAvailability) return;
     previousHistoryAvailability = key;
@@ -4406,6 +4414,20 @@ export function createEditor({
       tableStickyHeaderAdapterFactory.setEnabled(enabled);
     },
     isTableFocused() { return !!getActiveTableInput() || isInsideTableCell(view.state, view.state.selection.main.head); },
+    isCustomShortcutTableFocused() {
+      return !!getActiveTableInput() || isInTableStructure(view.state);
+    },
+    canRunCustomShortcutCommand(command: EditorCommandId): boolean {
+      if (view.state.readOnly) return false;
+      if (command === 'undo' || command === 'redo') return readHistoryAvailability()[command];
+      const cellInput = getActiveTableInput();
+      if (cellInput) return !cellInput.readOnly && !cellInput.disabled;
+      const { state } = view;
+      if ((isInTableStructure(state) || state.selection.ranges.some(range => !range.empty)) && !isSafeCustomShortcutSelection(state)) return false;
+      if (command === 'formatHtml') return canFormatDisplayMathSource(state) || Boolean(getHtmlEditingRange(state));
+      return canRunCustomEditorCommand(view, command);
+    },
+    isTableInputFocused() { return !!getActiveTableInput(); },
     getTableClipboardText(format: 'markdown' | 'csv'): string | null {
       const mounted = mountedTableClipboardText(view, format); if (mounted !== null) return mounted;
       let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(view.state.selection.main.head, -1);
@@ -4415,13 +4437,16 @@ export function createEditor({
       const matrix = parseMarkdownTable(raw);
       return !matrix ? null : format === 'csv' ? serializeDelimitedTable(matrix.cells, ',') : raw;
     },
-    executeCommand(command: EditorCommandId): boolean {
+    executeCommand(command: EditorCommandId, reportFailure?: (error: unknown) => void): boolean {
       if (view.state.readOnly) return false;
       if (command === 'formatHtml') {
         if (getActiveTableInput()) return false;
-        if (canFormatDisplayMathSource(view.state)) { void formatActiveDisplayMathSource(view); return true; }
-        if (!getHtmlEditingRange(view.state)) return false;
-        void formatActiveHtmlSource(view);
+        const operation = canFormatDisplayMathSource(view.state) ? formatActiveDisplayMathSource(view)
+          : getHtmlEditingRange(view.state) ? formatActiveHtmlSource(view) : null;
+        if (!operation) return false;
+        if (reportFailure) void operation.then(outcome => {
+          if (outcome === 'invalid') reportFailure(new Error('Source formatting failed'));
+        }, reportFailure);
         return true;
       }
       if (command === 'lineComment' || command === 'selectionComment') {
@@ -4437,12 +4462,18 @@ export function createEditor({
         commitPendingTableEdits(view);
         return true;
       }
-      if (executeMountedTableShortcut(view, command)) return true;
-      const sourceTable = sourceTableAt(view.state);
+      let tableRequest = requestMountedTableShortcut(view, command, reportFailure !== undefined);
+      if (tableRequest === false) return false;
       const tableCommand = tableShortcutCommands[command];
+      const sourceTable = !tableRequest && tableCommand ? sourceTableAt(view.state) : null;
       if (sourceTable && tableCommand) {
         const registration = tableCommandTargetRegistry.register(createSourceTableCommandTarget(view, sourceTable, run => viewportController.preserveDocumentAnchorWhileMutation(run, true)));
-        void tableCommandRuntime.dispatch({ type: 'request', command: tableCommand, target: { tableId: registration.id, row: sourceTable.row, column: sourceTable.column, selection: null }, enabled: true }).finally(() => registration.dispose());
+        tableRequest = tableCommandRuntime.dispatch({ type: 'request', command: tableCommand, target: { tableId: registration.id, row: sourceTable.row, column: sourceTable.column, selection: null }, enabled: true }).finally(() => registration.dispose());
+      }
+      if (tableRequest) {
+        if (reportFailure) void tableRequest.then(outcome => {
+          if (outcome === 'failed') reportFailure(new Error('Table command failed'));
+        }, reportFailure);
         return true;
       }
       if (command === 'insertTable') return insertTableAtSelection();
@@ -4451,7 +4482,7 @@ export function createEditor({
         underline: 'underline', kbd: 'kbd', link: 'link', wikiLink: 'wikiLink', image: 'image',
         codeBlock: 'codeBlock', rule: 'hr'
       };
-      if (formats[command]) { this.insertFormat(formats[command]!); return true; }
+      if (formats[command]) return this.insertFormat(formats[command]!) !== false;
       const nativeInput = getActiveTableInput();
       if (nativeInput) {
         if (command === 'inlineMath') return wrapActiveTableInputSelection(nativeInput, '$');
@@ -4460,6 +4491,21 @@ export function createEditor({
       }
       if (command === 'cellBreak') { if (getActiveTableInput()) return insertMountedTableCellBreak(view); return insertTableCellLineBreak(view); }
       return runEditorCommand(view, command);
+    },
+    canInsertSnippet(template: string, documentId: string) { return prepareShortcutSnippet(template, documentId) !== null; },
+    insertSnippet(template: string, documentId: string) {
+      const plan = prepareShortcutSnippet(template, documentId);
+      if (!plan) return false;
+      if (plan.kind === 'document') return insertShortcutSnippet(view, template, documentId);
+      if (plan.kind === 'sourceCell') insertSourceCellSnippet(view, plan);
+      else {
+        commitPendingTableEdits(view);
+        const committedPlan = prepareShortcutSnippet(template, documentId);
+        if (committedPlan?.kind !== 'liveCell' || committedPlan.input !== plan.input) return false;
+        updateActiveTableInput(committedPlan.input, committedPlan.value, committedPlan.caret);
+        commitPendingTableEdits(view);
+      }
+      return true;
     },
     pastePlainText(text: string) { return insertPlainClipboardText(view, text, (view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text)); },
     setInputAssistance(preferences: InputAssistance) {
@@ -4889,6 +4935,16 @@ function isInsideTableCell(state: EditorState, position: number): boolean {
     node = node.parent;
   }
   return false;
+}
+
+function isInTableStructure(state: EditorState): boolean {
+  const head = state.selection.main.head;
+  const tree = syntaxTree(state);
+  return ([-1, 1] as const).some(side => {
+    let node: SyntaxNode | null = tree.resolveInner(head, side);
+    while (node && node.name !== 'Table') node = node.parent;
+    return node !== null;
+  });
 }
 
 function isTableHistoryRange(

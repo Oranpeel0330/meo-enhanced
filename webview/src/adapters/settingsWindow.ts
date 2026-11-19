@@ -1,16 +1,18 @@
 import type { createExtensionFeatureSettings } from './extensionFeatureSettings';
 import { createElement, X } from 'lucide';
 import { createAboutSettings } from './aboutSettings';
+import { createCustomShortcutSettings } from './customShortcutSettings';
 import type { EditorEnvironment } from '../../../src/protocol/editorServices';
 import { createMenuSwitch } from './menuSwitch';
 import { createContentWidthControl } from './contentWidthControl';
 import { createSegmentedControl } from './segmentedControl';
 import { createAppearanceSettings, type AppearanceSettingsOptions } from './appearanceSettings';
 import type { createPreviewPresetSettings } from './previewPresetSettings';
-import { canBindCommand, commandContext, effectiveShortcuts, shortcutConflicts, shortcutFromStroke, type ShortcutPlatform } from '../../../src/application/editingPreferences';
+import { builtinShortcutConflicts, canBindCommand, commandContext, effectiveShortcuts, shortcutFromStroke, shortcutReplacements, type CustomShortcutConflict, type ShortcutPlatform } from '../../../src/application/editingPreferences';
 import type { EditingPreferences, EditingPreferencesChange, EditorCommandId, InputSuggestionSetting } from '../../../src/foundation/editingPreferences';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
-import { aboutCatalog, commandTitle, commandTitles, generalSearchKeywords, imageLocationSearchKeywords, modeOptions, nativeShortcutLabels, normalizeSettingsSearch, sectionTitles, settingsSearchMatches, settingsText, shortcutSearchKeywords, shortcutSections, shortcutDescriptions, tablePasteContexts, typingCatalog, typingSearchKeywords, typingSections, type SettingsTab } from '../application/settingsCatalog';
+import type { EditingPreferencesUpdateResult } from '../../../src/protocol/editingPreferences';
+import { aboutCatalog, commandTitle, commandTitles, customShortcutTitle, generalSearchKeywords, imageLocationSearchKeywords, modeOptions, nativeShortcutLabels, normalizeSettingsSearch, sectionTitles, settingsSearchMatches, settingsText, shortcutSearchKeywords, shortcutSections, shortcutDescriptions, tablePasteContexts, typingCatalog, typingSearchKeywords, typingSections, type SettingsTab } from '../application/settingsCatalog';
 
 type Section = keyof typeof sectionTitles;
 export type GeneralSetting = {
@@ -37,7 +39,7 @@ export function createSettingsWindow(options: {
   readonly getPreferences: () => EditingPreferences;
   readonly getGeneral: (language: UiLanguage) => readonly GeneralSetting[];
   readonly appearance: AppearanceSettingsOptions;
-  readonly update: (change: EditingPreferencesChange) => Promise<{ ok: boolean; error?: { message: string } }>;
+  readonly update: (change: EditingPreferencesChange) => Promise<EditingPreferencesUpdateResult>;
   readonly returnFocus: () => { focus(): void } | null;
   readonly registerInput?: (input: HTMLInputElement) => () => void;
   readonly initialLanguage: UiLanguage;
@@ -58,6 +60,7 @@ export function createSettingsWindow(options: {
   let revealedSetting: InputSuggestionSetting | null = null;
   let revealTimer: ReturnType<typeof setTimeout> | null = null;
   let renderedSignature = '';
+  let shortcutListScroll = 0;
   let valuePresenters: (() => void)[] = [];
   let controlDisposers: (() => void)[] = [];
   const pending = new Set<string>();
@@ -68,6 +71,8 @@ export function createSettingsWindow(options: {
   const dialog = element('dialog', 'settings-window'); dialog.dataset.meoSettings = '';
   const titlebar = element('header', 'settings-titlebar');
   const title = element('h2', 'settings-title');
+  title.id = 'meo-settings-title';
+  dialog.setAttribute('aria-labelledby', title.id);
   const close = button('', 'settings-close'); close.append(createElement(X, { width: 16, height: 16, 'aria-hidden': 'true' }));
   const top = element('div', 'settings-top');
   const tabs = element('div', 'settings-tabs'); tabs.setAttribute('role', 'tablist');
@@ -108,6 +113,30 @@ export function createSettingsWindow(options: {
   const query = () => normalizeSettingsSearch(search.value);
   const matches = (...parts: (string | undefined)[]) => settingsSearchMatches(query(), ...parts);
   const titleFor = (section: Section) => { const labels = sectionTitles[section]; return t(labels[0], labels[1]); };
+  const customShortcuts = createCustomShortcutSettings({
+    owner: dialog,
+    platform: options.platform,
+    preferences: options.getPreferences,
+    save: (change, key) => updatePreference(change, key, false),
+    refresh: () => { renderedSignature = ''; renderContent(); },
+    focusSearch: () => search.focus(),
+    setEditing(editing) {
+      if (editing) {
+        shortcutListScroll = content.scrollTop;
+        recording = null;
+        dismissReset();
+        dialog.dataset.page = 'shortcut-editor';
+        dialog.setAttribute('aria-labelledby', 'meo-shortcut-editor-title');
+      } else {
+        delete dialog.dataset.page;
+        dialog.setAttribute('aria-labelledby', title.id);
+        renderedSignature = '';
+        renderContent();
+        content.scrollTop = shortcutListScroll;
+        updateNavigation();
+      }
+    }
+  });
   const dismissReset = () => { resetOpen = false; resetPopover.hidden = true; reset.setAttribute('aria-expanded', 'false'); };
   const focusCommand = (command: EditorCommandId) => (content.querySelector<HTMLButtonElement>(`[data-edit-command='${command}']`) ?? search).focus();
   const finishRecording = () => { const command = recording?.command; recording = null; renderContent(); if (command) focusCommand(command); };
@@ -115,15 +144,24 @@ export function createSettingsWindow(options: {
     if (revealTimer !== null) clearTimeout(revealTimer); revealTimer = null; revealedSetting = null;
     for (const row of content.querySelectorAll('.settings-item.is-revealed')) row.classList.remove('is-revealed');
   }
-  async function save(change: EditingPreferencesChange, key: string): Promise<boolean> {
-    if (pending.has(key) || disposed) return false;
+  async function updatePreference(change: EditingPreferencesChange, key: string, reportError = true): Promise<EditingPreferencesUpdateResult> {
+    const unavailable = { ok: false, error: { code: 'operation-failed', message: t('当前无法保存设置', 'Settings cannot be saved right now') } } as const;
+    if (pending.has(key) || disposed) return unavailable;
     pending.add(key); status.hidden = true; renderContent();
-    let result: { ok: boolean; error?: { message: string } };
-    try { result = await options.update(change); } catch (error) { result = { ok: false, error: { message: String(error) } }; }
+    let result: EditingPreferencesUpdateResult;
+    try { result = await options.update(change); } catch (error) { result = { ok: false, error: { code: 'operation-failed', message: String(error) } }; }
     pending.delete(key);
-    if (disposed) return false;
-    if (!result.ok) { status.textContent = t('保存失败：', 'Unable to save: ') + (result.error?.message ?? t('请重试。', 'Please retry.')); status.hidden = false; }
-    renderContent(); return result.ok;
+    if (disposed) return unavailable;
+    if (!result.ok && reportError) {
+      status.textContent = result.error.code === 'shortcut-conflicts-changed'
+        ? t('键位冲突已变化，请重新确认', 'Keybinding conflicts changed. Please confirm again')
+        : t('保存失败：', 'Unable to save: ') + result.error.message;
+      status.hidden = false;
+    }
+    renderContent(); return result;
+  }
+  async function save(change: EditingPreferencesChange, key: string): Promise<boolean> {
+    return (await updatePreference(change, key)).ok;
   }
   function makeSwitch(get: () => boolean, label: string, set: (next: boolean) => void, isDisabled: () => boolean = () => false) {
     const toggle = button('', 'settings-switch'); toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-label', label); toggle.append(createMenuSwitch());
@@ -190,26 +228,33 @@ export function createSettingsWindow(options: {
       const input = element('input', 'settings-recorder'); input.readOnly = true; input.value = recorder.draft; input.placeholder = t('按下快捷键', 'Press a shortcut'); input.setAttribute('aria-label', commandTitle(command, language));
       const confirm = button(t('确认', 'Assign')); const cancel = button(t('取消', 'Cancel'));
       const conflictLabel = element('p', 'settings-shortcut-conflict');
+      let shownConflicts: readonly CustomShortcutConflict[] = [];
       const updateConflict = () => {
-        const conflicts = shortcutConflicts(command, recorder.draft ? [recorder.draft] : [], options.getPreferences().shortcuts, options.platform);
-        conflictLabel.textContent = conflicts.length ? t('已用于：', 'Already assigned to: ') + conflicts.map(id => commandTitle(id, language)).join(' · ') : '';
-        conflictLabel.hidden = !conflicts.length; confirm.textContent = conflicts.length ? t('替换原绑定', 'Replace binding') : t('确认', 'Assign');
-        confirm.classList.toggle('settings-warning', !!conflicts.length); confirm.disabled = !recorder.draft || pending.has(command) || conflicts.some(id => !canBindCommand(id));
-        return conflicts;
+        const newKeys = recorder.draft ? [recorder.draft] : [];
+        shownConflicts = builtinShortcutConflicts(command, newKeys, options.getPreferences(), options.platform);
+        const names = shownConflicts.map(conflict => conflict.type === 'command'
+          ? commandTitle(conflict.command, language) : customShortcutTitle(conflict, language));
+        conflictLabel.textContent = names.length ? t('已用于：', 'Already assigned to: ') + names.join(' · ') : '';
+        conflictLabel.hidden = !names.length; confirm.textContent = names.length ? t('替换原绑定', 'Replace binding') : t('确认', 'Assign');
+        confirm.classList.toggle('settings-warning', !!names.length); confirm.disabled = !recorder.draft || pending.has(command) || shownConflicts.some(conflict => conflict.fixed);
       };
-      const commit = async (replaceConflicts: boolean) => { if (confirm.disabled) return; if (await save({ type: 'bind', command, keys: [recorder.draft], replaceConflicts }, command)) finishRecording(); };
+      const commit = async () => {
+        if (confirm.disabled) return;
+        const confirmedReplacements = shortcutReplacements(shownConflicts);
+        if (await save({ type: 'bind', command, keys: [recorder.draft], confirmedReplacements }, command)) finishRecording();
+      };
       input.addEventListener('keydown', event => {
         if (event.isComposing || event.key === 'Process') return;
         if (event.key === 'Tab') return;
         event.stopPropagation();
         const plain = !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
         if (event.key === 'Escape' && plain) { event.preventDefault(); finishRecording(); return; }
-        if (event.key === 'Enter' && plain) { event.preventDefault(); if (!updateConflict().length) void commit(false); return; }
+        if (event.key === 'Enter' && plain) { event.preventDefault(); if (!shownConflicts.length) void commit(); return; }
         event.preventDefault();
         const key = shortcutFromStroke({ key: event.key, code: event.code, ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey, shift: event.shiftKey, composing: event.isComposing, altGraph: event.getModifierState('AltGraph') });
         if (key) { recorder.draft = key; input.value = key; updateConflict(); }
       });
-      confirm.addEventListener('click', () => { void commit(true); }); cancel.addEventListener('click', finishRecording);
+      confirm.addEventListener('click', () => { void commit(); }); cancel.addEventListener('click', finishRecording);
       controls.append(input, confirm, cancel); row.append(conflictLabel); updateConflict();
     } else {
       const nativeKeys = nativeShortcutLabels[command] ?? '';
@@ -223,7 +268,7 @@ export function createSettingsWindow(options: {
         edit.addEventListener('click', () => { dismissReset(); recording = { command, draft: '' }; renderContent(); content.querySelector<HTMLInputElement>('.settings-recorder')?.focus(); }); controls.append(edit);
         if (keys.length) {
           const remove = button(t('清除', 'Clear'), 'settings-button settings-subtle'); remove.disabled = pending.has(command);
-          remove.addEventListener('click', async () => { await save({ type: 'bind', command, keys: [], replaceConflicts: false }, command); focusCommand(command); }); controls.append(remove);
+          remove.addEventListener('click', async () => { await save({ type: 'bind', command, keys: [], confirmedReplacements: [] }, command); focusCommand(command); }); controls.append(remove);
         }
       }
     }
@@ -248,11 +293,15 @@ export function createSettingsWindow(options: {
   }
   function renderContent() {
     if (disposed) return;
+    if (dialog.dataset.page === 'shortcut-editor') {
+      customShortcuts.presentEditor(language);
+      return;
+    }
     dialog.dataset.tab = tab;
     const visible = filtered();
     for (const [id, control] of tabButtons) {
       control.button.setAttribute('aria-selected', String(id === tab)); control.button.tabIndex = id === tab ? 0 : -1;
-      control.badge.textContent = String(id === 'extensions' ? options.extensionFeatures?.count(query()) ?? 0 : id === 'appearance' ? appearance.count(query()) : visible[id].length + (id === 'typing' && visible.imageLocation ? 1 : 0)); control.badge.hidden = !query();
+      control.badge.textContent = String(id === 'extensions' ? options.extensionFeatures?.count(query()) ?? 0 : id === 'appearance' ? appearance.count(query()) : visible[id].length + (id === 'typing' && visible.imageLocation ? 1 : 0) + (id === 'shortcuts' ? customShortcuts.count(query()) : 0)); control.badge.hidden = !query();
       control.button.id = `meo-settings-tab-${id}`;
     }
     content.setAttribute('aria-labelledby', `meo-settings-tab-${tab}`);
@@ -261,7 +310,7 @@ export function createSettingsWindow(options: {
     appearanceFooter.hidden = tab !== 'appearance'; appearance.present();
     if (tab === 'presets') { status.textContent = options.previewPresets?.error() ?? ''; status.hidden = !status.textContent; }
     // Preset data updates rows in place; only a changed section layout rebuilds the page.
-    const signature = JSON.stringify([language, tab, query(), tab === 'extensions' ? options.extensionFeatures?.revision() : null, recording?.command, tab === 'shortcuts' ? [options.getPreferences().shortcuts, [...pending]] : null, tab === 'presets' ? [...new Set(visible.presets.map(item => item.section))] : null]);
+    const signature = JSON.stringify([language, tab, query(), tab === 'extensions' ? options.extensionFeatures?.revision() : null, recording?.command, tab === 'shortcuts' ? [options.getPreferences().shortcuts, options.getPreferences().customShortcuts, [...pending]] : null, tab === 'presets' ? [...new Set(visible.presets.map(item => item.section))] : null]);
     if (renderedSignature === signature) {
       const oldScroll = content.scrollTop;
       if (tab === 'presets') {
@@ -281,6 +330,10 @@ export function createSettingsWindow(options: {
     if (tab === 'extensions' && options.extensionFeatures?.count(query())) content.append(options.extensionFeatures.render(language, query()));
     if (tab === 'appearance') content.append(appearance.render(language, query()));
     if (tab === 'about' && visible.about.length) content.append(about.render(language, visible.about));
+    if (tab === 'shortcuts') {
+      const section = customShortcuts.render(language, query());
+      if (section) content.append(section);
+    }
     const groups = tab === 'appearance' || tab === 'extensions' || tab === 'about' ? [] : tab === 'general' ? ['math', 'display', 'opening', 'interface'] : tab === 'typing' ? typingSections : tab === 'presets' ? ['presetList', 'presetFiles'] : Object.keys(shortcutSections);
     for (const name of groups) {
       const section = name as Section;
@@ -312,7 +365,7 @@ export function createSettingsWindow(options: {
     }
     if (!content.childNodes.length) content.append(element('p', 'settings-empty', t('没有匹配的设置', 'No matching settings')));
     content.scrollTop = oldScroll; updateNavigation();
-    if (activeRecorder && recording) content.querySelector<HTMLInputElement>('.settings-recorder')?.focus();
+    if (activeRecorder && recording) content.querySelector<HTMLInputElement>('[data-command] .settings-recorder')?.focus();
   }
   function updateNavigation() {
     const blocks = [...content.querySelectorAll<HTMLElement>('.settings-section')];
@@ -324,6 +377,7 @@ export function createSettingsWindow(options: {
     }
   }
   function selectTab(next: SettingsTab) {
+    if (next !== 'shortcuts') customShortcuts.close();
     if (next !== 'typing') clearRevealedSetting();
     if (tab === 'about' && next !== 'about') about.close();
     scrollPositions[tab] = content.scrollTop; tab = next; recording = null; dismissReset(); renderContent(); content.scrollTop = scrollPositions[next]; updateNavigation();
@@ -336,13 +390,14 @@ export function createSettingsWindow(options: {
     for (const [id, control] of tabButtons) control.label.textContent = id === 'extensions' ? t('扩展功能', 'Extensions') : id === 'general' ? t('常规', 'General') : id === 'appearance' ? t('外观', 'Appearance') : id === 'typing' ? t('输入', 'Input') : id === 'presets' ? t('预览预设', 'Preview presets') : id === 'about' ? t('关于', 'About') : t('快捷键', 'Shortcuts');
     search.placeholder = t('搜索设置', 'Search settings'); search.setAttribute('aria-label', search.placeholder); clear.setAttribute('aria-label', t('清除搜索', 'Clear search'));
     reset.textContent = t('恢复默认快捷键', 'Reset shortcuts'); reset.setAttribute('aria-expanded', String(resetOpen));
-    resetTitle.textContent = t('恢复全部快捷键？', 'Reset all shortcuts?'); resetDescription.textContent = t('自定义绑定将被替换，其他设置保持不变。', 'Custom bindings will be replaced. Other settings stay unchanged.');
+    resetTitle.textContent = t('恢复默认按键？', 'Restore default keybindings?');
+    resetDescription.textContent = t('内置快捷键恢复默认，自定义动作的按键会清空。动作名称和内容会保留。', 'Built-in shortcuts return to their defaults. Custom keybindings are cleared. Action names and definitions are kept.');
     cancelReset.textContent = t('取消', 'Cancel'); confirmReset.textContent = t('恢复默认', 'Reset'); renderContent();
   }
-  function closeWindow() { clearRevealedSetting(); appearance.close(); about.close(); options.imageLocation?.flush(); recording = null; dismissReset(); if (dialog.open) dialog.close(); options.returnFocus()?.focus(); }
+  function closeWindow() { clearRevealedSetting(); appearance.close(); about.close(); options.imageLocation?.flush(); customShortcuts.close(); recording = null; dismissReset(); if (dialog.open) dialog.close(); options.returnFocus()?.focus(); }
   close.addEventListener('click', closeWindow);
-  dialog.addEventListener('cancel', event => { event.preventDefault(); if (resetOpen) { dismissReset(); reset.focus(); } else if (recording) finishRecording(); else closeWindow(); });
-  dialog.addEventListener('click', event => { if (event.target === dialog) { const bounds = dialog.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeWindow(); } });
+  dialog.addEventListener('cancel', event => { event.preventDefault(); if (resetOpen) { dismissReset(); reset.focus(); } else if (recording) finishRecording(); else if (!customShortcuts.dismiss()) closeWindow(); });
+  dialog.addEventListener('click', event => { if (event.target === dialog && !dialog.dataset.page) { const bounds = dialog.getBoundingClientRect(); if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeWindow(); } });
   search.addEventListener('input', () => { clearRevealedSetting(); recording = null; dismissReset(); renderContent(); content.scrollTop = 0; updateNavigation(); });
   clear.addEventListener('click', () => { search.value = ''; search.dispatchEvent(new Event('input')); search.focus(); });
   content.addEventListener('scroll', updateNavigation, { passive: true });
@@ -366,5 +421,5 @@ export function createSettingsWindow(options: {
       revealTimer = setTimeout(clearRevealedSetting, 2000);
     },
     isOpen: () => dialog.open, present, setLanguage(next: UiLanguage) { language = next; present(); },
-    dispose() { disposed = true; clearRevealedSetting(); for (const dispose of controlDisposers) dispose(); appearance.dispose(); about.dispose(); abort.abort(); disposeSearchFocus?.(); options.previewPresets?.clear(); if (dialog.open) dialog.close(); dialog.remove(); } };
+    dispose() { disposed = true; clearRevealedSetting(); for (const dispose of controlDisposers) dispose(); appearance.dispose(); about.dispose(); customShortcuts.close(); abort.abort(); disposeSearchFocus?.(); options.previewPresets?.clear(); if (dialog.open) dialog.close(); dialog.remove(); } };
 }
