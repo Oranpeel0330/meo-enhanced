@@ -303,22 +303,23 @@ async function checkCellEntryRegressions(page: any) {
   }
 }
 
-async function checkCellBreakDeletion(page: import('puppeteer-core').Page) {
+async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 'break-deletion' | 'structure') {
   const cell = 'tbody td:first-child textarea';
   const preview = 'tbody td:first-child .meo-md-html-table-cell-preview';
   const table = (value: string) => `| Header |\n| --- |\n| ${value} |`;
   const checkEdit = async (
     before: string,
     selection: [number, number],
-    key: 'Backspace' | 'Delete',
-    expected: { value: string; caret: number; source: string },
+    key: 'Backspace' | 'Delete' | 'Shift+Enter' | 'cellBreak',
+    expected: { value: string; caret: number; source: string }
   ) => {
+    const original = table(before.replaceAll('\n', ''));
     await page.evaluate(text => {
       (window as any).__tableCellEditor?.destroy();
       (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
         parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
       });
-    }, table(before.replaceAll('\n', '')));
+    }, original);
     await page.waitForSelector(preview, { visible: true });
     await page.click(preview);
     const initial = await page.$eval(cell, (input, [from, to]) => {
@@ -327,7 +328,15 @@ async function checkCellBreakDeletion(page: import('puppeteer-core').Page) {
       return input.value;
     }, selection);
     assert.equal(initial, before);
-    await page.keyboard.press(key);
+    if (key === 'cellBreak') {
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.executeCommand('cellBreak')), true);
+    } else if (key === 'Shift+Enter') {
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('Enter');
+      await page.keyboard.up('Shift');
+    } else {
+      await page.keyboard.press(key);
+    }
     const edited = await page.$eval(cell, input => ({
       value: input.value, start: input.selectionStart, end: input.selectionEnd
     }));
@@ -336,7 +345,40 @@ async function checkCellBreakDeletion(page: import('puppeteer-core').Page) {
     await page.keyboard.press('Escape');
     const source = await page.evaluate(() => (window as any).__tableCellEditor.getText());
     assert.equal(source, table(expected.source), `${label} commits the edited cell`);
+    if (cases === 'structure') {
+      const history = await page.evaluate(async () => {
+        const editor = (window as any).__tableCellEditor;
+        const depth = editor.getHistoryDepth();
+        const undone = await editor.undo();
+        const afterUndo = editor.getText();
+        const redone = await editor.redo();
+        return { undoDepth: depth.undo, undone, afterUndo, redone, afterRedo: editor.getText() };
+      });
+      assert.deepEqual(history, { undoDepth: 1, undone: true, afterUndo: original, redone: true, afterRedo: source }, label);
+    }
   };
+
+  if (cases === 'structure') {
+    const withCaret = (marked: string) => ({ value: marked.replace('|', ''), caret: marked.indexOf('|') });
+    for (const [before, key, after] of [
+      ['1. First<BR />\n2. |Second<br/>\n3. Third', 'Backspace', '1. First<BR />\n|Second<br/>\n3. Third'],
+      ['1. First<BR />\n2. |<br/>\n3. Third', 'Backspace', '1. First<BR />\n2. |Third'],
+      ['1. First<br>\n2. |Second<br>\n    - Child', 'Backspace', '1. First<br>\n|Second<br>\n- Child'],
+      ['8. First<BR />\n9. |Second<br/>\n10. Third', 'Shift+Enter', '8. First<BR />\n9. |<br>\n10. Second<br/>\n11. Third'],
+      ['- Top<br/>\n  - [x] |Nested<br>\n- Last', 'Shift+Enter', '- Top<br/>\n  - [ ] |<br>\n  - [x] Nested<br>\n- Last'],
+      ['> Start<br>\n> > Nested|<BR />\n> End', 'Shift+Enter', '> Start<br>\n> > Nested<br>\n> > |<BR />\n> End'],
+      ['One<br>\n> Quote|', 'cellBreak', 'One<br>\n> Quote<br>\n> |'],
+      ['1. First<br/>\n2. Second|<br>\n3. Third', 'Shift+Enter', '1. First<br/>\n2. Second<br>\n3. |<br>\n4. Third']
+    ] as const) {
+      const initial = withCaret(before);
+      const expected = withCaret(after);
+      await checkEdit(initial.value, [initial.caret, initial.caret], key,
+        { ...expected, source: expected.value.replaceAll('\n', '').trim() });
+    }
+    await page.evaluate(() => (window as any).__tableCellEditor.destroy());
+    console.log('table list and quote editing passed');
+    return;
+  }
 
   const joined = { value: 'AB', caret: 1, source: 'AB' };
   for (const tag of ['<br>', '<br/>', '<BR />']) {
@@ -345,6 +387,7 @@ async function checkCellBreakDeletion(page: import('puppeteer-core').Page) {
     await checkEdit(before, [lineEnd, lineEnd], 'Backspace', joined);
     await checkEdit(before, [lineEnd + 1, lineEnd + 1], 'Backspace', joined);
     await checkEdit(before, [lineEnd, lineEnd], 'Delete', joined);
+    await checkEdit(before, [1, 1], 'Delete', joined);
     await checkEdit(before, [1, lineEnd], 'Backspace', joined);
   }
   await checkEdit('A<br/>\nB', [5, 5], 'Backspace', { value: 'A<br>\nB', caret: 4, source: 'A<br>B' });
@@ -355,8 +398,909 @@ async function checkCellBreakDeletion(page: import('puppeteer-core').Page) {
   await checkEdit('A<br>\nB<br>\nC<br>\nD', [6, 11], 'Delete', {
     value: 'A<br>\nC<br>\nD', caret: 6, source: 'A<br>C<br>D'
   });
+  const emptyItem = '1. First<br>\n2. <br/>\nThird';
+  const tagEnd = emptyItem.indexOf('<br/>') + '<br/>'.length;
+  await checkEdit(emptyItem, [tagEnd, tagEnd], 'Backspace', {
+    value: '1. First<br>\n2. Third', caret: emptyItem.indexOf('<br/>'), source: '1. First<br>2. Third'
+  });
   await page.evaluate(() => (window as any).__tableCellEditor.destroy());
   console.log('table cell break deletion passed');
+}
+
+async function checkCellLinePresentation(page: import('puppeteer-core').Page) {
+  const inputSelector = 'tbody td:first-child textarea';
+  const previewSelector = 'tbody td:first-child .meo-md-html-table-cell-preview';
+  const sourceSelector = `${previewSelector} .meo-md-table-active-source-line`;
+  const open = async (cell: string) => {
+    const markdown = `| Header |\n| --- |\n| ${cell} |`;
+    await page.evaluate(text => {
+      (window as any).__tableCellEditor?.destroy();
+      (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, markdown);
+    await page.waitForSelector(previewSelector, { visible: true });
+    return markdown;
+  };
+  const point = (selector: string, offset = 0) => page.$eval(`${previewSelector} ${selector}`, (element, offset) => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode()!;
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.setEnd(node, offset + 1);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + rect.width / 5, y: (rect.top + rect.bottom) / 2 };
+  }, offset);
+  const activeLine = () => page.$eval(sourceSelector, element => element.textContent);
+  const activeInput = () => page.$eval(inputSelector, input => ({
+    active: document.activeElement === input, value: input.value,
+    start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection
+  }));
+
+  const cell = '**Alpha**<br>[Middle](https://example.test/a-long-link)<br>**Omega**';
+  const source = await open(cell);
+  const first = await point('.meo-md-html-table-cell-line:first-child strong', 1);
+  const middle = await point('.meo-md-html-table-cell-line:nth-child(2) .meo-md-link', 1);
+  await page.mouse.move(middle.x, middle.y);
+  await page.mouse.down();
+  assert.equal(await page.$(sourceSelector), null, 'the pressed cell retains its reading layout');
+  await page.mouse.up();
+  assert.equal(await activeLine(), '[Middle](https://example.test/a-long-link)<br>');
+  assert.deepEqual(await page.$$eval(`${previewSelector} strong`, elements => elements.map(element => element.textContent)),
+    ['Alpha', 'Omega'], 'other lines keep their inline rendering');
+
+  await page.keyboard.press('ArrowUp');
+  assert.equal(await activeLine(), '**Alpha**<br>', 'moving up activates the previous logical line');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await activeLine(), '[Middle](https://example.test/a-long-link)<br>');
+  const middleCaret = (await activeInput()).start;
+  const omega = await point('.meo-md-html-table-cell-line:last-child strong', 3);
+  await page.keyboard.down('Shift');
+  await page.mouse.click(omega.x, omega.y);
+  await page.keyboard.up('Shift');
+  const extended = await activeInput();
+  assert.equal(extended.start, middleCaret, 'Shift-click keeps the existing anchor');
+  assert.equal(extended.end, extended.value.indexOf('Omega') + 3);
+  assert.equal(await activeLine(), '**Omega**');
+  const omegaWord = await point('.meo-md-table-active-source-line', 4);
+  await page.mouse.click(omegaWord.x, omegaWord.y, { count: 2 });
+  const word = await activeInput();
+  assert.equal(word.value.slice(word.start, word.end), 'Omega', 'double-click selects a word inside the active line');
+  const renderedFirst = await point('.meo-md-html-table-cell-line:first-child strong', 1);
+  await page.mouse.move(renderedFirst.x, renderedFirst.y);
+  await page.mouse.down();
+  assert.equal(await activeLine(), '**Omega**', 'a new press preserves the previously active source line');
+  await page.mouse.up();
+  assert.equal(await activeLine(), '**Alpha**<br>');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.$(sourceSelector), null, 'leaving the cell restores its reading layout');
+
+  const last = await point('.meo-md-html-table-cell-line:last-child strong', 3);
+  const value = cell.replaceAll('<br>', '<br>\n');
+  for (const backwards of [false, true]) {
+    const [start, end] = backwards ? [last, first] : [first, last];
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 8 });
+    assert.equal(await page.$(sourceSelector), null, 'dragging keeps the reading layout until release');
+    const held = await page.evaluate(() => document.getSelection()?.toString());
+    assert.ok(held?.includes('Middle'), `native drag selection spans the rendered lines: ${held}`);
+    await page.mouse.up();
+    const selection = await activeInput();
+    assert.deepEqual(selection, {
+      active: true, value, start: 3, end: value.indexOf('Omega') + 3, direction: backwards ? 'backward' : 'forward'
+    });
+    assert.equal(await activeLine(), backwards ? '**Alpha**<br>' : '**Omega**');
+    const copied = await page.$eval(inputSelector, input => {
+      const clipboard = new DataTransfer();
+      input.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: clipboard }));
+      return clipboard.getData('text/plain');
+    });
+    assert.equal(copied, cell.slice(3, cell.indexOf('Omega') + 3), 'copy uses Markdown with its original break tags');
+    await page.keyboard.press('Escape');
+  }
+
+  await page.mouse.move(first.x, first.y);
+  await page.mouse.down();
+  await page.mouse.move(last.x, last.y, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.type('x');
+  assert.equal((await activeInput()).value, '**Axga**');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.undo()), true);
+  assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), source, 'one undo restores the range and break tags');
+
+  await open('1. **First**<br>2. **Second**<br>> **Quote one**<br>> **Quote two**');
+  const list = await point('ol li:nth-child(2) strong', 2);
+  await page.mouse.click(list.x, list.y);
+  assert.equal(await activeLine(), '2. **Second**<br>');
+  assert.equal(await page.$$eval(`${previewSelector} ol li`, items => items.length), 2, 'both items stay in the same list');
+  assert.ok(await page.$(`${sourceSelector}:not(.is-prefix-source) .meo-md-table-source-prefix`),
+    'list marker remains rendered while editing its text');
+  await page.keyboard.press('Home');
+  const home = await activeInput();
+  const markerStart = home.value.indexOf('2. ');
+  for (let offset = home.start; offset > markerStart + 1; offset--) await page.keyboard.press('ArrowLeft');
+  assert.ok(await page.$(`${sourceSelector}.is-prefix-source .meo-md-table-source-prefix`),
+    'entering the marker reveals its source');
+  const quote = await point('blockquote .meo-md-html-table-cell-line:last-child strong', 1);
+  await page.mouse.move(quote.x, quote.y);
+  await page.mouse.down();
+  assert.ok(await page.$(`${sourceSelector}.is-prefix-source`), 'a held press preserves the previous source prefix');
+  await page.mouse.up();
+  assert.equal(await activeLine(), '> **Quote two**');
+  assert.equal(await page.$eval(sourceSelector, element => element.closest('blockquote')?.textContent),
+    'Quote one> **Quote two**', 'both lines retain the same quote container');
+
+  if (process.env.MEO_TEST_SCREENSHOTS) {
+    fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-active-source-line.png') });
+  }
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('F10');
+  await page.keyboard.up('Shift');
+  await page.click('.meo-md-html-table-context-next');
+  await page.click('button[aria-label="Edit entire cell"]');
+  assert.equal(await page.$(sourceSelector), null, 'the full-cell edit action removes the row projection');
+  assert.equal((await activeInput()).active, true);
+
+  await page.evaluate(() => {
+    (window as any).TableStabilityHarness.setImageSrcResolver(() =>
+      'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30"/>'));
+  });
+  await open('![Context](fixture.svg)<br>**Edit this line**');
+  const originalImage = await page.waitForSelector(`${previewSelector} .meo-md-image`);
+  await page.waitForFunction(selector => {
+    const image = document.querySelector<HTMLImageElement>(`${selector} img`);
+    return image?.complete && image.naturalWidth > 0;
+  }, {}, previewSelector);
+  const edit = await point('.meo-md-html-table-cell-line:last-child strong', 4);
+  await page.mouse.click(edit.x, edit.y);
+  await page.keyboard.type('x');
+  assert.equal(await page.$eval(`${previewSelector} .meo-md-image`, (image, before) => image === before, originalImage), true,
+    'editing a line retains the image DOM on a neighboring rendered line');
+  await originalImage?.dispose();
+
+  await open('First<br>Second<br>Third');
+  const second = await point('.meo-md-html-table-cell-line:nth-child(2)', 3);
+  await page.mouse.click(second.x, second.y);
+  const session = await page.createCDPSession();
+  try {
+    await session.send('Input.imeSetComposition', { text: 'pinyin', selectionStart: 6, selectionEnd: 6 });
+    assert.match((await activeInput()).value, /Secpinyinond/);
+    assert.notEqual(await page.$eval(inputSelector, input => getComputedStyle(input).color), 'rgba(0, 0, 0, 0)',
+      'the active native input paints IME preedit');
+    assert.ok(!(await page.evaluate(() => (window as any).__tableCellEditor.getText())).includes('pinyin'));
+    await session.send('Input.insertText', { text: '字' });
+    assert.equal(await activeLine(), 'Sec字ond<br>', 'the source line paints the confirmed composition');
+    assert.equal(await page.$eval(inputSelector, input => getComputedStyle(input).color), 'rgba(0, 0, 0, 0)');
+  } finally {
+    await session.detach();
+  }
+  await page.evaluate(() => (window as any).__tableCellEditor.destroy());
+  console.log('table active source line checks passed');
+}
+
+async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
+  const layout = await page.addStyleTag({ content: `
+    #app { height: 400px; }
+    #app .cm-editor { height: 100%; }
+    .cm-editor .meo-md-html-table { width: 420px !important; table-layout: fixed !important; }
+    .cm-editor .meo-md-html-table :is(th, td) { width: 210px !important; max-width: 210px !important; }
+  ` });
+  const markdown = 'before table\n'.repeat(30) + '\n| Test | Content |\n| --- | --- |\n'
+    + `| First | **One**<br>[Two](https://example.test/${'long-path/'.repeat(13)})<br>**Three** |\n`
+    + '| List | 1. **Prepare**<br>2. Review<br>   - **Nested**<br>3. Finish |\n'
+    + '| Quote | > **Intro**<br>> > **Nested quote**<br>> Finish |\n\n'
+    + 'after table\n'.repeat(20);
+  const preview = (row: number) => `tbody tr:nth-child(${row}) td:nth-child(2) .meo-md-html-table-cell-preview`;
+  const active = '.meo-md-table-active-source-line';
+  const firstLine = `${preview(1)} .meo-md-html-table-cell-line:first-child strong`;
+  const coords = (selector: string) => page.$eval(selector, element => {
+    const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(node, 0);
+    range.setEnd(node, 1);
+    const rect = range.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, x: rect.left + rect.width / 5, y: rect.top + rect.height / 2 };
+  });
+  const settle = () => page.evaluate(() => new Promise<void>(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  const click = async (selector: string) => {
+    const { x, y } = await coords(selector);
+    await page.mouse.click(x, y);
+    await settle();
+  };
+  try {
+    await page.evaluate(text => {
+      (window as any).__tableCellEditor?.destroy();
+      (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, markdown);
+    await page.waitForSelector(`${preview(3)} blockquote`);
+    await page.evaluate(() => { (window as any).__tableCellEditor.view.scrollDOM.scrollTop = 600; });
+    await settle();
+    const prior = await coords(firstLine);
+    const middle = `${preview(1)} .meo-md-html-table-cell-line:nth-child(2) .meo-md-link`;
+    await click(middle);
+    assert.ok(await page.$(`${preview(1)} ${active}`));
+    assert.ok(Math.abs((await coords(firstLine)).top - prior.top) < 1, 'expanding a wrapped source keeps the preceding line still');
+    await click(`${preview(1)} .meo-md-html-table-cell-line:last-child strong`);
+    assert.equal(await page.$eval(`${preview(1)} ${active}`, el => el.textContent), '**Three**');
+    assert.ok(Math.abs((await coords(firstLine)).top - prior.top) < 1, 'same-cell handoff only reflows the changed source row');
+    await click(middle);
+    await click(`${preview(2)} ol > li:first-child strong`);
+    assert.equal(await page.$eval(`${preview(2)} ${active}`, el => el.textContent), '1. **Prepare**<br>');
+    assert.ok(Math.abs((await coords(firstLine)).top - prior.top) < 1, 'cross-cell handoff keeps the former cell at its viewport position');
+
+    for (const [row, rendered] of [
+      [2, 'ol > li:nth-child(2)'],
+      [2, 'ul > li:first-child strong'],
+      [3, 'blockquote blockquote strong']
+    ] as const) {
+      const reading = await coords(`${preview(row)} ${rendered}`);
+      await click(`${preview(row)} ${rendered}`);
+      const src = `${preview(row)} ${active}`;
+      const editing = await coords(`${src} .meo-md-table-source-body`);
+      assert.ok(Math.abs(editing.left - reading.left) < 1,
+        `reading and source share the same body start for ${rendered}: ${reading.left} -> ${editing.left}`);
+      const paint = await page.$eval(src, element => ({
+        prefix: getComputedStyle(element.querySelector('.meo-md-table-source-prefix')!).visibility,
+        input: getComputedStyle(element.closest('td')!.querySelector('textarea')!).color,
+        raw: getComputedStyle(element.querySelector('.meo-md-table-source-body')!).color
+      }));
+      assert.equal(paint.prefix, 'hidden', 'the structural prefix is already painted by the rendered container');
+      assert.equal(paint.input, 'rgba(0, 0, 0, 0)', 'the native selection owner does not paint a second copy');
+      assert.notEqual(paint.raw, 'rgba(0, 0, 0, 0)', 'editable body text is visible');
+      if (process.env.MEO_TEST_SCREENSHOTS) {
+        const name = row === 3 ? 'table-quote-source-alignment.png' : 'table-list-source-alignment.png';
+        await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, name) });
+      }
+    }
+    console.log('table source line alignment and viewport handoff checks passed');
+  } finally {
+    await page.evaluate(() => (window as any).__tableCellEditor.destroy());
+    await layout.evaluate(style => style.remove());
+    await layout.dispose();
+  }
+}
+
+async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Page) {
+  const cell = 'tbody tr:first-child td:nth-child(2)';
+  const preview = `${cell} .meo-md-html-table-cell-preview`;
+  const sourceLine = `${preview} .meo-md-table-active-source-line`;
+  const caretSelector = `${sourceLine} .meo-md-table-source-caret`;
+  const input = `${cell} textarea`;
+  const source = '| Step | Content |\n| --- | --- |\n'
+    + '| List | 1. First<BR />2. Second<br/>3. Third |\n'
+    + '| Ordered | 8. First<BR />9. 第二项<br/>10. Third |\n'
+    + '| Link | First<br>[Example](https://example.test/very/long/path/for/wrapping)<br>Last |';
+  await page.evaluate(text => {
+    (window as any).__tableCellEditor?.destroy();
+    const openedLinks: string[] = (window as any).__cellPointerLinks = [];
+    (window as any).__tableCellEditor = (window as any).TableStabilityHarness.createEditor({
+      parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {},
+      onOpenLink(href: string) { openedLinks.push(href); }
+    });
+  }, source);
+  const first = `${preview} li:first-child`;
+  await page.waitForSelector(first, { visible: true });
+  await page.click(first);
+  const marker = await page.$eval(sourceLine, el => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const index = node.textContent!.indexOf('<BR />');
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, index + 2);
+      range.setEnd(node, index + 3);
+      const rect = range.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width * 0.75, y: rect.top + rect.height / 2,
+        right: el.closest('td')!.getBoundingClientRect().right
+      };
+    }
+    throw new Error('the source row must display its original break tag');
+  });
+  await page.mouse.click(marker.x, marker.y);
+  const caret = await page.$eval(input, textarea => textarea.selectionStart);
+  assert.equal(caret, '1. First'.length, 'a click on the displayed line ending goes before the break tag');
+  await page.mouse.click(marker.right - 4, marker.y);
+  assert.equal(await page.$eval(input, textarea => textarea.selectionStart), caret,
+    'blank space after the displayed break has the same line-end caret');
+  const assertCaretAtBodyEnd = async () => {
+    const position = await page.$eval(sourceLine, el => {
+      const text = el.querySelector('.meo-md-table-source-body')!.firstChild!;
+      const range = document.createRange();
+      range.setStart(text, text.textContent!.length);
+      range.collapse(true);
+      const textCaret = range.getBoundingClientRect();
+      const caret = el.querySelector('.meo-md-table-source-caret')!;
+      const overlay = caret.getBoundingClientRect();
+      return {
+        native: getComputedStyle(el.closest('td')!.querySelector('textarea')!).caretColor,
+        x: overlay.left, y: overlay.top,
+        textX: textCaret.left, textY: textCaret.top, shown: getComputedStyle(caret).display !== 'none'
+      };
+    });
+    assert.equal(position.native, 'rgba(0, 0, 0, 0)');
+    assert.ok(position.shown && Math.abs(position.x - position.textX) < 1 && Math.abs(position.y - position.textY) < 1,
+      `the visible caret uses the same line as the displayed text: ${JSON.stringify(position)}`);
+  };
+  await assertCaretAtBodyEnd();
+  const sampleBlink = (phase: number) => page.$eval(caretSelector, (element, phase) => {
+    const style = getComputedStyle(element);
+    const blink = element.getAnimations().find(animation =>
+      animation instanceof CSSAnimation && animation.animationName === style.animationName
+    );
+    if (blink?.effect) {
+      blink.currentTime = Number(blink.effect.getTiming().duration) * phase;
+    }
+    return { opacity: style.opacity, running: blink?.playState === 'running' };
+  }, phase);
+  assert.equal((await sampleBlink(0.25)).opacity, '1', 'the focused caret is visible during the first half of its blink');
+  assert.deepEqual(await sampleBlink(0.75), { opacity: '0', running: true }, 'the focused caret blinks off while idle');
+  await page.$eval(input, element => element.dispatchEvent(new Event('selectionchange')));
+  assert.equal(await page.$eval(caretSelector, element => getComputedStyle(element).opacity), '0',
+    'an unchanged native selection does not restart the blink');
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await page.$eval(caretSelector, element => getComputedStyle(element).opacity), '1',
+    'moving the caret on the same line makes it visible again');
+  await page.keyboard.press('ArrowRight');
+  await assertCaretAtBodyEnd();
+
+  for (const value of ['reduce', 'no-preference']) {
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value }]);
+    assert.deepEqual(await sampleBlink(0.25), { opacity: '1', running: true },
+      `the caret has a visible blink phase with motion preference ${value}`);
+    assert.deepEqual(await sampleBlink(0.75), { opacity: '0', running: true },
+      `the caret has a hidden blink phase with motion preference ${value}`);
+  }
+  await page.emulateMediaFeatures([]);
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.up('Shift');
+  assert.equal(await page.$(caretSelector), null,
+    'a text selection does not paint a blinking insertion caret');
+  await page.keyboard.press('ArrowRight');
+  await assertCaretAtBodyEnd();
+
+  await page.keyboard.type('55');
+  assert.equal(await page.$eval(input, textarea => textarea.value), '1. First55<BR />\n2. Second<br/>\n3. Third');
+  await assertCaretAtBodyEnd();
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('Home');
+  await page.keyboard.up('Control');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForSelector(`${sourceLine}.is-prefix-source`);
+  const prefixStart = await page.$eval(`${sourceLine} .meo-md-table-source-prefix`, prefix => prefix.getBoundingClientRect().left);
+  await page.keyboard.type('55555');
+  const bounds = await page.$eval(sourceLine, el => {
+    const prefix = el.querySelector('.meo-md-table-source-prefix')!;
+    const cell = el.closest('td')!.getBoundingClientRect();
+    const marker = prefix.getBoundingClientRect();
+    return { prefixLeft: marker.left, prefixRight: marker.right, cellLeft: cell.left, cellRight: cell.right };
+  });
+  assert.ok(bounds.prefixLeft >= bounds.cellLeft && bounds.prefixRight <= bounds.cellRight,
+    `typing in a raw list marker must stay inside the cell: ${JSON.stringify(bounds)}`);
+  assert.ok(Math.abs(bounds.prefixLeft - prefixStart) < 1, 'a growing list marker extends to the right from a stable start');
+  if (process.env.MEO_TEST_SCREENSHOTS) {
+    fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+    await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-editing-numbered-prefix.png') });
+  }
+
+  const orderedCell = 'tbody tr:nth-child(2) td:nth-child(2)';
+  const targetItem = await page.$eval(`${orderedCell} ol li:nth-child(2)`, element => {
+    const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 1);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + rect.width / 8, y: rect.top + rect.height / 2 };
+  });
+  await page.mouse.click(targetItem.x, targetItem.y);
+  assert.equal(await page.$eval(`${orderedCell} textarea`, textarea => textarea.selectionStart),
+    '8. First<BR />\n9. '.length, 'clicking the first character lands after the hidden marker');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Shift');
+  assert.equal(await page.$eval(`${orderedCell} textarea`, textarea => textarea.value),
+    '8. First<BR />\n9. <br>\n10. 第二项<br/>\n11. Third');
+  const session = await page.createCDPSession();
+  try {
+    await session.send('Input.imeSetComposition', { text: 'xin', selectionStart: 3, selectionEnd: 3 });
+    const preedit = await page.$eval(`${orderedCell} textarea`, textarea => {
+      const input = textarea.getBoundingClientRect();
+      const cell = textarea.closest('td')!.getBoundingClientRect();
+      const caret = textarea.parentElement!.querySelector('.meo-md-table-source-caret');
+      return {
+        value: textarea.value,
+        withinCell: input.left >= cell.left && input.right <= cell.right + 0.5,
+        projectedCaret: !!caret && getComputedStyle(caret).display !== 'none',
+        nativeCaret: getComputedStyle(textarea).caretColor
+      };
+    });
+    assert.match(preedit.value, /\n9\. xin<br>/, 'IME composes before the row break');
+    assert.equal(preedit.withinCell, true, 'the native IME surface also stays within the numbered cell');
+    assert.equal(preedit.projectedCaret, false, 'composition leaves caret painting to the native input');
+    assert.notEqual(preedit.nativeCaret, 'rgba(0, 0, 0, 0)');
+    await session.send('Input.insertText', { text: '新' });
+    assert.equal(await page.$eval(`${orderedCell} textarea`, textarea => textarea.value),
+      '8. First<BR />\n9. 新<br>\n10. 第二项<br/>\n11. Third');
+  } finally {
+    await session.detach();
+  }
+
+  const linkedCell = 'tbody tr:nth-child(3) td:nth-child(2)';
+  await page.click(`${linkedCell} .meo-md-link`);
+  const link = await page.$eval(`${linkedCell} .meo-md-table-source-body`, el => {
+    const text = el.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 2);
+    range.setEnd(text, 3);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  });
+  await page.keyboard.down('Control');
+  await page.mouse.click(link.x, link.y);
+  await page.keyboard.up('Control');
+  assert.deepEqual(await page.evaluate(() => (window as any).__cellPointerLinks),
+    ['https://example.test/very/long/path/for/wrapping'], 'modifier clicks use the characters actually shown');
+  await page.evaluate(() => (window as any).__tableCellEditor.destroy());
+  console.log('table line-end pointer and source bounds checks passed');
+}
+
+async function checkCellEditingAudit(page: import('puppeteer-core').Page) {
+  const cell = 'tbody tr:first-child td';
+  const input = `${cell} textarea`;
+  const activeLine = `${cell} .meo-md-table-active-source-line`;
+  const fixedWidth = await page.addStyleTag({ content: `
+    .cm-editor .meo-md-html-table { width: 118px !important; table-layout: fixed !important; }
+    .cm-editor .meo-md-html-table :is(th, td) { width: 118px !important; }
+  ` });
+  const open = async (content: string, alignment = '---') => {
+    const text = `before\n\n| A |\n| ${alignment} |\n| ${content} |\n| next |\n\nafter`;
+    await page.evaluate(text => {
+      const app = window as any;
+      app.__tableCellEditor?.destroy();
+      app.__tableCellEditor = app.TableStabilityHarness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, text);
+    await page.waitForSelector(input);
+    return text;
+  };
+  const select = (from: number, to = from) => page.$eval(input, (textarea, from, to) => {
+    textarea.focus();
+    textarea.setSelectionRange(from, to);
+    return new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  }, from, to);
+  const press = async (key: import('puppeteer-core').KeyInput, modifier?: 'Control' | 'Shift') => {
+    if (modifier) await page.keyboard.down(modifier);
+    await page.keyboard.press(key);
+    if (modifier) await page.keyboard.up(modifier);
+  };
+  const caret = () => page.$eval(input, textarea => ({
+    from: textarea.selectionStart, to: textarea.selectionEnd, value: textarea.value
+  }));
+  const selection = async () => {
+    const { from, to } = await caret();
+    return { from, to };
+  };
+  const lineText = () => page.$eval(activeLine, element => element.textContent);
+  const caretTop = () => page.$eval(`${activeLine} .meo-md-table-source-caret`, element => parseFloat(getComputedStyle(element).top));
+  try {
+    const marked = '1. First<br>133333333. Second item has quite long text<br>3. Third';
+    const orderedSource = await open(marked);
+    const initial = marked.indexOf('Second') + 5;
+    await select(initial);
+    await press('ArrowUp');
+    assert.equal(await lineText(), '1. First<br>', 'Up from the first painted row crosses a hidden, wider list marker');
+    await press('ArrowDown');
+    const firstPaintedRow = await caretTop();
+    await press('ArrowDown');
+    assert.equal(await lineText(), '133333333. Second item has quite long text<br>');
+    assert.ok(await caretTop() > firstPaintedRow + 10, 'Down advances one painted row within the wrapped item');
+    await press('ArrowUp');
+    assert.ok(Math.abs(await caretTop() - firstPaintedRow) < 1, 'Up returns to the first painted row');
+
+    const markerColor = (item: number) => page.$eval(`${cell} ol li:nth-child(${item})`,
+      element => getComputedStyle(element, '::marker').color);
+    const readingMarker = await markerColor(1);
+    assert.notEqual(readingMarker, 'rgba(0, 0, 0, 0)');
+    const markerStart = marked.indexOf('133333333') + 1;
+    await select(markerStart);
+    assert.equal(await markerColor(2), readingMarker, 'the caret immediately before a list marker keeps it rendered');
+    const edge = await page.$eval(activeLine, element => ({
+      caret: element.querySelector('.meo-md-table-source-caret')!.getBoundingClientRect().left,
+      body: element.querySelector('.meo-md-table-source-body')!.getBoundingClientRect().left,
+      cell: element.closest('td')!.getBoundingClientRect().left
+    }));
+    assert.ok(edge.caret >= edge.cell && edge.caret < edge.body, 'the caret before the marker appears in its gutter');
+    await press('ArrowRight');
+    assert.equal(await markerColor(2), 'rgba(0, 0, 0, 0)', 'editing raw list syntax hides the generated marker');
+    assert.equal((await caret()).from, markerStart + 1);
+    await press('ArrowLeft');
+    assert.equal(await markerColor(2), readingMarker, 'moving back to the boundary restores the rendered marker');
+    await select(markerStart, markerStart + '133333333.'.length);
+    assert.equal(await markerColor(2), 'rgba(0, 0, 0, 0)', 'selecting just the marker reveals its source');
+    await select(markerStart, initial);
+    assert.equal(await markerColor(2), readingMarker, 'a selection into the item text keeps the rendered marker');
+    await press('Escape');
+    const label = await page.$eval(`${cell} ol li:nth-child(2)`, element => {
+      const firstText = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
+      const range = document.createRange();
+      range.setStart(firstText, 2);
+      range.setEnd(firstText, 3);
+      const glyph = range.getBoundingClientRect();
+      return { x: glyph.left + glyph.width / 4, y: glyph.top + glyph.height / 2 };
+    });
+    await page.mouse.click(label.x, label.y);
+    assert.equal(await markerColor(2), readingMarker, 'clicking item text keeps the rendered marker');
+    assert.ok((await caret()).from > markerStart + '133333333.'.length);
+    assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), orderedSource);
+
+    await select(initial);
+    const composition = await page.createCDPSession();
+    try {
+      const preedit = 'zhongwenchangshuruzhongwen';
+      await composition.send('Input.imeSetComposition', { text: preedit, selectionStart: preedit.length, selectionEnd: preedit.length });
+      assert.ok((await caret()).value.includes(preedit));
+      assert.equal(await markerColor(2), 'rgba(0, 0, 0, 0)', 'native preedit does not paint a second list marker');
+      assert.equal(await markerColor(1), readingMarker, 'preedit preserves the neighboring rendered marker');
+      await composition.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
+      assert.ok(!(await caret()).value.includes(preedit), 'cancelled preedit leaves no text');
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), orderedSource);
+      assert.equal(await markerColor(2), readingMarker, 'cancelling preedit restores the rendered marker');
+    } finally {
+      await composition.detach();
+    }
+
+    const nested = '1. Parent<br>   8. First nested<br>   133333333. Second nested<br>2. Next';
+    const nestedSource = await open(nested);
+    const nestedMarkerStart = nested.indexOf('133333333') + 2;
+    await select(nestedMarkerStart - 1);
+    assert.equal(await page.$(`${activeLine}.is-prefix-source`), null, 'list indentation keeps the rendered marker');
+    await press('ArrowRight');
+    assert.equal(await page.$(`${activeLine}.is-prefix-source`), null, 'the nested marker still renders at its leading edge');
+    await press('ArrowRight');
+    assert.ok(await page.$(`${activeLine}.is-prefix-source`), 'moving into the nested marker reveals its source');
+    assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), nestedSource);
+
+    const quoted = '> 1. First quote<br>> 133333333. Second quote<br>> 3. Third quote';
+    await open(quoted);
+    const quotedMarkerStart = quoted.indexOf('133333333') + 1;
+    await select(quotedMarkerStart);
+    assert.equal(await page.$(`${activeLine}.is-prefix-source`), null, 'a quote prefix does not expand the list marker at its edge');
+    await press('ArrowRight');
+    assert.ok(await page.$(`${activeLine}.is-prefix-source`), 'the marker in a quote opens when the caret enters its digits');
+
+    await open('First<BR />Second<br/>Third', '---:');
+    await select(2);
+    await press('End');
+    assert.equal((await caret()).from, 5, 'End stops at the visible body before a break');
+    await press('ArrowDown', 'Shift');
+    assert.equal((await caret()).from, 5, 'Shift+Down keeps the anchor in the previous line');
+    assert.equal(await lineText(), 'Second<br/>');
+    assert.ok((await caret()).to <= 'First<BR />\nSecond'.length, 'the selection head never lands in the break tag');
+    await press('ArrowUp', 'Shift');
+    assert.deepEqual(await selection(), { from: 5, to: 5 });
+
+    await open('First<br>aaaaaaa bbbbbbb ccccccc ddddddd<br>Last');
+    await select(22);
+    const wrappedTop = await caretTop();
+    await press('Home');
+    assert.deepEqual(await selection(), { from: 18, to: 18 }, 'Home stops before the first glyph of a soft wrap');
+    assert.ok(Math.abs(await caretTop() - wrappedTop) < 1, 'the caret stays on the wrapped row at its first glyph');
+    const firstWrappedGlyph = await page.$eval(`${activeLine} .meo-md-table-source-body`, element => {
+      const range = document.createRange();
+      range.setStart(element.firstChild!, 8);
+      range.setEnd(element.firstChild!, 9);
+      const rect = range.getBoundingClientRect();
+      return { x: rect.left + 1, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.click(firstWrappedGlyph.x, firstWrappedGlyph.y);
+    assert.deepEqual(await selection(), { from: 18, to: 18 });
+    assert.ok(Math.abs(await caretTop() - wrappedTop) < 1, 'a click before the first glyph of a wrap uses its painted row');
+    await press('End');
+    assert.equal((await caret()).from, 26, 'End uses the same insertion boundary at the end of the wrapped row');
+    assert.ok(Math.abs(await caretTop() - wrappedTop) < 1);
+
+    const cutSource = await open('First<BR />Second<br />Third');
+    await select(2, 17);
+    await press('x', 'Control');
+    assert.equal((await caret()).value, 'Fid<br />\nThird', 'cut removes the cross-line range exactly once');
+    await page.evaluate(() => {
+      const target = document.createElement('textarea');
+      target.id = 'table-cell-clipboard-audit';
+      document.body.appendChild(target);
+      target.focus();
+    });
+    try {
+      await press('v', 'Control');
+      assert.equal(await page.$eval('#table-cell-clipboard-audit', target => (target as HTMLTextAreaElement).value),
+        'rst<BR />Secon', 'the native clipboard carries the same Markdown for Cut and Copy');
+      await page.waitForFunction(() => (window as any).__tableCellEditor.getText().includes('Fid<br />Third'));
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.undo()), true);
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), cutSource);
+
+      const pasteSource = await open('Top<BR />Bottom');
+      await page.$eval('#table-cell-clipboard-audit', (target: HTMLTextAreaElement) => {
+        target.value = '中😀\nnext';
+        target.focus();
+        target.select();
+      });
+      await press('c', 'Control');
+      await select(3);
+      await press('v', 'Control');
+      assert.equal((await caret()).value, 'Top中😀<br>\nnext<BR />\nBottom');
+      assert.equal((await caret()).from, 'Top中😀<br>\nnext'.length);
+      assert.equal(await lineText(), 'next<BR />', 'pasting multiple lines lands at the end of the inserted content');
+      await press('Escape');
+      await page.waitForFunction(text => (window as any).__tableCellEditor.getText() === text, {},
+        pasteSource.replace('Top<BR />', 'Top中😀<br>next<BR />'));
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.undo()), true);
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), pasteSource);
+    } finally {
+      await page.$eval('#table-cell-clipboard-audit', target => target.remove());
+    }
+
+    const blank = 'Top<BR /><br/>Bottom<br>';
+    await open(blank, ':---:');
+    for (const [row, offset, text] of [[2, 10, '<br/>'], [4, 27, '']] as const) {
+      const selector = `${cell} .meo-md-html-table-cell-line:nth-child(${row})`;
+      const point = await page.$eval(selector, element => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      });
+      await page.mouse.click(point.x, point.y);
+      assert.equal(await lineText(), text, 'empty rendered rows remain editable targets');
+      assert.equal((await caret()).from, offset, 'the empty line click maps to its source boundary');
+      await press('Escape');
+    }
+
+    const styled = '**Bold** and *italic*<br>`<br>` and ~~gone~~<BR />'
+      + '8. Ordered<br>   - [x] Nested<br>> Quote<br>> > **Deep**<br>[Link](https://example.test/)';
+    await open(styled);
+    const preview = `${cell} .meo-md-html-table-cell-preview`;
+    const snapshot = () => page.$eval(preview, element => ({
+      strong: [...element.querySelectorAll('strong')].map(node => node.textContent),
+      italic: element.querySelector('em')?.textContent,
+      code: element.querySelector('code')?.textContent,
+      orderedStart: element.querySelector('ol')?.start,
+      nestedTask: element.querySelector<HTMLInputElement>('ol li ul li input[type=checkbox]')?.checked,
+      nestedQuote: element.querySelector('blockquote blockquote strong')?.textContent,
+      links: element.querySelectorAll('.meo-md-link').length
+    }));
+    assert.deepEqual(await snapshot(), {
+      strong: ['Bold', 'Deep'], italic: 'italic', code: '<br>', orderedStart: 8,
+      nestedTask: true, nestedQuote: 'Deep', links: 1
+    }, 'rendered inline styles, literal break in code, and nested blocks share a cell');
+    const taskOffset = await page.$eval(preview, element => {
+      const checkbox = element.querySelector('ol li ul li input[type=checkbox]')!;
+      const text = document.createTreeWalker(checkbox.closest('li')!, NodeFilter.SHOW_TEXT).nextNode()!;
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, 1);
+      const label = range.getBoundingClientRect();
+      const marker = checkbox.getBoundingClientRect();
+      return Math.abs((label.top + label.bottom - marker.top - marker.bottom) / 2);
+    });
+    assert.ok(taskOffset < 8, `the checkbox stays on the first painted line of a narrow task: ${taskOffset}px`);
+    await select(styled.indexOf('Ordered') + 2 + 2);
+    assert.equal(await lineText(), '8. Ordered<br>');
+    assert.deepEqual(await snapshot(), {
+      strong: ['Bold', 'Deep'], italic: 'italic', code: '<br>', orderedStart: 8,
+      nestedTask: true, nestedQuote: 'Deep', links: 1
+    }, 'only the selected logical row switches to source');
+    await press('ArrowDown');
+    assert.equal(await lineText(), '   - [x] Nested<br>');
+    for (let step = 0; step < 3; step++) {
+      const previousTop = await caretTop();
+      await press('ArrowDown');
+      if (await lineText() !== '   - [x] Nested<br>') break;
+      assert.ok(await caretTop() > previousTop + 10, 'Down advances inside the wrapped nested task');
+    }
+    assert.equal(await lineText(), '> Quote<br>', 'leaving the task enters the quote');
+    await press('ArrowDown');
+    assert.equal(await lineText(), '> > **Deep**<br>');
+    const trailingSpace = await page.$eval(preview, element => {
+      const link = element.querySelector('.meo-md-link')!;
+      return element.closest('td')!.getBoundingClientRect().bottom - link.getBoundingClientRect().bottom;
+    });
+    assert.ok(trailingSpace < 18, `only the rendered rows and the active source size the cell: ${trailingSpace}px trailing space`);
+
+    await select(styled.indexOf('> > **Deep**') + 6);
+    assert.ok(await page.$(`${activeLine}.is-prefix-source`));
+    const quoteBackground = await page.$eval(`${activeLine} .meo-md-table-source-text`, element => ({
+      line: getComputedStyle(element).backgroundColor,
+      editor: getComputedStyle(element.closest('.cm-editor')!).backgroundColor
+    }));
+    assert.equal(quoteBackground.line, quoteBackground.editor, 'raw quote markers cover the bars only on the active line');
+
+    if (process.env.MEO_TEST_SCREENSHOTS) {
+      fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+      const table = (await page.$('.meo-md-html-table:not(.meo-md-html-table-sticky-table)'))!;
+      await table.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-mixed-styles-quote-prefix.png') });
+      await select(styled.indexOf('Deep') + 7);
+      await table.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-mixed-styles-active.png') });
+      await press('Escape');
+      await table.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-mixed-styles-reading.png') });
+    }
+  } finally {
+    await fixedWidth.evaluate(style => style.remove());
+  }
+}
+
+async function checkCellKeyboardViewport(page: import('puppeteer-core').Page) {
+  const layout = await page.addStyleTag({ content: `
+    #app { height: 330px; }
+    #app .cm-editor { height: 100%; }
+    .cm-editor .meo-md-html-table { width: calc(2 * var(--test-cell-width, 195px)) !important; table-layout: fixed !important; }
+    .cm-editor .meo-md-html-table :is(th, td) {
+      width: var(--test-cell-width, 195px) !important; max-width: var(--test-cell-width, 195px) !important;
+    }
+  ` });
+  const cell = (row: number) => `tbody tr:nth-child(${row}) td:last-child`;
+  const settle = () => page.evaluate(() => new Promise<void>(resolve => {
+    let frames = 8;
+    const next = () => --frames ? requestAnimationFrame(next) : resolve();
+    requestAnimationFrame(next);
+  }));
+  const open = async (rows: string[]) => {
+    const text = 'Before\n'.repeat(18) + '\n| Header | Target |\n| --- | --- |\n'
+      + rows.join('\n') + '\n\n' + 'After\n'.repeat(28);
+    await page.evaluate(text => {
+      const app = window as any;
+      app.__tableCellEditor?.destroy();
+      app.__tableCellEditor = app.TableStabilityHarness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+      const { view } = app.__tableCellEditor;
+      view.dispatch({ effects: view.constructor.scrollIntoView(view.state.doc.line(20).from, { y: 'center' }) });
+    }, text);
+    await page.waitForSelector(`${cell(1)} textarea`);
+    return text;
+  };
+  const focus = (row: number, index: number) => page.$eval(`${cell(row)} textarea`, (input, index) => {
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(index, index);
+  }, index);
+  const position = async (row: number, y: number, edge: 'top' | 'bottom' = 'top') => {
+    await page.$eval(cell(row), (element, y, edge) => {
+      const scroller = element.closest<HTMLElement>('.cm-scroller')!;
+      scroller.scrollTop += element.getBoundingClientRect()[edge] - scroller.getBoundingClientRect().top - y;
+    }, y, edge);
+    await settle();
+  };
+  const state = () => page.evaluate(() => {
+    const view = (window as any).__tableCellEditor.view;
+    const scroller = view.scrollDOM as HTMLElement;
+    const input = document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null;
+    const cell = input?.closest('td, th');
+    const caret = cell?.querySelector('.meo-md-table-source-caret')?.getBoundingClientRect();
+    const viewport = scroller.getBoundingClientRect();
+    return {
+      scroll: scroller.scrollTop, tableTop: scroller.querySelector('table')!.getBoundingClientRect().top,
+      row: input?.dataset.tableRow, offset: input?.selectionStart, line: view.state.doc.lineAt(view.state.selection.main.head).number,
+      caret: caret ? { top: caret.top, bottom: caret.bottom } : null,
+      viewport: { top: viewport.top, bottom: viewport.bottom },
+      cellBottom: cell?.getBoundingClientRect().bottom ?? 0
+    };
+  });
+  const press = async (key: import('puppeteer-core').KeyInput) => {
+    await page.evaluate(() => {
+      const app = window as any;
+      const scroller = app.__tableCellEditor.view.scrollDOM as HTMLElement;
+      const frames: number[] = app.__tableKeyboardFrames = [];
+      const sample = () => {
+        if (app.__tableKeyboardFrames !== frames) return;
+        frames.push(scroller.scrollTop);
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    await page.keyboard.press(key);
+    await settle();
+    const after = await state();
+    const frames = await page.evaluate(() => {
+      const app = window as any;
+      const frames = app.__tableKeyboardFrames as number[];
+      delete app.__tableKeyboardFrames;
+      return frames;
+    });
+    return { ...after, frames };
+  };
+  const stays = (before: { scroll: number; tableTop: number }, after: Awaited<ReturnType<typeof press>>, label: string) => {
+    assert.ok(after.frames.length >= 8 && after.frames.every(scroll => Math.abs(scroll - before.scroll) < 1)
+      && Math.abs(after.scroll - before.scroll) < 1 && Math.abs(after.tableTop - before.tableTop) < 1,
+      `${label}: ${JSON.stringify({ before, after })}`);
+  };
+  try {
+    const linked = `**First**<br>[Second](https://example.test/${'abcdefghijk/'.repeat(10)})<br>**Third**`;
+    await open([`| Link | ${linked} |`, '| Below | More |']);
+    await focus(1, 3);
+    await position(1, 95);
+    const onFirst = await state();
+    const onLink = await press('ArrowDown');
+    assert.ok(onLink.caret && onFirst.caret && onLink.cellBottom < onLink.viewport.bottom
+      && onLink.caret.top > onLink.viewport.top && onLink.caret.bottom < onLink.viewport.bottom);
+    stays(onFirst, onLink, 'switching to a wrapped source with the whole cell visible');
+    assert.ok(onLink.caret.top > onFirst.caret.top + 10, 'Down moves the painted caret within the fixed viewport');
+    stays(onLink, await press('ArrowUp'), 'collapsing the wrapped source on the way back');
+
+    const wrapped = '第一段<br>aaaaaaa bbbbbbb ccccccc ddddddd eeeeeee fffffff<br>第三段';
+    for (const width of [195, 131]) {
+      await page.$eval('#app', (element, width) => element.style.setProperty('--test-cell-width', `${width}px`), width);
+      const exactSource = await open([`| 自动折行 | ${wrapped} |`, '| Next | Done |']);
+      await focus(1, 1);
+      await position(1, 115);
+      const origin = await state();
+      const wrapFirst = await press('ArrowDown');
+      const wrapSecond = await press('ArrowDown');
+      assert.ok(wrapFirst.caret && wrapSecond.caret && wrapSecond.caret.top > wrapFirst.caret.top + 10,
+        `the original example visits consecutive painted rows at width ${width}`);
+      stays(origin, wrapFirst, 'entering the wrapped row');
+      stays(origin, wrapSecond, 'moving within the wrapped row');
+      for (const key of ['Home', 'End', 'ArrowRight', 'ArrowLeft', 'ArrowUp'] as const) {
+        stays(origin, await press(key), `${key} in the original wrapped text at width ${width}`);
+      }
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), exactSource);
+    }
+    await page.$eval('#app', element => element.style.removeProperty('--test-cell-width'));
+
+    const tall = `Start<br>${'line<br>'.repeat(19)}Last`;
+    await open(['| First | Before |', `| ${tall} | ${tall} |`]);
+    await focus(1, 2);
+    await position(2, 130);
+    const beforeEntry = await state();
+    const entry = await press('ArrowDown');
+    assert.equal(entry.row, '2');
+    assert.ok(entry.caret && entry.caret.bottom < entry.viewport.bottom && entry.cellBottom > entry.viewport.bottom);
+    stays(beforeEntry, entry, 'the caret is visible even though the target cell extends below the viewport');
+    await page.keyboard.down('Control');
+    await page.keyboard.press('End');
+    await page.keyboard.up('Control');
+    await settle();
+    const atEnd = await state();
+    assert.ok(atEnd.caret && atEnd.caret.bottom <= atEnd.viewport.bottom + 1 && atEnd.scroll > entry.scroll,
+      'moving to the hidden end of a cell reveals the actual caret');
+
+    await position(2, 230, 'bottom');
+    const beforeExit = await state();
+    const body = await press('ArrowDown');
+    assert.equal(body.row, undefined, 'Down hands off to the body after the table');
+    stays(beforeExit, body, 'leaving a visible caret for visible prose');
+    const reentry = await press('ArrowUp');
+    assert.equal(reentry.row, '2', 'Up returns from prose to the last table cell');
+    assert.ok(reentry.caret && reentry.caret.top > reentry.viewport.top && reentry.caret.bottom < reentry.viewport.bottom);
+    stays(body, reentry, 'returning from prose to a visible caret in a tall cell');
+
+    const nativeWrap = 'abcdefghijk '.repeat(90) + 'Tail';
+    await open(['| First | Before |', `| Native wrap | ${nativeWrap} |`]);
+    await focus(2, 2);
+    await position(2, 125);
+    const beforeSelection = await state();
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('End');
+    await page.keyboard.up('Shift');
+    await page.keyboard.up('Control');
+    await settle();
+    const selected = await state();
+    const range = await page.$eval(`${cell(2)} textarea`, input => [input.selectionStart, input.selectionEnd, input.selectionDirection]);
+    assert.deepEqual(range, [2, nativeWrap.length, 'forward']);
+    assert.ok(selected.scroll > beforeSelection.scroll && selected.cellBottom <= selected.viewport.bottom + 1,
+      'extending a wrapped native selection reveals its moving end');
+    console.log('table keyboard caret and viewport checks passed');
+  } finally {
+    await page.$eval('#app', element => element.style.removeProperty('--test-cell-width'));
+    await layout.evaluate(element => element.remove());
+    await layout.dispose();
+  }
 }
 
 async function main() {
@@ -375,15 +1319,58 @@ async function main() {
     await page.setViewport({ width: 900, height: 500 });
     await page.setContent('<!doctype html><div id="app"></div>');
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
-    await page.addStyleTag({ content: ':root { --meo-background:#24292e; --meo-foreground:#e6edf3; --meo-caret:#e6edf3; --meo-semantic-tableBorder:#474b50; --meo-semantic-tableSelectionBorder:#79b8ff; }' });
+    await page.addStyleTag({ content: `
+      :root {
+        --meo-background: #24292e;
+        --meo-foreground: #e6edf3;
+        --meo-caret: #e6edf3;
+        --meo-semantic-tableBorder: #474b50;
+        --meo-semantic-tableSelectionBorder: #79b8ff;
+        --meo-semantic-blockquoteForeground: #b1bac4;
+        --meo-semantic-taskCheckboxDoneBackground: #57606a;
+        --meo-semantic-taskCheckboxDoneBorder: #57606a;
+        --meo-semantic-taskCheckboxDoneCheck: #e6edf3;
+        --meo-ui-text-emphasis-content: #79b8ff;
+      }
+    ` });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+    if (process.argv.includes('--keyboard-viewport-only')) {
+      await checkCellKeyboardViewport(page);
+      return;
+    }
+    if (process.argv.includes('--editing-audit-only')) {
+      await checkCellEditingAudit(page);
+      return;
+    }
+    if (process.argv.includes('--source-pointer-geometry-only')) {
+      await checkCellSourcePointerGeometry(page);
+      return;
+    }
+    if (process.argv.includes('--line-geometry-only')) {
+      await checkCellLineGeometry(page);
+      return;
+    }
     if (process.argv.includes('--height-only')) {
       await checkCellHeightTransitions(page);
       await checkCellHeightFallback(page);
       return;
     }
-    await checkCellBreakDeletion(page);
+    if (process.argv.includes('--line-presentation-only')) {
+      await checkCellLinePresentation(page);
+      return;
+    }
+    if (process.argv.includes('--structure-editing-only')) {
+      await checkCellEditingKeys(page, 'structure');
+      return;
+    }
+    await checkCellEditingKeys(page, 'break-deletion');
     if (process.argv.includes('--break-deletion-only')) return;
+    await checkCellEditingKeys(page, 'structure');
+    await checkCellLinePresentation(page);
+    await checkCellLineGeometry(page);
+    await checkCellSourcePointerGeometry(page);
+    await checkCellEditingAudit(page);
+    await checkCellKeyboardViewport(page);
     await checkCellEntryRegressions(page);
     if (process.argv.includes('--entry-regressions-only') || process.argv.includes('--rapid-input-only') || process.argv.includes('--entry-drag-only')) return;
     await checkCellHeightTransitions(page);

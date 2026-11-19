@@ -49,6 +49,32 @@ function readInlineSourceRange(element: Element | null): InlineSourceRange | nul
   return { from, to };
 }
 
+/** Project a source selection onto rendered text, including partially selected inline labels. */
+export function inlineSourceSelectionRanges(root: HTMLElement, from: number, to: number): Range[] {
+  const ranges: Range[] = [];
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const mapped = mappedElementForNode(root, node);
+    const source = readInlineSourceRange(mapped);
+    if (!mapped || !source || from >= source.to || to <= source.from) continue;
+    const length = mapped.textContent?.length ?? 0;
+    if (!length) continue;
+    const prefix = root.ownerDocument.createRange();
+    prefix.selectNodeContents(mapped);
+    prefix.setEnd(node, 0);
+    const before = prefix.toString().length;
+    const size = node.textContent?.length ?? 0;
+    const fromOffset = Math.max(0, Math.floor((from - source.from) * length / (source.to - source.from)) - before);
+    const toOffset = Math.min(size, Math.ceil((to - source.from) * length / (source.to - source.from)) - before);
+    if (fromOffset >= toOffset) continue;
+    const range = root.ownerDocument.createRange();
+    range.setStart(node, fromOffset);
+    range.setEnd(node, toOffset);
+    ranges.push(range);
+  }
+  return ranges;
+}
+
 function mappedElementForNode(root: HTMLElement, node: Node | null): HTMLElement | null {
   const element = node instanceof Element ? node : node?.parentElement;
   const mapped = element?.closest(mappedSourceSelector);

@@ -1,16 +1,24 @@
 import type { EditorView } from '@codemirror/view';
 
-/** Native widget input owns its painted position until the next user intent.
+export function nativeInputViewportReference(input: HTMLTextAreaElement): HTMLElement {
+  // The active table line repositions its textarea within the row. Only the
+  // row's position represents a change to the surrounding document layout.
+  return input.parentElement?.classList.contains('meo-md-html-table-cell-content')
+    ? input.closest('tr') ?? input
+    : input;
+}
+
+/** Native widget input owns its layout reference until the next user intent.
  * Background parsing can finish after any fixed animation-frame retry window.
  * This record schedules no work itself. */
 export class NativeInputViewport {
-  private anchor: { input: HTMLTextAreaElement; top: number } | null = null;
+  private anchor: { input: HTMLTextAreaElement; reference: HTMLElement; top: number } | null = null;
   private fractionalOffset = 0;
   private scrollQuantum: number | null = null;
 
   constructor(private readonly view: EditorView) {}
 
-  /** Pointer activation may supply the same input's pre-focus geometry. */
+  /** Pointer activation may supply the reference's pre-focus geometry. */
   capture(target: EventTarget | null, top?: number): boolean {
     const window = this.view.dom.ownerDocument?.defaultView;
     if (!window || !(target instanceof window.HTMLTextAreaElement)
@@ -19,13 +27,15 @@ export class NativeInputViewport {
       || this.view.dom.ownerDocument.activeElement !== target) return false;
     const bounds = target.getBoundingClientRect(), viewport = this.view.scrollDOM.getBoundingClientRect();
     if (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom) return false;
-    this.anchor = { input: target, top: top ?? bounds.top };
+    const reference = nativeInputViewportReference(target);
+    this.anchor = { input: target, reference, top: top ?? (reference === target ? bounds.top : reference.getBoundingClientRect().top) };
     return true;
   }
 
   hasOwner(): boolean {
     if (!this.anchor) return false;
-    if (this.anchor.input.isConnected && this.view.dom.ownerDocument.activeElement === this.anchor.input) return true;
+    if (this.anchor.input.isConnected && this.anchor.reference.isConnected
+      && this.view.dom.ownerDocument.activeElement === this.anchor.input) return true;
     this.release();
     return false;
   }
@@ -34,7 +44,7 @@ export class NativeInputViewport {
     if (!this.hasOwner()) return null;
     const scroll = this.view.scrollDOM;
     const scale = scroll.offsetHeight ? scroll.getBoundingClientRect().height / scroll.offsetHeight : 1;
-    return scroll.scrollTop + (this.anchor!.input.getBoundingClientRect().top - this.anchor!.top) / scale;
+    return scroll.scrollTop + (this.anchor!.reference.getBoundingClientRect().top - this.anchor!.top) / scale;
   }
 
   /** Keep native scroll rounding out of unchanged glyphs. The primary scroller

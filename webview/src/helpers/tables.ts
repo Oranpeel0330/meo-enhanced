@@ -1,6 +1,7 @@
 import { editorScrollIntoView } from '../editor/scrollEffects';
 import { isMarkdownTableDelimiter } from '../../../src/shared/markdownContentRules';
 import { markdownTaskMarkerPattern } from '../../../src/foundation/markdownTaskList';
+import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
 import { createTableRowWindow, type TableRowWindow } from '../editor/tableRowWindow';
 import { blockInsertion, type MarkdownInputContext } from '../editor/blockInsertion';
@@ -16,8 +17,9 @@ import { wireNativeSymbolInput, nativeSymbolInput } from '../editor/nativeTyping
 import { automaticSymbolPairs, symbolOriginEpoch, replaceAutomaticSymbolPairArea, inputAssistanceFacet, type AutomaticSymbolPair } from '../editor/typingAssistance';
 import { emptyMarkdownTable, markdownTableFromCells, serializeDelimitedTable, parseMarkdownTable, externalTableCellToMarkdown } from '../application/delimitedTable';
 import { defaultInputAssistance, type EditorCommandId } from '../../../src/foundation/editingPreferences';
-import { countColumn, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, type Annotation, type ChangeDesc, type ChangeSpec, type Range, type SelectionRange as CodeMirrorSelectionRange, type Text as CodeMirrorText } from '@codemirror/state';
-import { syntaxTree } from '@codemirror/language';
+import { countColumn, findClusterBreak, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, Text as CodeMirrorText, type Annotation, type ChangeDesc, type ChangeSpec, type Range, type SelectionRange as CodeMirrorSelectionRange } from '@codemirror/state';
+import { indentUnit, syntaxTree } from '@codemirror/language';
+import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownLanguage } from '@codemirror/lang-markdown';
 import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
 import type { SyntaxNode, SyntaxNodeRef, Tree } from '@lezer/common';
 import { isolateHistory } from '@codemirror/commands';
@@ -35,8 +37,17 @@ import { wikiLinkScheme } from './wikiLinks';
 import { isWikiImageTarget, parseWikiReference, wikiImageSrc } from '../../../src/foundation/wikiReference';
 import { normalizeSourceHref } from './rawUrls';
 import type { EditorDiagnostic } from './diagnostics';
-import { continuedListMarker, listMarkerData, listMarkerDataInContainerLine, nextOrderedSequenceNumber } from './listMarkers';
+import {
+  handleBackspaceAtListContentStart,
+  handleEnterInList,
+  listMarkerData,
+  listMarkerDataInContainerLine,
+  selectionEditsListMarker,
+  nextOrderedSequenceNumber,
+  orderedListRenumberTransactionFilter
+} from './listMarkers';
 import { getViewportController, visualLineContextMargin } from './viewportController';
+import { nativeInputViewportReference } from '../editor/nativeInputViewport';
 import { preserveTableColumnResizeLayout } from './tableColumnResizeViewport';
 import { changedDocumentRange, runEditorHistoryCommand } from './historyCommands';
 import { createOpenLinkButton } from './linkOpenButton';
@@ -48,6 +59,7 @@ import {
 } from './localLinks';
 import {
   appendInlineMappedText,
+  inlineSourceSelectionRanges,
   resolveInlineCaretAtPoint,
   setInlineSourceRange,
   type InlineCaretResolution,
@@ -124,6 +136,7 @@ import {
   ChevronRight,
   Columns2,
   EllipsisVertical,
+  Pencil,
   Plus,
   Rows2,
   Trash2,
@@ -208,6 +221,7 @@ interface DomRefs {
     alignColumnRight: HTMLButtonElement;
     sortAscending: HTMLButtonElement;
     sortDescending: HTMLButtonElement;
+    editEntireCell: HTMLButtonElement;
   };
 }
 
@@ -308,6 +322,7 @@ const taskContentPrefix = new RegExp(String.raw`^${markdownTaskMarkerPattern}[ \
 const sourceTableHeaderLineDeco = Decoration.line({ class: 'meo-md-source-table-header-line' });
 const sourceTableHeaderCellDeco = Decoration.mark({ class: 'meo-md-source-table-header-cell' });
 const tableCellSelector = 'th[data-table-row][data-table-col], td[data-table-row][data-table-col]';
+const tableCellCaretNavigationKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const tableControlSelector = '.meo-md-html-table-context-trigger, .meo-md-html-table-context-menu, .meo-md-html-table-context-btn, .meo-md-link-open-btn, .meo-md-color-swatch-interactive, .meo-md-html-table-column-resize-handle';
 const tableCellAutoCommitDelayMs = 250;
 // Chromium reports fractional caret bounds while scrollTop is effectively
@@ -846,6 +861,7 @@ const tableInlineTagRe = /^#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)/u;
 const tableInlineTagPrefixRe = /[\p{L}\p{N}_/-]/u;
 const tableCellBreakAtRe = /^<br\s*\/?>/i;
 const tableCellListItemRe = /^([ \t]*)(?:(?<bullet>[-+*])|(?<number>\d+)[.)])\s+(?<content>.*)$/;
+const tableCellQuotePrefixRe = /^([ \t]*)>[ \t]?/;
 const tableInlineEscapableChars = new Set(['\\', '*', '_', '~', '`', '[', ']', '(', ')', '!', '|', '<', '>']);
 const tableSearchStateEventName = 'meo-search-state-change';
 const tableDiagnosticSeverityClasses = [
@@ -927,6 +943,49 @@ interface TableCellLogicalLine {
   breakText: string;
 }
 
+interface TableCellLinePresentation {
+  input: HTMLTextAreaElement;
+  editorValue: string;
+  source: string;
+  lines: TableCellLogicalLine[];
+  line: TableCellLogicalLine;
+  valueFrom: number;
+  sourceElement: HTMLElement;
+  textElement: HTMLElement;
+  prefixElement: HTMLElement | null;
+  prefixMarkers: TableCellRange[];
+  bodyElement: HTMLElement;
+  breakElement: HTMLElement | null;
+  scrollTop: number;
+  measurementKey: string;
+  selection: { from: number; to: number } | null;
+  highlight: Highlight | null;
+  caret: { position: number; wrapStart: boolean; element: HTMLSpanElement } | null;
+}
+
+function appendTableCellSourceLine(parent: HTMLElement, line: TableCellLogicalLine, bodyFrom = line.from) {
+  const source = document.createElement('div');
+  source.className = 'meo-md-table-active-source-line';
+  const content = document.createElement('div');
+  content.className = 'meo-md-table-source-text';
+  const text = line.text + line.breakText;
+  setInlineSourceRange(content, { from: line.from, to: line.from + text.length });
+  if (bodyFrom > line.from) {
+    appendInlineMappedText(content, text.slice(0, bodyFrom - line.from), { from: line.from, to: bodyFrom },
+      'meo-md-table-source-prefix');
+  }
+  const bodyEnd = line.from + line.text.length;
+  appendInlineMappedText(content, line.text.slice(bodyFrom - line.from),
+    { from: bodyFrom, to: bodyEnd }, 'meo-md-table-source-body');
+  if (line.breakText) {
+    appendInlineMappedText(content, line.breakText, { from: bodyEnd, to: line.from + text.length },
+      'meo-md-table-source-break');
+  }
+  if (!text) content.appendChild(document.createElement('br'));
+  source.appendChild(content);
+  parent.appendChild(source);
+}
+
 function splitTableCellLogicalLines(text: string): TableCellLogicalLine[] {
   const lines: TableCellLogicalLine[] = [];
   const syntax = text.includes('[') || text.includes('`') ? parseTableInlineSyntax(text, 0) : null;
@@ -998,6 +1057,21 @@ export function tableCellSourceOffsetToEditorOffset(value: string, offset: numbe
   return tableCellSourceToEditorValue(source.slice(0, Math.max(0, offset))).length;
 }
 
+function writeTableCellTextSelection(event: ClipboardEvent, input: HTMLTextAreaElement): boolean {
+  const { value, selectionStart, selectionEnd } = input;
+  if (selectionStart === selectionEnd || !event.clipboardData || !value.includes('\n')) return false;
+  const from = tableCellEditorOffsetToSourceOffset(value, selectionStart);
+  const to = tableCellEditorOffsetToSourceOffset(value, selectionEnd);
+  event.clipboardData.setData('text/plain', tableCellEditorValueToSource(value).slice(from, to));
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
+function tableCellSelectionHead(input: HTMLTextAreaElement): number {
+  return input.selectionDirection === 'backward' ? input.selectionStart : input.selectionEnd;
+}
+
 /** Source coordinates belong to the committed row, not every cell DOM node.
  * Row/column identity survives position-only edits without per-cell mutations. */
 export function tableCellSourceRangeForInput(
@@ -1030,7 +1104,7 @@ function withTableCellVisualLineProbe<T>(
   }) => T
 ): T {
   const value = input.value;
-  const caret = Math.max(0, Math.min(input.selectionStart ?? 0, value.length));
+  const caret = Math.max(0, Math.min(tableCellSelectionHead(input), value.length));
   const computed = getComputedStyle(input);
   const mirror = document.createElement('div');
   const copiedProperties = [
@@ -1099,6 +1173,8 @@ export function tableCellVisualLineBoundary(input: HTMLTextAreaElement): {
 }
 
 function tableCellCaretViewportBounds(input: HTMLTextAreaElement): { top: number; bottom: number } {
+  const projected = tableCellProjectedCaretRect(input, tableCellSelectionHead(input));
+  if (projected) return projected;
   return withTableCellVisualLineProbe(input, ({ caret, lineHeight, lineTopAt, paddingBottom }) => {
     const inputRect = input.getBoundingClientRect();
     const measuredTop = inputRect.top + lineTopAt(caret) - input.scrollTop;
@@ -1111,6 +1187,18 @@ function tableCellCaretViewportBounds(input: HTMLTextAreaElement): { top: number
       ? input.closest<HTMLElement>(tableCellSelector)?.getBoundingClientRect().bottom : undefined;
     return { top, bottom: Math.max(bottom, cellBottom ?? bottom) };
   });
+}
+
+export function tableCellProjectedCaretRect(input: HTMLTextAreaElement, offset: number): DOMRect | null {
+  const shell = input.closest<HTMLElement>('.meo-md-html-table-shell');
+  return shell ? tableDomOwners.get(shell)?.projectedCaretRect(input, offset) ?? null : null;
+}
+
+export function tableCellProjectedSourceAtPoint(
+  input: HTMLTextAreaElement, clientX: number, clientY: number
+): number | null | undefined {
+  const shell = input.closest<HTMLElement>('.meo-md-html-table-shell');
+  return shell ? tableDomOwners.get(shell)?.projectedSourceAtPoint(input, clientX, clientY) : undefined;
 }
 
 function tableCellEditorBreakStart(value: string, newline: number, maxStart = newline): number | null {
@@ -1152,35 +1240,13 @@ function replaceTableCellEditorSelection(input: HTMLTextAreaElement, insert: str
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function continueTableCellList(input: HTMLTextAreaElement) {
-  const position = input.selectionStart ?? 0;
-  if (position !== (input.selectionEnd ?? position)) return false;
-  const lineStart = input.value.lastIndexOf('\n', Math.max(0, position - 1)) + 1;
-  const nextBreak = input.value.indexOf('\n', position);
-  const lineEnd = nextBreak < 0 ? input.value.length : nextBreak;
-  if (position !== lineEnd) return false;
-
-  const lineText = input.value.slice(lineStart, lineEnd);
-  const marker = continuedListMarker(lineText);
-  if (marker) {
-    replaceTableCellEditorSelection(input, `<br>\n${marker}`);
-    return true;
-  }
-
-  const currentMarker = listMarkerDataInContainerLine(lineText);
-  if (!currentMarker || lineText.slice(currentMarker.toOffset).trim()) return false;
-  input.setSelectionRange(lineStart + currentMarker.fromOffset, lineStart + currentMarker.toOffset);
-  replaceTableCellEditorSelection(input, '');
-  return true;
-}
-
 interface TableCellEditorChange {
   from: number;
   to: number;
   insert: string;
 }
 
-function applyTableCellEditorChanges(input: HTMLTextAreaElement, changes: TableCellEditorChange[]) {
+function applyTableCellEditorChanges(input: HTMLTextAreaElement, changes: TableCellEditorChange[], caret?: number) {
   const selectionStart = input.selectionStart ?? 0;
   const selectionEnd = input.selectionEnd ?? selectionStart;
   const mapPosition = (position: number) => {
@@ -1197,8 +1263,92 @@ function applyTableCellEditorChanges(input: HTMLTextAreaElement, changes: TableC
     nextValue = nextValue.slice(0, change.from) + change.insert + nextValue.slice(change.to);
   }
   input.value = nextValue;
-  input.setSelectionRange(mapPosition(selectionStart), mapPosition(selectionEnd));
+  input.setSelectionRange(caret ?? mapPosition(selectionStart), caret ?? mapPosition(selectionEnd));
   input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+const tableCellListRenumbering = orderedListRenumberTransactionFilter(() => true);
+
+function editTableCellMarkup(
+  input: HTMLTextAreaElement,
+  documentState: EditorState,
+  operation: 'break' | 'backspace',
+  beforeEdit?: () => void
+): boolean {
+  const { value, selectionStart, selectionEnd } = input;
+  if (selectionStart !== selectionEnd) return false;
+  const lineStart = selectionStart ? value.lastIndexOf('\n', selectionStart - 1) + 1 : 0;
+  if (!/^[ \t]*(?:[>+*\-]|\d+[.)])/.test(value.slice(lineStart))) return false;
+  if (operation === 'backspace') {
+    const lineEnd = value.indexOf('\n', selectionStart);
+    const lineText = value.slice(lineStart, lineEnd < 0 ? value.length : lineEnd).replace(/<br\s*\/?>$/i, '');
+    const prefix = listMarkerDataInContainerLine(lineText);
+    const column = selectionStart - lineStart;
+    if (!prefix || column < prefix.markerEndOffset || column > prefix.toOffset) return false;
+  }
+
+  // Run the same structural commands on the cell's logical lines. The real
+  // textarea and its pending cell edit still own the caret, commit and history.
+  const lines = splitTableCellLogicalLines(tableCellEditorValueToSource(value));
+  let index = lines.length - 1;
+  while (index > 0 && lines[index]!.from + index > selectionStart) index--;
+  const line = lines[index]!;
+  const column = selectionStart - (line.from + index);
+  if (column > line.text.length && column !== line.text.length + line.breakText.length) return false;
+  const marker = listMarkerDataInContainerLine(line.text);
+  const quoted = /^[ \t]*>/.test(line.text);
+  if (!marker && (operation === 'backspace' || !quoted || column < line.text.length)) return false;
+
+  const doc = CodeMirrorText.of(lines.map(line => line.text));
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: doc.line(index + 1).from + Math.min(column, line.text.length) },
+    extensions: [
+      markdownLanguage, tableCellListRenumbering,
+      EditorState.tabSize.of(documentState.tabSize), indentUnit.of(documentState.facet(indentUnit))
+    ]
+  });
+  const editorOffset = (position: number) => {
+    const virtualLine = doc.lineAt(position);
+    const logicalIndex = virtualLine.number - 1;
+    return lines[logicalIndex]!.from + logicalIndex + (position - virtualLine.from);
+  };
+  const toEditorText = (text: CodeMirrorText) => text.toString().replaceAll('\n', '<br>\n');
+  const dispatch = (transaction: Transaction) => {
+    const changes: TableCellEditorChange[] = [];
+    const head = transaction.newSelection.main.head;
+    let caret: number | undefined;
+    let documentDelta = 0;
+    let editorDelta = 0;
+    transaction.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
+      const from = editorOffset(fromA), to = editorOffset(toA);
+      const insert = toEditorText(inserted);
+      // Existing break tags only disappear when their virtual newline is
+      // removed. Inserted newlines get the cell editor's normal break spelling.
+      if (caret === undefined && head <= toB) {
+        caret = head < fromB
+          ? editorOffset(head - documentDelta) + editorDelta
+          : from + editorDelta + toEditorText(inserted.slice(0, head - fromB)).length;
+      }
+      changes.push({ from, to, insert });
+      documentDelta = toB - toA;
+      editorDelta += insert.length - (to - from);
+    });
+    beforeEdit?.();
+    applyTableCellEditorChanges(input, changes, caret ?? editorOffset(head - documentDelta) + editorDelta);
+  };
+  const target = { state, dispatch };
+  if (operation === 'backspace') {
+    return handleBackspaceAtListContentStart(target)
+      || (quoted && column === marker?.toOffset && deleteMarkupBackward(target));
+  }
+  return handleEnterInList(target) || (!marker && quoted && insertNewlineContinueMarkup(target));
+}
+
+function insertTableCellEditorBreak(input: HTMLTextAreaElement, state?: EditorState, beforeEdit?: () => void) {
+  if (state?.facet(inputAssistanceFacet).lists && editTableCellMarkup(input, state, 'break', beforeEdit)) return;
+  beforeEdit?.();
+  replaceTableCellEditorSelection(input, '<br>\n');
 }
 
 function renumberTableCellOrderedLists(input: HTMLTextAreaElement) {
@@ -1569,6 +1719,9 @@ export function refreshTableLocalLinkIndicators(
   }
 }
 
+const tablePreviewImageIdentity = new WeakMap<HTMLElement, { key: string; factory: ImagePresentationFactory }>();
+type ReusableTablePreviewImages = Map<string, HTMLElement[]>;
+
 function appendTableInlinePreviewImage(
   parent: HTMLElement,
   altText: string,
@@ -1577,7 +1730,8 @@ function appendTableInlinePreviewImage(
   presentationFactory: ImagePresentationFactory,
   uiLanguage: UiLanguage,
   dimensions: { width?: number; height?: number } = {},
-  linkUrl = ''
+  linkUrl = '',
+  reusableImages?: ReusableTablePreviewImages
 ) {
   if (!url) {
     appendInlineMappedText(parent, `![${altText}]()`, sourceRange);
@@ -1585,11 +1739,13 @@ function appendTableInlinePreviewImage(
   }
   // Table cells own pointer selection so image clicks enter the cell editor on
   // pointerup instead of being consumed by the standalone image interaction.
-  const dom = new ImageWidget(url, decodeTableInlineEscapes(altText), linkUrl, null, presentationFactory, {
+  const key = JSON.stringify([url, altText, linkUrl, dimensions.width, dimensions.height, uiLanguage]);
+  const dom = reusableImages?.get(key)?.shift() ?? new ImageWidget(url, decodeTableInlineEscapes(altText), linkUrl, null, presentationFactory, {
     pointerInteractionOwner: 'parent',
     uiLanguage, ...dimensions
   }).toDOM();
   if (dom instanceof HTMLElement) {
+    tablePreviewImageIdentity.set(dom, { key, factory: presentationFactory });
     dom.setAttribute('data-meo-link-href', linkUrl || url);
     setInlineSourceRange(dom, sourceRange, { atomic: true });
   }
@@ -1607,6 +1763,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
   uiLanguage: UiLanguage;
   view: EditorView;
   inlineSyntax?: ReturnType<typeof parseTableInlineSyntax>;
+  reusableImages?: ReusableTablePreviewImages;
 }) {
   const { baseOffset = 0, diagnostics = [], disableLinkParsers = false, searchState = null, sourceRange = null } = options;
   const inlineSyntax = options.inlineSyntax ?? parseTableInlineSyntax(text, baseOffset, options.view.state.facet(latexDelimitersFacet));
@@ -1784,7 +1941,8 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
     if (wikiImage?.embed && isWikiImageTarget(wikiImage.target)) {
       flushBuffer();
       appendTableInlinePreviewImage(parent, wikiImage.label, wikiImageSrc(wikiImage.target),
-        { from: baseOffset + i, to: baseOffset + wikiImage.to }, options.presentationFactory, options.uiLanguage, wikiImage, options.imageLinkHref);
+        { from: baseOffset + i, to: baseOffset + wikiImage.to }, options.presentationFactory, options.uiLanguage,
+        wikiImage, options.imageLinkHref, options.reusableImages);
       i = wikiImage.to;
       continue;
     }
@@ -1800,7 +1958,8 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         options.presentationFactory,
         options.uiLanguage,
         {},
-        options.imageLinkHref
+        options.imageLinkHref,
+        options.reusableImages
       );
       i = image.nextIndex;
       continue;
@@ -1959,13 +2118,33 @@ function parseTableCellQuotePrefix(line: TableCellLogicalLine, maxIndentColumns 
   let from = line.from;
   const indents: number[] = [];
   while (true) {
-    const match = /^([ \t]*)>[ \t]?/.exec(text);
+    const match = tableCellQuotePrefixRe.exec(text);
     if (!match || tableCellIndentColumns(match[1]) > maxIndentColumns) break;
     indents.push(tableCellIndentColumns(match[1]));
     text = text.slice(match[0].length);
     from += match[0].length;
   }
   return { line: { text, from, breakText: line.breakText }, indents };
+}
+
+function tableCellPrefixMarkers(prefix: string): TableCellRange[] {
+  // The rendered prefix can contain several markers, such as "> 2. ".
+  // Keep their shared edges out of the editable interior of either marker.
+  const markers: TableCellRange[] = [];
+  for (let offset = 0; offset < prefix.length;) {
+    const quote = tableCellQuotePrefixRe.exec(prefix.slice(offset));
+    if (quote) {
+      const end = offset + quote[0].length;
+      markers.push({ from: offset + quote[1].length, to: end });
+      offset = end;
+    } else {
+      const list = readMarkdownListPrefix(prefix, offset);
+      if (!list) break;
+      markers.push({ from: list.fromOffset, to: list.toOffset });
+      offset = list.toOffset;
+    }
+  }
+  return markers;
 }
 
 function appendTableCellSourcePreview(
@@ -1990,7 +2169,9 @@ function appendTableCellRenderedPreview(
   sourceRange: TableCellRange | null,
   presentationFactory: ImagePresentationFactory,
   uiLanguage: UiLanguage,
-  view: EditorView
+  view: EditorView,
+  sourceLine: TableCellLogicalLine | null = null,
+  reusableImages?: ReusableTablePreviewImages
 ) {
   type ListEntry = { indentColumns: number; type: 'ul' | 'ol'; list: HTMLUListElement | HTMLOListElement; lastItem: HTMLLIElement | null };
   const listsByParent = new WeakMap<HTMLElement, ListEntry[]>();
@@ -2003,6 +2184,13 @@ function appendTableCellRenderedPreview(
     }
     return stack;
   };
+  const appendListItem = (list: HTMLUListElement | HTMLOListElement, item: HTMLLIElement) => {
+    list.appendChild(item);
+    if (list instanceof HTMLOListElement) {
+      const widestNumber = list.start + list.children.length - 1;
+      list.style.setProperty('--meo-table-list-digits', String(String(widestNumber).length));
+    }
+  };
   const appendInline = (parent: HTMLElement, content: string, baseOffset: number) => {
     appendTableInlinePreviewNodes(parent, content, {
       baseOffset,
@@ -2011,7 +2199,8 @@ function appendTableCellRenderedPreview(
       sourceRange,
       presentationFactory,
       uiLanguage,
-      view
+      view,
+      reusableImages
     });
   };
 
@@ -2028,7 +2217,8 @@ function appendTableCellRenderedPreview(
   };
 
   const appendTaskContent = (
-    parent: HTMLElement, content: string, from: number, nestedListOnLine: boolean
+    parent: HTMLElement, content: string, from: number, nestedListOnLine: boolean,
+    activeLine: TableCellLogicalLine | null
   ) => {
     const task = taskContentPrefix.exec(content);
     if (task && parent instanceof HTMLLIElement) {
@@ -2038,19 +2228,33 @@ function appendTableCellRenderedPreview(
       checkbox.disabled = true;
       checkbox.checked = status === 'done';
       checkbox.className = `meo-task-checkbox meo-md-html-table-cell-task-checkbox is-${status}`;
+      setInlineSourceRange(checkbox, { from, to: from + task[0].length }, { atomic: true });
       parent.classList.add('meo-md-html-table-cell-task', `is-${status}`);
       if (nestedListOnLine) parent.classList.add('meo-md-html-table-cell-task-show-marker');
-      parent.appendChild(checkbox);
-      appendInline(parent, content.slice(task[0].length), from + task[0].length);
+      const taskBodyFrom = from + task[0].length;
+      const row = document.createElement('div');
+      row.className = 'meo-md-table-task-content';
+      row.appendChild(checkbox);
+      if (activeLine) {
+        appendTableCellSourceLine(row, activeLine, taskBodyFrom);
+      } else {
+        const body = document.createElement('div');
+        appendInline(body, content.slice(task[0].length), taskBodyFrom);
+        row.appendChild(body);
+      }
+      parent.appendChild(row);
       return;
     }
-    appendInline(parent, content, from);
+    if (activeLine) appendTableCellSourceLine(parent, activeLine, from);
+    else appendInline(parent, content, from);
   };
 
   const appendItemContent = (
     parent: HTMLLIElement, content: string, from: number,
-    baseQuoteDepth: number, nestedListOnLine = false, contentColumn = 0
+    baseQuoteDepth: number, nestedListOnLine = false, contentColumn = 0,
+    activeLine: TableCellLogicalLine | null = null
   ): ListEntry[] => {
+    if (activeLine) parent.classList.add('meo-md-table-active-list-item');
     const nestedQuote = parseTableCellQuotePrefix({ text: content, from, breakText: '' });
     let quoteParent: HTMLElement = parent;
     for (let depth = 0; depth < nestedQuote.indents.length; depth += 1) {
@@ -2063,8 +2267,8 @@ function appendTableCellRenderedPreview(
     quoteStack.length = baseQuoteDepth + nestedQuote.indents.length;
     const nestedItem = parseTableCellListItem(nestedQuote.line);
     if (!nestedItem) {
-      if (!appendAlertContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from)) {
-        appendTaskContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from, nestedListOnLine);
+      if (activeLine || !appendAlertContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from)) {
+        appendTaskContent(quoteParent, nestedQuote.line.text, nestedQuote.line.from, nestedListOnLine, activeLine);
       }
       return [];
     }
@@ -2076,8 +2280,8 @@ function appendTableCellRenderedPreview(
     const column = nestedQuote.indents.length ? 0 : contentColumn;
     const nextContentColumn = countColumn(' '.repeat(column) + prefix, 4);
     const descendants = appendItemContent(child, nestedItem.content, nestedItem.contentFrom,
-      baseQuoteDepth + nestedQuote.indents.length, true, nextContentColumn);
-    list.appendChild(child);
+      baseQuoteDepth + nestedQuote.indents.length, true, nextContentColumn, activeLine);
+    appendListItem(list, child);
     quoteParent.appendChild(list);
     const entry: ListEntry = {
       indentColumns: column + nestedItem.indentColumns, type: nestedItem.type, list, lastItem: child
@@ -2091,10 +2295,11 @@ function appendTableCellRenderedPreview(
     return [entry, ...descendants];
   };
 
-  for (const sourceLine of splitTableCellLogicalLines(text)) {
+  for (const logicalLine of splitTableCellLogicalLines(text)) {
+    const activeLine = sourceLine?.from === logicalLine.from ? sourceLine : null;
     const hasContainingList = listStackFor(previewEl).length > 0
       || quoteStack.some(quote => listStackFor(quote).length > 0);
-    const quoted = parseTableCellQuotePrefix(sourceLine, hasContainingList ? Infinity : 3);
+    const quoted = parseTableCellQuotePrefix(logicalLine, hasContainingList ? Infinity : 3);
     let parent: HTMLElement = previewEl;
     for (let depth = 0; depth < quoted.indents.length; depth += 1) {
       const previousList = listStackFor(parent).at(-1);
@@ -2119,10 +2324,16 @@ function appendTableCellRenderedPreview(
       // A blank logical line loosens a list instead of resetting its numbering.
       // Keep the spacer in the previous item so subsequent items stay in order.
       if (!line.text.trim() && listStack.at(-1)?.lastItem) {
-        listStack.at(-1)!.lastItem!.appendChild(document.createElement('br'));
+        const item = listStack.at(-1)!.lastItem!;
+        if (activeLine) appendTableCellSourceLine(item, activeLine, line.from);
+        else {
+          const spacer = document.createElement('br');
+          setInlineSourceRange(spacer, { from: logicalLine.from, to: logicalLine.from }, { atomic: true });
+          item.appendChild(spacer);
+        }
         continue;
       }
-      if (appendAlertContent(parent, line.text, line.from)) continue;
+      if (!activeLine && appendAlertContent(parent, line.text, line.from)) continue;
       const indentColumns = tableCellIndentColumns(line.text);
       let contentParent: HTMLElement = parent;
       if (line.text.trim() && indentColumns > 0) {
@@ -2136,11 +2347,17 @@ function appendTableCellRenderedPreview(
         }
       }
       if (contentParent === parent) listStack.length = 0;
-      const lineEl = document.createElement('div');
-      lineEl.className = 'meo-md-html-table-cell-line';
-      appendInline(lineEl, line.text, line.from);
-      if (!line.text) lineEl.appendChild(document.createElement('br'));
-      contentParent.appendChild(lineEl);
+      if (activeLine) appendTableCellSourceLine(contentParent, activeLine, line.from);
+      else {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'meo-md-html-table-cell-line';
+        appendInline(lineEl, line.text, line.from);
+        if (!line.text) {
+          setInlineSourceRange(lineEl, { from: logicalLine.from, to: logicalLine.from });
+          lineEl.appendChild(document.createElement('br'));
+        }
+        contentParent.appendChild(lineEl);
+      }
       continue;
     }
 
@@ -2172,7 +2389,7 @@ function appendTableCellRenderedPreview(
         list.style.marginInlineStart = `${item.indentColumns}ch`;
       } else if (level > 0) {
         const parentIndent = listStack[level - 1].indentColumns;
-        list.style.paddingInlineStart = `${Math.max(2, item.indentColumns - parentIndent)}ch`;
+        list.style.setProperty('--meo-table-list-indent', `${Math.max(2, item.indentColumns - parentIndent)}ch`);
       }
       (level > 0 ? listStack[level - 1].lastItem! : parent).appendChild(list);
       entry = { indentColumns: item.indentColumns, type: item.type, list, lastItem: null };
@@ -2182,8 +2399,8 @@ function appendTableCellRenderedPreview(
     const listItem = document.createElement('li');
     const contentColumn = countColumn(line.text.slice(0, item.contentFrom - line.from), 4);
     const descendants = appendItemContent(listItem, item.content, item.contentFrom,
-      quoted.indents.length, false, contentColumn);
-    entry.list.appendChild(listItem);
+      quoted.indents.length, false, contentColumn, activeLine);
+    appendListItem(entry.list, listItem);
     entry.lastItem = listItem;
     listStack.length = level + 1;
     listStack.push(...descendants);
@@ -2198,29 +2415,49 @@ function renderTableCellInlinePreview(
   sourceRange: TableCellRange | null,
   presentationFactory: ImagePresentationFactory,
   uiLanguage: UiLanguage,
-  view: EditorView
+  view: EditorView,
+  sourceLine: TableCellLogicalLine | null = null
 ) {
   if (!(previewEl instanceof HTMLElement)) return;
-  disposeImagePresentations(previewEl);
-  previewEl.replaceChildren();
   const text = value ?? '';
   const isSearchExpanded = shouldExpandTableCellForSearch(text, searchState);
   previewEl.classList.toggle('is-search-expanded', isSearchExpanded);
   previewEl.parentElement?.classList.toggle('has-search-match', isSearchExpanded);
   if (isSearchExpanded) {
+    disposeImagePresentations(previewEl);
+    previewEl.replaceChildren();
     appendTableCellSourcePreview(previewEl, text, diagnostics, searchState, sourceRange);
     return;
   }
+  const reusableImages: ReusableTablePreviewImages = new Map();
+  for (const image of previewEl.querySelectorAll<HTMLElement>('.meo-md-image')) {
+    const identity = tablePreviewImageIdentity.get(image);
+    if (identity?.factory !== presentationFactory) continue;
+    const matches = reusableImages.get(identity.key) ?? [];
+    matches.push(image);
+    reusableImages.set(identity.key, matches);
+  }
+  const rendered = reusableImages.size ? document.createElement('div') : previewEl;
+  if (rendered === previewEl && previewEl.hasChildNodes()) {
+    disposeImagePresentations(previewEl);
+    previewEl.replaceChildren();
+  }
   appendTableCellRenderedPreview(
-    previewEl,
+    rendered,
     text,
     diagnostics,
     searchState,
     sourceRange,
     presentationFactory,
     uiLanguage,
-    view
+    view,
+    sourceLine,
+    reusableImages
   );
+  if (rendered !== previewEl) {
+    disposeImagePresentations(previewEl);
+    previewEl.replaceChildren(...rendered.childNodes);
+  }
 }
 
 function consumeTableInlineProtectedSpan(text: string, index: number, endIndex: number, syntax: ReturnType<typeof parseTableInlineSyntax> | null): number | null {
@@ -2482,6 +2719,12 @@ function buildWidgetTableData(
 
 const mountedTableWidgets = new WeakMap<EditorView, Set<HtmlTableController>>();
 const tableDomOwners = new WeakMap<HTMLElement, HtmlTableController>();
+
+export function focusMountedTableInput(input: Element | null): boolean {
+  if (!(input instanceof HTMLTextAreaElement)) return false;
+  const shell = input.closest<HTMLElement>('.meo-md-html-table-shell');
+  return !!shell && tableDomOwners.get(shell)?.focusTableInput(input) === true;
+}
 const cellPreviewSignatures = new WeakMap<WidgetTableData, string>();
 
 /** Navigation names a source cell; the reading projection mounts it on demand. */
@@ -2734,6 +2977,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   cellSelection: TableCellSelection;
   cellInteraction: TableCellInteraction;
   private heldCellPresentation: { input: HTMLTextAreaElement; pointerId: number } | null = null;
+  private linePresentation: TableCellLinePresentation | null = null;
+  private cellVerticalGoal: { input: HTMLTextAreaElement; head: number; x: number } | null = null;
+  private cellWrapStart: { input: HTMLTextAreaElement; position: number } | null = null;
+  private wholeCellInput: HTMLTextAreaElement | null = null;
   pendingCellAutoCommitTimer: number | null;
   readonly cellSymbolSnapshots = new Map<number, readonly AutomaticSymbolPair[]>();
   composingInput: HTMLTextAreaElement | null = null;
@@ -3218,6 +3465,9 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   updateContextMenuState() {
     if (!this.domRefs) return;
     const { contextButtons } = this.domRefs;
+    const input = this.domRefs.allRowInputs[this.activeTarget.row]?.[this.activeTarget.col];
+    contextButtons.editEntireCell.hidden = !input?.value.includes('\n') || this.wholeCellInput === input;
+    contextButtons.editEntireCell.disabled = contextButtons.editEntireCell.hidden;
     const targetRow = this.cellSelection.snapshot().anchor?.row ?? this.activeTarget.row;
     const rows = this.selectedBodyRows();
     const columns = this.selectedColumns();
@@ -3368,28 +3618,32 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     return this.parseCellCoords(cell.dataset.tableRow, cell.dataset.tableCol);
   }
 
-  focusTableInput(input: HTMLTextAreaElement, caret: number | null = null, { scrollCellIntoView = true }: { scrollCellIntoView?: boolean } = {}) {
+  focusTableInput(input: HTMLTextAreaElement, caret: number | null = null, {
+    revealCaret = true, selectionAnchor, wrapStart = false
+  }: { revealCaret?: boolean; selectionAnchor?: number; wrapStart?: boolean } = {}) {
     if (!(input instanceof HTMLTextAreaElement)) return false;
-    const viewport = this.view ? getViewportController(this.view) : null;
-    const top = !scrollCellIntoView ? input.getBoundingClientRect().top : undefined;
+    this.cellVerticalGoal = null;
+    const view = this.view;
+    const viewport = view ? getViewportController(view) : null;
+    const scrollTop = !revealCaret ? view?.scrollDOM.scrollTop : undefined;
+    const hadProjectedLine = !revealCaret && (this.linePresentation !== null || (
+      view && [...mountedTableWidgets.get(view) ?? []].some(widget => widget.linePresentation !== null)
+    ));
+    const top = !revealCaret && !hadProjectedLine ? nativeInputViewportReference(input).getBoundingClientRect().top : undefined;
     this.setCellEditingState(input, true);
     input.focus({ preventScroll: true });
     const nextCaret = Math.min(Math.max(caret ?? input.value.length, 0), input.value.length);
-    input.setSelectionRange(nextCaret, nextCaret);
-    if (scrollCellIntoView) {
-      const cell = input.closest<HTMLElement>(tableCellSelector);
-      if (cell) {
-        if (viewport) {
-          const isRevealCurrent = viewport.beginNavigationReveal();
-          viewport.revealElement(cell, isRevealCurrent);
-        } else {
-          cell.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-        }
-      }
-    }
-    // A pointer-selected cell keeps its pre-activation position through row
-    // sizing and the previous block's deferred source/preview transition.
-    if (top !== undefined && viewport?.captureNativeInputViewport(input, top)) {
+    const anchor = Math.min(Math.max(selectionAnchor ?? nextCaret, 0), input.value.length);
+    this.cellWrapStart = wrapStart ? { input, position: nextCaret } : null;
+    input.setSelectionRange(Math.min(anchor, nextCaret), Math.max(anchor, nextCaret),
+      nextCaret < anchor ? 'backward' : 'forward');
+    const projected = this.updateCellLinePresentation(input);
+    if (revealCaret) this.revealTableCellCaretIfNeeded(input, viewport?.beginNavigationReveal());
+    // Anchoring the newly clicked line would scroll the old text when its
+    // source closes and the two lines move relative to one another.
+    if (scrollTop !== undefined && (projected || hadProjectedLine)) {
+      viewport?.lockScrollTop(scrollTop);
+    } else if (top !== undefined && viewport?.captureNativeInputViewport(input, top)) {
       viewport.reconcileAfterEditorUpdate();
     }
     const container = input.closest('.meo-md-html-table-wrap');
@@ -3428,6 +3682,29 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     } finally {
       input.style.pointerEvents = previousInputPointerEvents;
       preview.style.visibility = previousPreviewVisibility;
+    }
+    const presentation = this.linePresentation;
+    if (presentation?.input === input && presentation.breakElement) {
+      const sourceEnd = presentation.line.from + presentation.line.text.length;
+      const sourceOffset = resolution.sourceOffset;
+      const pointedNode = resolution.domCaret?.node;
+      const bounds = presentation.textElement.getBoundingClientRect();
+      const inSourceLine = pointedNode
+        ? presentation.textElement.contains(pointedNode)
+        : clientY >= bounds.top && clientY < bounds.bottom;
+      const bodyEnd = this.projectedCaretRect(input, presentation.valueFrom + presentation.line.text.length);
+      const pastBodyEnd = bodyEnd && clientX >= bodyEnd.left && clientY >= bodyEnd.top && clientY < bodyEnd.bottom;
+      // At the end of visible content the mouse can land on the displayed
+      // break spelling. A pointer gesture treats it as one logical boundary.
+      if (inSourceLine && (pastBodyEnd || (sourceOffset !== null && sourceOffset >= sourceEnd
+          && sourceOffset <= sourceEnd + presentation.line.breakText.length))) {
+        const text = presentation.bodyElement.firstChild;
+        resolution = {
+          sourceOffset: sourceEnd,
+          domCaret: text instanceof Text ? { node: text, offset: text.length }
+            : { node: presentation.bodyElement, offset: 0 }
+        };
+      }
     }
     return {
       domCaret: resolution.domCaret,
@@ -3638,10 +3915,24 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         continue;
       }
       if (effect.phase === 'begin') {
+        const presentation = this.linePresentation;
+        if (presentation) {
+          runPrimary(() => {
+            this.clearCellLineHighlight(presentation);
+            presentation.selection = null;
+          });
+        }
         runPrimary(clearNativeTextSelection);
         runPrimary(() => this.applySelection(null));
         runPrimary(() => {
           this.selectionDomAnchor = context.domCaret ?? null;
+          if (effect.anchorCaret === effect.headCaret) return;
+          const input = this.cellInput(effect.cell.row, effect.cell.col);
+          const preview = input?.parentElement?.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
+          if (!input || !preview) return;
+          const anchor = tableCellEditorOffsetToSourceOffset(input.value, effect.anchorCaret);
+          const range = inlineSourceSelectionRanges(preview, anchor, anchor + 1)[0];
+          if (range) this.selectionDomAnchor = { node: range.startContainer, offset: range.startOffset };
         });
         runPrimary(() => {
           const active = document.activeElement;
@@ -3664,12 +3955,19 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       runPrimary(clearNativeTextSelection);
       const input = this.cellInput(effect.cell.row, effect.cell.col);
       if (!(input instanceof HTMLTextAreaElement)) continue;
-      runPrimary(() => this.focusTableInput(input, effect.anchorCaret, { scrollCellIntoView: false }));
-      runPrimary(() => input.setSelectionRange(
-        Math.min(effect.anchorCaret, effect.headCaret),
-        Math.max(effect.anchorCaret, effect.headCaret),
-        effect.headCaret < effect.anchorCaret ? 'backward' : 'forward'
-      ));
+      runPrimary(() => {
+        let wrapStart = false;
+        const source = this.linePresentation;
+        if (source?.input === input && context.event instanceof PointerEvent &&
+            context.domCaret && source.textElement.contains(context.domCaret.node)) {
+          const previous = this.projectedCaretRect(input, effect.headCaret, false);
+          const next = this.projectedCaretRect(input, effect.headCaret, true);
+          wrapStart = !!previous && !!next && next.top > previous.top + 1 && context.event.clientY >= next.top;
+        }
+        this.focusTableInput(input, effect.headCaret, {
+          revealCaret: false, selectionAnchor: effect.anchorCaret, wrapStart
+        });
+      });
     }
     // Rectangular selection and clearing it also change the document selection.
     // Publish once after all effects (including focus) have settled, not only
@@ -4020,7 +4318,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         // that same pointer is a definitive boundary, so retire it first.
         this.clearSelection('replacement');
       }
-      if (event.target instanceof HTMLTextAreaElement) {
+      if (event.target instanceof HTMLTextAreaElement && this.linePresentation?.input !== event.target) {
         const transition = this.cellSelection.accept({
           type: 'activate', pointerId: event.pointerId, cell: current, origin: 'textarea'
         });
@@ -4035,11 +4333,15 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
       const anchor = current;
       const input = cell.querySelector('textarea');
+      const extendFrom = event.shiftKey && input instanceof HTMLTextAreaElement && this.linePresentation?.input === input
+        ? input.selectionDirection === 'backward' ? input.selectionEnd : input.selectionStart
+        : undefined;
       const transition = this.cellSelection.accept({
         type: 'begin',
         pointerId: event.pointerId,
         cell: anchor,
-        fallbackOffset: input instanceof HTMLTextAreaElement ? input.value.length : 0
+        fallbackOffset: input instanceof HTMLTextAreaElement ? input.value.length : 0,
+        extendFrom
       });
       if (!transition.accepted) return;
       pendingOutsidePointerId = null;
@@ -4128,7 +4430,12 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const onCopy = (event: ClipboardEvent) => {
       if (!this.domRefs) return;
       const range = this.cellSelection.selectedCellRange();
-      if (!range) return;
+      if (!range) {
+        if (event.target instanceof HTMLTextAreaElement && table.contains(event.target)) {
+          writeTableCellTextSelection(event, event.target);
+        }
+        return;
+      }
       const values = this.copyCellMatrix(range);
       const serialized = this.cellSelection.copy(values);
       if (!serialized) return;
@@ -4137,6 +4444,27 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       event.clipboardData?.setData('text/plain', serialized.plain);
       event.clipboardData?.setData('text/html', serialized.html);
       event.clipboardData?.setData(meoTableClipboardMime, serialized.meo);
+    };
+
+    const onDoubleClick = (event: MouseEvent) => {
+      const presentation = this.linePresentation;
+      if (!presentation || this.composingInput || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+      const { input, line, valueFrom } = presentation;
+      const hit = document.elementFromPoint(event.clientX, event.clientY);
+      if (document.activeElement !== input || this.findCellElement(hit) !== input.closest(tableCellSelector)) return;
+      // Mixed lines use the table's pointer selection, so restore the native
+      // double-click word selection after the release has placed the caret.
+      const text = line.text + line.breakText;
+      const segments = new Intl.Segmenter(undefined, { granularity: 'word' }).segment(text);
+      const offset = input.selectionStart - valueFrom;
+      const current = segments.containing(offset);
+      const previous = segments.containing(offset - 1);
+      const word = current?.isWordLike ? current : previous?.isWordLike ? previous : current;
+      if (!word) return;
+      event.preventDefault();
+      input.setSelectionRange(valueFrom + word.index, valueFrom + word.index + word.segment.length);
+      this.updateCellLinePresentation(input);
+      this.emitTableSelectionChange(getWrap());
     };
 
     const onPaste = (event: ClipboardEvent) => {
@@ -4320,6 +4648,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     table.addEventListener('pointerdown', onPointerDown);
     table.addEventListener('pointermove', onPointerMove);
     table.addEventListener('pointerup', endPointerSelection);
+    table.addEventListener('dblclick', onDoubleClick);
     table.addEventListener('pointercancel', endPointerSelection);
     table.addEventListener('lostpointercapture', endPointerSelection);
     document.addEventListener('copy', onCopy, true);
@@ -4360,6 +4689,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       table.removeEventListener('pointerdown', onPointerDown);
       table.removeEventListener('pointermove', onPointerMove);
       table.removeEventListener('pointerup', endPointerSelection);
+      table.removeEventListener('dblclick', onDoubleClick);
       table.removeEventListener('pointercancel', endPointerSelection);
       table.removeEventListener('lostpointercapture', endPointerSelection);
       document.removeEventListener('copy', onCopy, true);
@@ -4953,7 +5283,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       const revealIsCurrent = isCurrent ?? viewport.captureNavigationCurrentness();
       if (!revealIsCurrent()) return;
       const revealGeneration = ++this.tableCaretRevealGeneration;
-      const canReveal = () => revealIsCurrent() && revealGeneration === this.tableCaretRevealGeneration;
+      const canReveal = () => revealIsCurrent() && revealGeneration === this.tableCaretRevealGeneration
+        && input.ownerDocument.activeElement === input;
       const inputContextMargin = visualLineContextMargin(view, 1);
       const readUsableViewportBounds = () => tableUsableViewportBounds(view, input);
       let attempts = 0;
@@ -5482,7 +5813,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     return this.tableData.diagnostics?.[rowIndex]?.[colIndex] ?? [];
   }
 
-  wireInput(input: HTMLTextAreaElement, rowEl: HTMLTableRowElement, rowInputs: HTMLTextAreaElement[], container: HTMLElement, rowIndex: number, colIndex: number, preview: HTMLElement) {
+  wireInput(input: HTMLTextAreaElement, rowEl: HTMLTableRowElement, rowInputs: HTMLTextAreaElement[], container: HTMLElement, rowIndex: number, colIndex: number) {
     wireNativeSymbolInput(input, {
       originEpoch: () => this.view ? symbolOriginEpoch(this.view.state) : -1,
       preferences: () => this.view?.state.facet(inputAssistanceFacet) ?? defaultInputAssistance,
@@ -5500,14 +5831,16 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     let breakSuffixBeforeInput: string | null = null;
     const refreshPreview = () => {
       if (this.destroyed || !this.view) return;
-      this.renderCellPreview(
-        preview,
-        tableCellEditorValueToSource(input.value),
-        this.cellDiagnostics(rowIndex, colIndex),
-        this.cellSourceRange(rowIndex, colIndex)
-      );
+      this.refreshCellPreviewFromInput(input);
     };
-    const notifySelectionChange = () => {
+    const notifySelectionChange = (event?: Event) => {
+      if (input.ownerDocument.activeElement === input) {
+        this.updateCellLinePresentation(input);
+        if (event instanceof KeyboardEvent && !event.isComposing && this.composingInput !== input
+            && tableCellCaretNavigationKeys.has(event.key)) {
+          this.revealTableCellCaretIfNeeded(input);
+        }
+      }
       this.emitTableSelectionChange(container);
     };
     const captureInputViewportIntent = () => {
@@ -5526,17 +5859,25 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       scrollTopBeforeInput = caretIsVisible ? view.scrollDOM.scrollTop : null;
       revealCaretAfterInput = !caretIsVisible;
     };
-    input.addEventListener('beforeinput', event => {
+    const captureBeforeInput = (isComposing: boolean) => {
       captureInputViewportIntent();
       const { value, selectionEnd } = input;
       const newline = value.indexOf('\n', selectionEnd);
       breakSuffixBeforeInput =
-        !event.isComposing && this.composingInput !== input
+        !isComposing && this.composingInput !== input
         && tableCellEditorBreakStart(value, newline, selectionEnd) !== null
           ? value.slice(newline)
           : null;
-    }, { capture: true });
+    };
+    input.addEventListener('beforeinput', event => captureBeforeInput(event.isComposing), { capture: true });
+    input.addEventListener('cut', event => {
+      if (this.composingInput === input || !writeTableCellTextSelection(event, input)) return;
+      captureBeforeInput(false);
+      replaceTableCellEditorSelection(input, '');
+    });
     input.addEventListener('input', () => {
+      this.cellVerticalGoal = null;
+      this.cellWrapStart = null;
       const preservedScrollTop = scrollTopBeforeInput;
       const shouldRevealCaret = revealCaretAfterInput;
       const breakSuffix = breakSuffixBeforeInput;
@@ -5555,6 +5896,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       if (this.searchState && (hadSearchMatch || shouldExpandTableCellForSearch(sourceValue, this.searchState))) {
         refreshPreview();
       }
+      this.updateCellLinePresentation(input);
       // Resize the focused row in the input event's task. Deferring this mutation to
       // CodeMirror's next measure lets the textarea scroll its caret for one paint,
       // then snap back after the row catches up.
@@ -5587,15 +5929,25 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       notifySelectionChange();
     });
     input.addEventListener('select', notifySelectionChange);
+    input.addEventListener('selectionchange', notifySelectionChange);
     input.addEventListener('keyup', notifySelectionChange);
     input.addEventListener('pointerup', notifySelectionChange);
+    input.addEventListener('scroll', () => {
+      const presentation = this.linePresentation;
+      if (presentation?.input === input && this.composingInput !== input && input.scrollTop !== presentation.scrollTop) {
+        input.scrollTop = presentation.scrollTop;
+      }
+    });
     input.addEventListener('compositionstart', () => {
       this.composingInput = input;
+      input.parentElement?.classList.add('is-cell-composing');
       this.cancelPendingCellAutoCommit();
     });
     input.addEventListener('compositionend', () => {
       this.composingInput = null;
+      input.parentElement?.classList.remove('is-cell-composing');
       compositionEndedAt = performance.now();
+      this.updateCellLinePresentation(input);
       this.schedulePendingCellAutoCommit(
         input,
         rowIndex,
@@ -5608,6 +5960,17 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       if (this.composingInput === input || event.isComposing || event.keyCode === 229 || (
         followsCompositionEnd && (event.key === 'Enter' || event.key === ' ')
       )) return;
+      const vertical = event.key === 'ArrowUp' || event.key === 'ArrowDown';
+      const projectedNavigation = !event.altKey && !event.ctrlKey && !event.metaKey;
+      if (!vertical || !projectedNavigation) this.cellVerticalGoal = null;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || !projectedNavigation) this.cellWrapStart = null;
+      const painted = projectedNavigation && (vertical || event.key === 'Home' || event.key === 'End')
+        ? this.moveProjectedCellCaret(input, event.key, event.shiftKey) : null;
+      if (painted === 'handled') {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       const keyboard = this.cellInteraction.accept({
         type: 'keyboard',
         input: {
@@ -5623,8 +5986,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
           selectionStart: input.selectionStart ?? 0,
           selectionEnd: input.selectionEnd ?? input.selectionStart ?? 0,
           value: input.value,
-          visualLine: (event.key === 'ArrowUp' || event.key === 'ArrowDown')
-            ? tableCellVisualLineBoundary(input)
+          visualLine: vertical && projectedNavigation && !event.shiftKey && input.selectionStart === input.selectionEnd
+            ? painted ?? tableCellVisualLineBoundary(input)
             : undefined,
           composing: event.isComposing || event.keyCode === 229
         }
@@ -5640,8 +6003,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         // This keyboard path mutates the textarea with setRangeText and emits a
         // synthetic input event, so the browser does not provide beforeinput.
         // Capture the same viewport intent as native typing before row growth.
-        captureInputViewportIntent();
-        if (!this.view?.state.facet(inputAssistanceFacet).lists || !continueTableCellList(input)) replaceTableCellEditorSelection(input, '<br>\n');
+        insertTableCellEditorBreak(input, this.view?.state, captureInputViewportIntent);
         return;
       }
       if (keyboard?.type === 'commit-and-exit') {
@@ -5685,14 +6047,21 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         && input.selectionStart === input.selectionEnd
       ) {
         const { value, selectionStart: caret } = input;
-        const newline = event.key === 'Backspace' && value[caret - 1] === '\n' ? caret - 1 : caret;
+        const newline = event.key === 'Backspace' && value[caret - 1] === '\n' ? caret - 1
+          : event.key === 'Delete' && value[caret] === '<' ? value.indexOf('\n', caret) : caret;
         const breakStart = tableCellEditorBreakStart(value, newline);
-        if (breakStart !== null) {
+        if (breakStart !== null && (newline <= caret || breakStart === caret)) {
           event.preventDefault();
           event.stopPropagation();
           captureInputViewportIntent();
           input.setSelectionRange(breakStart, newline + 1);
           replaceTableCellEditorSelection(input, '');
+          return;
+        }
+        const state = this.view?.state;
+        if (event.key === 'Backspace' && state && editTableCellMarkup(input, state, 'backspace', captureInputViewportIntent)) {
+          event.preventDefault();
+          event.stopPropagation();
         }
       }
     });
@@ -5772,6 +6141,11 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   }
 
   resizeRows(entries: readonly RowEntry[]) {
+    const projection = this.linePresentation;
+    const projectedRow = projection?.input.closest('tr');
+    if (projection && entries.some(({ row }) => row === projectedRow)) {
+      this.layoutCellSourceLine(projection);
+    }
     // Only the current display layer sizes each cell. Active source editors
     // retain their entry baseline without reserving space for hidden URLs.
     if (typeof CSS !== 'undefined' && CSS.supports('field-sizing', 'content')) {
@@ -5793,7 +6167,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     }
     const rows = entries.map(({ row, inputs }) => {
       const contents = Array.from(row.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content'));
-      const editingInputs = inputs.filter(input => input.parentElement?.classList.contains('is-editing'));
+      const editingInputs = inputs.filter(input => input.parentElement?.classList.contains('is-editing')
+        && !input.parentElement.classList.contains('is-editing-line'));
       return {
         contents,
         inputs: editingInputs,
@@ -5801,7 +6176,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         // Editing keeps the previous preview DOM alive, but its stale height
         // must not keep a row from shrinking as the user deletes text.
         previewHeight: Math.max(0, ...contents.map((content) =>
-          content.classList.contains('is-editing') && !content.classList.contains('has-search-match')
+          content.classList.contains('is-editing') && !content.classList.contains('is-editing-line')
+            && !content.classList.contains('has-search-match')
             ? 0
             : content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview')?.scrollHeight ?? 0
         ))
@@ -5845,11 +6221,12 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       !this.domRefs.shell.classList.contains('is-context-menu-open')
     ) {
       // Intrinsic sizing can shrink rows before CodeMirror's next measurement.
-      // Correct within this mutation and retain through that measurement, rather
-      // than paint the shifted input while waiting for a scheduled scroll write.
+      // Keep the row's reference through that measurement. The textarea can
+      // move within the row when its source wraps.
+      const reference = nativeInputViewportReference(active);
       controller.retainElementTopWhileMutation(
-        active,
-        () => table.ownerDocument.activeElement === active ? active : null,
+        reference,
+        () => table.ownerDocument.activeElement === active ? nativeInputViewportReference(active) : null,
         resize,
         () => table.ownerDocument.activeElement === active && !controller.isUserScrolling()
       );
@@ -6007,7 +6384,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     preview: HTMLElement,
     value: string,
     diagnostics: TableCellDiagnostics[] = [],
-    sourceRange: TableCellRange | null = null
+    sourceRange: TableCellRange | null = null,
+    sourceLine: TableCellLogicalLine | null = null
   ) {
     if (!(preview instanceof HTMLElement)) return;
     renderTableCellInlinePreview(
@@ -6018,17 +6396,362 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       sourceRange,
       getImagePresentationFactory(this.view!.state),
       this.view!.state.facet(uiLanguageFacet),
-      this.view!
+      this.view!,
+      sourceLine
     );
     // A focusable color button cannot live inside an aria-hidden preview.
     if (preview.querySelector('.meo-md-color-swatch-interactive, .meo-md-footnote-ref')) preview.removeAttribute('aria-hidden');
     else if (preview.getAttribute('aria-hidden') !== 'true') preview.setAttribute('aria-hidden', 'true');
   }
 
-  refreshCellPreviewFromInput(input: HTMLTextAreaElement) {
+  private clearCellLinePresentation(input: HTMLTextAreaElement) {
+    const presentation = this.linePresentation;
+    if (presentation?.input !== input) return;
+    this.linePresentation = null;
+    this.clearCellLineHighlight(presentation);
+    presentation.caret?.element.remove();
+    input.parentElement?.classList.remove('is-editing-line');
+    input.scrollTop = 0;
+  }
+
+  private clearCellLineHighlight(presentation: TableCellLinePresentation) {
+    if (CSS.highlights?.get('meo-table-cell-selection') === presentation.highlight) {
+      CSS.highlights.delete('meo-table-cell-selection');
+    }
+    presentation.highlight = null;
+  }
+
+  private layoutCellSourceLine(presentation: TableCellLinePresentation) {
+    const { input, sourceElement, textElement, prefixElement, valueFrom } = presentation;
+    const content = input.parentElement;
+    const preview = sourceElement.closest<HTMLElement>('.meo-md-html-table-cell-preview');
+    if (!content || !preview || !sourceElement.isConnected) return;
+    const prefixVisible = sourceElement.classList.contains('is-prefix-source');
+    const previewRect = preview.getBoundingClientRect();
+    const innerLeft = previewRect.left + (parseFloat(getComputedStyle(preview).paddingLeft) || 0);
+    const bodyLeft = sourceElement.getBoundingClientRect().left;
+    // Editing a structural prefix starts at the cell's padding. As it grows,
+    // text wraps to the right from that stable origin.
+    sourceElement.style.setProperty('--meo-cell-source-shift',
+      `${prefixVisible ? Math.max(0, bodyLeft - innerLeft) : 0}px`);
+    const contentRect = content.getBoundingClientRect();
+    const sourceRect = textElement.getBoundingClientRect();
+    if (!sourceRect.width) return;
+    const hiddenPrefixWidth = prefixVisible ? 0 : prefixElement?.getBoundingClientRect().width ?? 0;
+    const nativeLeft = Math.max(innerLeft, sourceRect.left - hiddenPrefixWidth);
+    const nativeWidth = sourceRect.right - nativeLeft;
+    const nativeInset = sourceRect.left - nativeLeft;
+    input.style.setProperty('--meo-cell-source-top', `${sourceRect.top - contentRect.top}px`);
+    input.style.setProperty('--meo-cell-source-left', `${nativeLeft - contentRect.left}px`);
+    input.style.setProperty('--meo-cell-source-height', `${sourceRect.height}px`);
+    const style = getComputedStyle(textElement);
+    const measurementKey = [nativeWidth, nativeInset, style.fontSize, style.fontFamily, style.fontWeight,
+      style.fontStyle, style.lineHeight, style.letterSpacing, style.textAlign, style.tabSize].join(':');
+    if (presentation.measurementKey !== measurementKey) {
+      presentation.measurementKey = measurementKey;
+      input.style.setProperty('--meo-cell-source-width', `${nativeWidth}px`);
+      input.style.setProperty('--meo-cell-source-prefix-width', `${nativeInset}px`);
+      input.style.setProperty('--meo-cell-source-align', style.textAlign);
+      presentation.scrollTop = withTableCellVisualLineProbe(input, ({ lineTopAt }) => lineTopAt(valueFrom));
+    }
+    if (this.composingInput !== input && input.scrollTop !== presentation.scrollTop) {
+      input.scrollTop = presentation.scrollTop;
+    }
+    this.paintCellSourceCaret(presentation, sourceRect.right);
+  }
+
+  private paintCellSourceCaret(presentation: TableCellLinePresentation, right: number) {
+    const { input, sourceElement } = presentation;
+    const position = input.selectionStart;
+    const wrapStart = this.cellWrapStart?.input === input && this.cellWrapStart.position === position;
+    const rect = position === input.selectionEnd ? this.projectedCaretRect(input, position, wrapStart) : null;
+    if (!rect) {
+      presentation.caret?.element.remove();
+      presentation.caret = null;
+      return;
+    }
+    let caret = presentation.caret;
+    // Moving to a new insertion point starts a new blink. A layout pass at
+    // the same insertion point only moves the existing caret's box.
+    if (!caret || caret.position !== position || caret.wrapStart !== wrapStart) {
+      const element = document.createElement('span');
+      element.className = 'meo-md-table-source-caret';
+      element.setAttribute('aria-hidden', 'true');
+      caret?.element.remove();
+      sourceElement.appendChild(element);
+      presentation.caret = caret = { position, wrapStart, element };
+    }
+    const bounds = sourceElement.getBoundingClientRect();
+    caret.element.style.left = `${Math.min(rect.left, right - 1) - bounds.left}px`;
+    caret.element.style.top = `${rect.top - bounds.top}px`;
+    caret.element.style.height = `${rect.height}px`;
+  }
+
+  projectedCaretRect(input: HTMLTextAreaElement, position: number, wrapStart =
+    this.cellWrapStart?.input === input && this.cellWrapStart.position === position): DOMRect | null {
+    const presentation = this.linePresentation;
+    if (presentation?.input !== input || presentation.editorValue !== input.value || this.composingInput === input) return null;
+    const { sourceElement, textElement, prefixElement, bodyElement, breakElement, line, valueFrom } = presentation;
+    let offset = position - valueFrom;
+    if (offset < 0 || offset > line.text.length + line.breakText.length) return null;
+    const prefixHidden = !sourceElement.classList.contains('is-prefix-source');
+    const markerEdge = prefixHidden && offset < (prefixElement?.textContent?.length ?? 0)
+      ? sourceElement.closest('.meo-md-html-table-cell-list, .meo-md-html-table-cell-quote')?.getBoundingClientRect().left
+      : undefined;
+    for (const part of [prefixElement, bodyElement, breakElement]) {
+      const text = part?.firstChild;
+      if (!(text instanceof Text)) continue;
+      const hiddenPrefix = part === prefixElement && prefixHidden;
+      if (!hiddenPrefix && offset <= text.length) {
+        const range = input.ownerDocument.createRange();
+        range.setStart(text, Math.max(0, offset));
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        // A collapsed DOM range chooses the previous row at a soft wrap. The
+        // next grapheme also supplies a caret position at the same source offset.
+        if (wrapStart && offset >= 0 && offset < text.length) {
+          range.setEnd(text, findClusterBreak(text.data, offset));
+          const glyph = range.getClientRects()[0];
+          if (glyph && glyph.top > rect.top + 1) {
+            range.collapse(false);
+            const after = range.getBoundingClientRect();
+            const x = after.left > glyph.left + glyph.width / 2 ? glyph.left : glyph.right;
+            return new DOMRect(x, glyph.top, 0, glyph.height);
+          }
+        }
+        if (rect.height) return markerEdge === undefined ? rect : new DOMRect(markerEdge, rect.top, 0, rect.height);
+      }
+      offset -= text.length;
+    }
+    const bounds = textElement.getBoundingClientRect();
+    const style = getComputedStyle(textElement);
+    if (!bounds.height) return null;
+    const left = markerEdge ?? (style.textAlign === 'center' ? bounds.left + bounds.width / 2
+      : style.textAlign === 'right' ? bounds.right : bounds.left);
+    const height = parseFloat(style.lineHeight) || bounds.height;
+    return new DOMRect(left, bounds.top, 0, height);
+  }
+
+  private projectedVisualRow(presentation: TableCellLinePresentation, position: number, wrapStart?: boolean) {
+    const { input, sourceElement, prefixElement, line, valueFrom } = presentation;
+    const first = valueFrom + (sourceElement.classList.contains('is-prefix-source') ? 0 : prefixElement?.textContent?.length ?? 0);
+    // A break tag remains editable by moving horizontally into it. Vertical
+    // movement and End use the content boundary, including when the tag wraps.
+    const last = Math.max(position, valueFrom + line.text.length);
+    const caret = this.projectedCaretRect(input, position, wrapStart);
+    if (!caret) return null;
+    const search = (from: number, to: number, boundary: 'start' | 'end') => {
+      while (from < to) {
+        const mid = boundary === 'start' ? Math.floor((from + to) / 2) : Math.ceil((from + to) / 2);
+        const y = this.projectedCaretRect(input, mid, boundary === 'start')?.top ?? caret.top;
+        if (boundary === 'start') {
+          if (y < caret.top - 1) from = mid + 1;
+          else to = mid;
+        } else {
+          if (y > caret.top + 1) to = mid - 1;
+          else from = mid;
+        }
+      }
+      return from;
+    };
+    const from = search(Math.min(first, position), position, 'start');
+    const to = search(position, last, 'end');
+    return { first, last, from, to, x: caret.left };
+  }
+
+  private moveProjectedCellCaret(input: HTMLTextAreaElement, key: string, extend: boolean):
+    'handled' | { atFirst: boolean; atLast: boolean; caretColumn: number } | null {
+    const presentation = this.linePresentation;
+    if (presentation?.input !== input) return null;
+    const head = tableCellSelectionHead(input);
+    const row = this.projectedVisualRow(presentation, head);
+    if (!row) return null;
+    const anchor = !extend ? null : input.selectionDirection === 'backward' ? input.selectionEnd : input.selectionStart;
+    const place = (position: number, wrapStart = false) => {
+      const start = anchor ?? position;
+      this.cellWrapStart = wrapStart ? { input, position } : null;
+      input.setSelectionRange(Math.min(start, position), Math.max(start, position), position < start ? 'backward' : 'forward');
+      this.updateCellLinePresentation(input);
+    };
+    if (key === 'Home' || key === 'End') {
+      place(key === 'Home' ? row.from : row.to, key === 'Home');
+      return 'handled';
+    }
+
+    const up = key === 'ArrowUp';
+    const nextIndex = presentation.valueFrom - presentation.line.from + (up ? -1 : 1);
+    const nextLine = presentation.lines[nextIndex];
+    const atRowEdge = up ? row.from <= row.first : row.to >= row.last;
+    if (atRowEdge && !nextLine) {
+      // Keep the existing inter-cell navigation at the first and last rows.
+      if (!extend && input.selectionStart === input.selectionEnd) {
+        return { atFirst: up, atLast: !up, caretColumn: head - row.from };
+      }
+      place(up ? row.first : row.last);
+      this.cellVerticalGoal = null;
+      return 'handled';
+    }
+
+    const cellLeft = input.parentElement!.getBoundingClientRect().left;
+    const goal = this.cellVerticalGoal;
+    const x = goal?.input === input && goal.head === head ? goal.x : row.x - cellLeft;
+    let nextRow;
+    if (atRowEdge && nextLine) {
+      // Activate the adjoining row first so alignment, inline syntax and
+      // hidden structural prefixes are measured in the layout we will paint.
+      const nextStart = nextIndex + nextLine.from;
+      place(nextStart + nextLine.text.length);
+      const nextPresentation = this.linePresentation;
+      if (nextPresentation?.input !== input) return 'handled';
+      const initial = this.projectedVisualRow(nextPresentation, tableCellSelectionHead(input));
+      if (!initial) return 'handled';
+      nextRow = up ? initial : this.projectedVisualRow(nextPresentation, initial.first, true);
+    } else {
+      const boundary = up ? row.from : row.to;
+      nextRow = this.projectedVisualRow(presentation, boundary, !up);
+      if (nextRow?.from === row.from && nextRow.to === row.to) {
+        nextRow = this.projectedVisualRow(presentation, findClusterBreak(input.value, boundary, !up), !up);
+      }
+    }
+    if (!nextRow) return 'handled';
+    let closest = nextRow.from;
+    let distance = Infinity;
+    for (let offset = closest; offset <= nextRow.to; offset = findClusterBreak(input.value, offset)) {
+      const rect = this.projectedCaretRect(input, offset, offset === nextRow.from);
+      if (!rect) break;
+      const delta = Math.abs(rect.left - cellLeft - x);
+      if (delta < distance) {
+        distance = delta;
+        closest = offset;
+      }
+      if (offset === nextRow.to) break;
+    }
+    place(closest, closest === nextRow.from);
+    this.cellVerticalGoal = { input, x, head: closest };
+    return 'handled';
+  }
+
+  projectedSourceAtPoint(input: HTMLTextAreaElement, clientX: number, clientY: number): number | null | undefined {
+    const presentation = this.linePresentation;
+    if (presentation?.input !== input || this.composingInput === input) return undefined;
+    const { bodyElement, line, prefixElement } = presentation;
+    const text = bodyElement.firstChild;
+    if (!(text instanceof Text)) return null;
+    const previous = input.style.pointerEvents;
+    let caret: InlineDomCaret | null;
+    try {
+      input.style.pointerEvents = 'none';
+      caret = resolveInlineCaretAtPoint(bodyElement, clientX, clientY, { nearestFallback: false }).domCaret;
+    } finally {
+      input.style.pointerEvents = previous;
+    }
+    if (caret?.node !== text) return null;
+    const range = input.ownerDocument.createRange();
+    for (const offset of [caret.offset, caret.offset - 1]) {
+      if (offset < 0 || offset >= text.length || /\s/.test(text.data[offset]!)) continue;
+      range.setStart(text, offset);
+      range.setEnd(text, offset + 1);
+      if (Array.from(range.getClientRects()).some(rect =>
+        clientX >= rect.left && clientX < rect.right && clientY >= rect.top && clientY < rect.bottom
+      )) return line.from + (prefixElement?.textContent?.length ?? 0) + offset;
+    }
+    return null;
+  }
+
+  private paintCellLineSelection(presentation: TableCellLinePresentation, preview: HTMLElement, from: number, to: number) {
+    if (presentation.selection?.from === from && presentation.selection.to === to) return;
+    presentation.selection = { from, to };
+    const { line, prefixMarkers } = presentation;
+    const start = from - line.from, end = to - line.from;
+    const first = prefixMarkers[0], last = prefixMarkers.at(-1);
+    const editingPrefix = start === end
+      ? prefixMarkers.some(marker => selectionEditsListMarker(start, end, marker.from, marker.to))
+      : !!first && !!last && selectionEditsListMarker(start, end, first.from, last.to);
+    presentation.sourceElement.classList.toggle('is-prefix-source', editingPrefix);
+    if (!CSS.highlights || typeof Highlight === 'undefined') return;
+    if (from === to) {
+      this.clearCellLineHighlight(presentation);
+      return;
+    }
+    const highlight = new Highlight();
+    for (const range of inlineSourceSelectionRanges(preview, from, to)) highlight.add(range);
+    CSS.highlights.set('meo-table-cell-selection', highlight);
+    presentation.highlight = highlight;
+  }
+
+  private updateCellLinePresentation(input: HTMLTextAreaElement, force = false): boolean {
+    const content = input.parentElement;
+    const current = this.linePresentation?.input === input ? this.linePresentation : null;
+    if (!content?.classList.contains('is-editing')) return false;
+    const phase = this.cellSelection.snapshot().phase;
+    if (this.composingInput === input || phase === 'text-candidate' || phase === 'dragging') return !!current;
+    if (!current && (!input.value.includes('\n') || input === this.wholeCellInput)) return false;
+    const preview = content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
+    if (!preview) return false;
+    const resize = () => {
+      const row = input.closest('tr');
+      if (row) this.resizeRow(row);
+    };
+    const cached = current?.editorValue === input.value ? current : null;
+    const source = cached?.source ?? tableCellEditorValueToSource(input.value);
+    const lines = cached?.lines ?? splitTableCellLogicalLines(source);
+    const coords = this.parseCellCoords(input.dataset.tableRow, input.dataset.tableCol);
+    const diagnostics = coords ? this.cellDiagnostics(coords.row, coords.col) : [];
+    const sourceRange = coords ? this.cellSourceRange(coords.row, coords.col) : null;
+    if (lines.length < 2 || input === this.wholeCellInput || shouldExpandTableCellForSearch(source, this.searchState)) {
+      if (current) {
+        this.clearCellLinePresentation(input);
+        this.renderCellPreview(preview, source, diagnostics, sourceRange);
+        resize();
+      }
+      return false;
+    }
+
+    const { selectionStart, selectionEnd } = input;
+    const from = tableCellEditorOffsetToSourceOffset(input.value, selectionStart);
+    const to = tableCellEditorOffsetToSourceOffset(input.value, selectionEnd);
+    // The two sides of the display-only newline share one source offset.
+    // Use native text coordinates to keep an end-of-line caret on its old line.
+    const nativeHead = tableCellSelectionHead(input);
+    let index = lines.length - 1;
+    while (index > 0 && lines[index]!.from + index > nativeHead) index--;
+    const line = lines[index]!;
+    if (cached && !force && cached.line === line) {
+      const prefixVisible = cached.sourceElement.classList.contains('is-prefix-source');
+      this.paintCellLineSelection(cached, preview, from, to);
+      if (prefixVisible !== cached.sourceElement.classList.contains('is-prefix-source')) resize();
+      else this.layoutCellSourceLine(cached);
+      return true;
+    }
+
+    if (this.linePresentation) this.clearCellLinePresentation(this.linePresentation.input);
+    this.renderCellPreview(preview, source, diagnostics, sourceRange, line);
+    const sourceElement = preview.querySelector<HTMLElement>('.meo-md-table-active-source-line');
+    const textElement = sourceElement?.querySelector<HTMLElement>('.meo-md-table-source-text');
+    const bodyElement = textElement?.querySelector<HTMLElement>('.meo-md-table-source-body');
+    if (!sourceElement || !textElement || !bodyElement) return false;
+    content.classList.add('is-editing-line');
+    const prefixElement = textElement.querySelector<HTMLElement>('.meo-md-table-source-prefix');
+    const presentation: TableCellLinePresentation = {
+      input, editorValue: input.value, source, lines, line, valueFrom: line.from + index, sourceElement, textElement,
+      prefixElement, prefixMarkers: tableCellPrefixMarkers(prefixElement?.textContent ?? ''),
+      bodyElement, breakElement: textElement.querySelector('.meo-md-table-source-break'),
+      scrollTop: 0, measurementKey: '', selection: null, highlight: null, caret: null
+    };
+    this.linePresentation = presentation;
+    this.paintCellLineSelection(presentation, preview, from, to);
+    // The native editor briefly owns the whole value on focus. Release the
+    // height measured for that layout once the mixed preview owns the row.
+    resize();
+    return true;
+  }
+
+  refreshCellPreviewFromInput(input: HTMLTextAreaElement, reading = false) {
     if (!(input instanceof HTMLTextAreaElement)) return;
     const preview = input.parentElement?.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
     if (!preview) return;
+    if (!reading && this.updateCellLinePresentation(input, true)) return;
+    this.clearCellLinePresentation(input);
     const coords = this.parseCellCoords(input.dataset.tableRow, input.dataset.tableCol);
     this.renderCellPreview(
       preview,
@@ -6063,6 +6786,9 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       // A same-row switch must not inherit the former source editor's height.
       content.style.setProperty('--meo-table-cell-edit-min-height', `${content.getBoundingClientRect().height}px`);
     } else {
+      this.clearCellLinePresentation(input);
+      if (this.wholeCellInput === input) this.wholeCellInput = null;
+      content.classList.remove('is-cell-composing');
       content.style.removeProperty('--meo-table-cell-edit-min-height');
     }
     content.classList.toggle('is-editing', isEditing);
@@ -6090,7 +6816,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
       return;
     }
-    this.refreshCellPreviewFromInput(presentation.input);
+    this.refreshCellPreviewFromInput(presentation.input, true);
     this.setCellEditingState(presentation.input, false);
   }
 
@@ -6099,7 +6825,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.cancelPendingCellAutoCommit();
     const input = target ? this.domRefs?.allRowInputs[target.row]?.[target.col] : null;
     if (input) {
-      this.refreshCellPreviewFromInput(input);
+      if (this.heldCellPresentation?.input !== input) this.refreshCellPreviewFromInput(input, true);
       // Cross-table capture retires the logical owner immediately. Its source
       // geometry stays until the new pointer target has accepted the gesture.
       if (this.heldCellPresentation?.input !== input) this.setCellEditingState(input, false);
@@ -6188,7 +6914,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     content.style.textAlign = alignment;
     preview.style.textAlign = alignment;
     input.style.textAlign = alignment;
-    this.wireInput(input, rowEl, rowInputs, container, rowIndex, colIndex, preview);
+    this.wireInput(input, rowEl, rowInputs, container, rowIndex, colIndex);
     content.append(preview, input);
     return { content, input };
   }
@@ -6284,7 +7010,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       [contextButtons.alignColumnCenter, strings.alignColumnCenter],
       [contextButtons.alignColumnRight, strings.alignColumnRight],
       [contextButtons.sortAscending, strings.sortTableAscending],
-      [contextButtons.sortDescending, strings.sortTableDescending]
+      [contextButtons.sortDescending, strings.sortTableDescending],
+      [contextButtons.editEntireCell, strings.tableEditEntireCell]
     ];
     for (const [button, accessibleLabel] of commandLabels) {
       button.dataset.tooltip = accessibleLabel;
@@ -6540,6 +7267,20 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const sortDescending = this.createContextButton(strings.sortTableDescending, 'sort-descending', ArrowDownZA, () => {
       this.requestTableCommand('sort-descending', !sortDescending.disabled);
     });
+    const editEntireCell = this.createContextButton(strings.tableEditEntireCell, null, Pencil, () => {
+      const input = this.cellInput(this.activeTarget.row, this.activeTarget.col);
+      if (!input) return;
+      this.wholeCellInput = input;
+      const { selectionStart, selectionEnd, selectionDirection } = input;
+      const backward = selectionDirection === 'backward';
+      this.setContextMenuOpen(false);
+      this.focusTableInput(input, backward ? selectionStart : selectionEnd, {
+        selectionAnchor: backward ? selectionEnd : selectionStart
+      });
+      if (input.parentElement?.closest('tr')) this.resizeRow(input.parentElement.closest('tr')!);
+    });
+    editEntireCell.hidden = true;
+    editEntireCell.disabled = true;
     alignColumnLeft.setAttribute('role', 'menuitemradio');
     alignColumnCenter.setAttribute('role', 'menuitemradio');
     alignColumnRight.setAttribute('role', 'menuitemradio');
@@ -6590,6 +7331,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       createSeparator(),
       sortAscending,
       sortDescending,
+      editEntireCell,
       createSeparator('before-trailing-control'),
       previousPage
     );
@@ -6667,7 +7409,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         alignColumnCenter,
         alignColumnRight,
         sortAscending,
-        sortDescending
+        sortDescending,
+        editEntireCell
       }
     };
   }
@@ -6990,6 +7733,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.destroyed = true;
     const selectionDisposal = this.cellSelection.accept({ type: 'dispose' });
     this.applyCellSelectionTransition(selectionDisposal);
+    if (this.linePresentation) this.clearCellLinePresentation(this.linePresentation.input);
     disposeImagePresentations(dom);
     this.tableCommandTargetRegistration?.dispose();
     this.tableCommandTargetRegistration = null;
@@ -7396,6 +8140,6 @@ export function mountedTableStatisticsSelection(view: EditorView): { ranges: Tab
 export function insertMountedTableCellBreak(view: EditorView): boolean {
   const input = document.activeElement;
   if (!(input instanceof HTMLTextAreaElement) || !view.dom.contains(input)) return false;
-  if (!view.state.facet(inputAssistanceFacet).lists || !continueTableCellList(input)) replaceTableCellEditorSelection(input, '<br>\n');
+  insertTableCellEditorBreak(input, view.state);
   return true;
 }

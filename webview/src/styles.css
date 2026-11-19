@@ -7354,13 +7354,22 @@ html[data-editor-appearance='dark'] body.vscode-dark
 }
 
 .cm-editor .meo-md-html-table-cell-list {
+  --meo-table-default-list-indent: 1.5em;
   margin: 0;
-  padding-inline-start: 1.5em;
+  padding-inline-start: min(max(0px, calc(100% - 1ch)),
+    max(var(--meo-table-list-indent, var(--meo-table-default-list-indent)),
+      calc((var(--meo-table-list-digits, 0) + 1) * 1ch + 0.45em)));
   text-align: left;
 }
 
 .cm-editor .meo-md-html-table-cell-list .meo-md-html-table-cell-list {
-  padding-inline-start: 1.25em;
+  --meo-table-default-list-indent: 1.25em;
+  --meo-table-list-indent: var(--meo-table-default-list-indent);
+  --meo-table-list-digits: 0;
+}
+
+.cm-editor .meo-md-html-table-cell-preview:has(.meo-md-html-table-cell-list, .meo-md-table-active-source-line) {
+  overflow-x: clip;
 }
 
 .cm-editor .meo-md-html-table-cell-list > li {
@@ -7374,6 +7383,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
 
 .cm-editor.meo-mode-live .meo-md-html-table-cell-list:is(ol) > li::marker {
   color: var(--meo-ui-text-emphasis-content);
+  font-variant-numeric: tabular-nums;
 }
 
 .cm-editor.meo-mode-live .meo-md-html-table-cell-preview .meo-md-link {
@@ -7387,20 +7397,20 @@ html[data-editor-appearance='dark'] body.vscode-dark
   text-align: left;
 }
 
-.cm-editor .meo-md-html-table-cell-content.is-editing .meo-md-html-table-cell-preview {
+.cm-editor .meo-md-html-table-cell-content.is-editing:not(.is-editing-line) .meo-md-html-table-cell-preview {
   color: transparent;
   opacity: 1;
   pointer-events: none;
 }
 
-.cm-editor .meo-md-html-table-cell-content.is-editing:not(.has-search-match) .meo-md-html-table-cell-preview {
+.cm-editor .meo-md-html-table-cell-content.is-editing:not(.is-editing-line, .has-search-match) .meo-md-html-table-cell-preview {
   /* Retain preview resources without letting stale content size the editing row. */
   position: absolute;
   inset: 0;
   visibility: hidden;
 }
 
-.cm-editor .meo-md-html-table-cell-content.is-editing .meo-md-html-table-cell-preview * {
+.cm-editor .meo-md-html-table-cell-content.is-editing:not(.is-editing-line) .meo-md-html-table-cell-preview * {
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
 }
@@ -7491,6 +7501,114 @@ html[data-editor-appearance='dark'] body.vscode-dark
   caret-color: var(--meo-caret);
 }
 
+.cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea {
+  position: absolute;
+  inset: var(--meo-cell-source-top, 0px) auto auto var(--meo-cell-source-left, 0px);
+  width: var(--meo-cell-source-width, 0px);
+  height: var(--meo-cell-source-height, 1lh);
+  min-height: 0;
+  padding: 0;
+  field-sizing: fixed;
+  text-align: var(--meo-cell-source-align, left) !important;
+  color: transparent;
+  caret-color: transparent;
+}
+
+.cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea::selection {
+  background-color: transparent;
+  color: transparent;
+}
+
+.cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea:not(:focus) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cm-editor .meo-md-table-active-source-line {
+  position: relative;
+  box-sizing: border-box;
+  contain: inline-size;
+  min-width: 0;
+}
+
+.cm-editor .meo-md-table-source-text {
+  box-sizing: border-box;
+  min-height: 1lh;
+  margin-inline-start: calc(-1 * var(--meo-cell-source-shift, 0px));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A raw quote prefix occupies the same gutter as the rendered bars. */
+.cm-editor .meo-md-html-table-cell-quote .meo-md-table-active-source-line.is-prefix-source > .meo-md-table-source-text {
+  background-color: var(--meo-background);
+}
+
+.cm-editor .meo-md-html-table th .meo-md-html-table-cell-quote .meo-md-table-active-source-line.is-prefix-source > .meo-md-table-source-text {
+  --meo-table-quote-source-header: var(--meo-live-table-header-background, var(--meo-inset-background));
+  background-image: linear-gradient(var(--meo-table-quote-source-header), var(--meo-table-quote-source-header));
+}
+
+.cm-editor .meo-md-table-active-source-line:not(.is-prefix-source) .meo-md-table-source-prefix {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  width: max-content;
+  white-space: pre;
+}
+
+.cm-editor.meo-mode-live .meo-md-table-active-list-item:has(.is-prefix-source)::marker,
+.cm-editor.meo-mode-live .is-cell-composing .meo-md-table-active-list-item::marker,
+.cm-editor .is-cell-composing .meo-md-table-source-text {
+  color: transparent;
+}
+
+.cm-editor .meo-md-table-task-content:has(.is-prefix-source) > .meo-md-html-table-cell-task-checkbox,
+.cm-editor .is-cell-composing .meo-md-table-task-content:has(.meo-md-table-active-source-line) > .meo-md-html-table-cell-task-checkbox {
+  visibility: hidden;
+}
+
+.cm-editor .meo-md-table-task-content {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.cm-editor .meo-md-html-table-cell-content.is-editing-line.is-cell-composing > textarea {
+  color: var(--meo-foreground);
+  caret-color: var(--meo-caret, var(--meo-caret-color));
+}
+
+.cm-editor .meo-md-table-source-caret {
+  display: none;
+  position: absolute;
+  width: 1px;
+  background-color: var(--meo-caret, var(--meo-caret-color));
+  /* Match the native insertion caret under either motion preference. */
+  animation: meo-table-cell-caret-blink 1.2s step-end infinite;
+  pointer-events: none;
+  user-select: none;
+}
+
+.cm-editor .meo-md-html-table-cell-content.is-editing-line:not(.is-cell-composing):has(> textarea:focus) .meo-md-table-source-caret {
+  display: block;
+}
+
+@keyframes meo-table-cell-caret-blink {
+  50% { opacity: 0; }
+}
+
+@supports (text-indent: -1px each-line) {
+  .cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea {
+    padding-inline-start: var(--meo-cell-source-prefix-width, 0px);
+    text-indent: calc(-1 * var(--meo-cell-source-prefix-width, 0px)) each-line;
+  }
+}
+
+::highlight(meo-table-cell-selection) {
+  background-color: var(--meo-selection-bg);
+}
+
 .selection-inline-menu,
 .cm-editor .meo-md-html-table-context-trigger,
 .cm-editor .meo-md-html-table-context-menu,
@@ -7577,7 +7695,8 @@ html .cm-editor .meo-md-html-table-context-menu {
   gap: 2px;
 }
 
-.cm-editor .meo-md-html-table-context-page[hidden] {
+.cm-editor .meo-md-html-table-context-page[hidden],
+.cm-editor .meo-md-html-table-context-btn[hidden] {
   display: none;
 }
 

@@ -47,9 +47,10 @@ console.log(`Table geometry preserves ${expected.length} source ranges without c
 // Compensating whitespace can move a cell's source range while preserving
 // normalized text, total length, and the table's content signature.
 const stickyFactory = { create: () => ({ mount() {}, update() {}, invalidate() {}, unmount() {}, dispose() {} }) };
+const commandEnvironment = tableCommandEnvironmentFacet.of({} as any);
 function tableWidget(text: string) {
   const state = EditorState.create({ doc: text, extensions: [
-    tableCommandEnvironmentFacet.of({} as any), tableStickyHeaderAdapterFactoryFacet.of(stickyFactory), liveModeExtensions()
+    commandEnvironment, tableStickyHeaderAdapterFactoryFacet.of(stickyFactory), liveModeExtensions()
   ] });
   for (const set of state.facet(EditorView.decorations)) {
     if (typeof set === 'function') continue;

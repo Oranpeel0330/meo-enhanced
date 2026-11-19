@@ -117,6 +117,8 @@ import {
   refreshTableLocalLinkIndicators,
   tableCellEditorOffsetToSourceOffset,
   tableCellEditorValueToSource,
+  tableCellProjectedCaretRect,
+  tableCellProjectedSourceAtPoint,
   tableCellSourceOffsetToEditorOffset,
   tableCellSourceRangeForInput,
   mountedTableStatisticsSelection,
@@ -133,6 +135,7 @@ import {
   projectMountedTablePositions,
   refreshMountedTableUiLanguage,
   flushMountedTableLayouts,
+  focusMountedTableInput,
   mountedTableEntryInput,
   mountedTableInputsForLine,
   tableUsableViewportBounds,
@@ -886,20 +889,6 @@ export function createEditor({
   };
   const tableEntryCellSelector = 'th[data-table-row][data-table-col], td[data-table-row][data-table-col]';
   const tableEntryProbeOffsetsY = [1, 4, 8, 12, 18];
-  const focusTableEntryInput = (input: Element | null) => {
-    if (!(input instanceof HTMLTextAreaElement)) {
-      return false;
-    }
-    input.focus({ preventScroll: true });
-    const caret = input.value.length;
-    input.setSelectionRange(caret, caret);
-    const cell = input.closest<HTMLElement>(tableEntryCellSelector);
-    if (cell) {
-      const isRevealCurrent = viewportController.beginNavigationReveal();
-      viewportController.revealElement(cell, isRevealCurrent);
-    }
-    return true;
-  };
   const findTableEntryInput = (wrap: HTMLElement, hit: Element, direction: 'up' | 'down') => {
     const cell = hit.closest(tableEntryCellSelector);
     if (cell instanceof HTMLElement && wrap.contains(cell)) {
@@ -956,7 +945,7 @@ export function createEditor({
           continue;
         }
         const input = findTableEntryInput(wrap, hit, direction);
-        if (!focusTableEntryInput(input)) {
+        if (!focusMountedTableInput(input)) {
           continue;
         }
         return true;
@@ -1230,7 +1219,9 @@ export function createEditor({
     }
     const selectionStart = Math.min(rawStart, rawEnd);
     const selectionEnd = Math.max(rawStart, rawEnd);
-    const coords = measureTextareaSelectionStart(input, selectionStart);
+    const projected = input.parentElement?.classList.contains('is-editing-line');
+    const anchor = projected && input.selectionDirection !== 'backward' ? selectionEnd : selectionStart;
+    const coords = measureTextareaSelectionStart(input, anchor);
     const lineHeight = parseFloat(getComputedStyle(input).lineHeight);
     return {
       from: sourceRange.from + tableCellEditorOffsetToSourceOffset(input.value, selectionStart),
@@ -1343,6 +1334,8 @@ export function createEditor({
   }));
 
   const measureTextareaSelectionStart = (input: HTMLTextAreaElement, index: number) => {
+    const projected = tableCellProjectedCaretRect(input, index);
+    if (projected) return { left: projected.left, top: projected.top };
     const doc = input.ownerDocument;
     const mirror = doc.createElement('div');
     const marker = doc.createElement('span');
@@ -1382,7 +1375,7 @@ export function createEditor({
     const inputRect = input.getBoundingClientRect();
     const coords = {
       left: inputRect.left + (markerRect.left - mirrorRect.left),
-      top: inputRect.top + (markerRect.top - mirrorRect.top)
+      top: inputRect.top + (markerRect.top - mirrorRect.top) - input.scrollTop
     };
 
     mirror.remove();
@@ -1390,11 +1383,19 @@ export function createEditor({
   };
 
   let tableLinkLookup: { input: HTMLTextAreaElement; value: string; state: EditorState } | undefined;
+  const tableCellLinkAtSourceOffset = (input: HTMLTextAreaElement, offset: number, editorView: EditorView): string => {
+    if (tableLinkLookup?.input !== input || tableLinkLookup.value !== input.value) {
+      tableLinkLookup = { input, value: input.value, state: EditorState.create({ doc: tableCellEditorValueToSource(input.value), extensions: [getEditorMarkdownLanguage(latexDelimiters), latexDelimitersFacet.of(latexDelimiters)] }) };
+    }
+    return getLinkHrefAtSourcePosition(tableLinkLookup.state, offset, { exactTextHit: true }, editorView.state);
+  };
   const editableLinkHrefAtPointer = (event: Pick<MouseEvent, 'target' | 'clientX' | 'clientY'>, editorView: EditorView): string => {
     const input = event.target;
     if (!(input instanceof HTMLTextAreaElement) || !input.closest('.meo-md-html-table-shell')) {
       return getLinkHrefAtPointer(event, editorView, { exactTextHit: true });
     }
+    const projected = tableCellProjectedSourceAtPoint(input, event.clientX, event.clientY);
+    if (projected !== undefined) return projected === null ? '' : tableCellLinkAtSourceOffset(input, projected, editorView);
     // Native textareas expose no character hit test. A temporary, transparent mirror
     // resolves the pointer without moving the caret or committing the cell draft.
     const doc = input.ownerDocument;
@@ -1419,10 +1420,7 @@ export function createEditor({
       }
     } finally { mirror.remove(); }
     if (offset === undefined) return '';
-    if (tableLinkLookup?.input !== input || tableLinkLookup.value !== input.value) {
-      tableLinkLookup = { input, value: input.value, state: EditorState.create({ doc: tableCellEditorValueToSource(input.value), extensions: [getEditorMarkdownLanguage(latexDelimiters), latexDelimitersFacet.of(latexDelimiters)] }) };
-    }
-    return getLinkHrefAtSourcePosition(tableLinkLookup.state, tableCellEditorOffsetToSourceOffset(input.value, offset), { exactTextHit: true }, editorView.state);
+    return tableCellLinkAtSourceOffset(input, tableCellEditorOffsetToSourceOffset(input.value, offset), editorView);
   };
 
   const getActiveTableSelectionState = (input: HTMLTextAreaElement): (SelectionMenuState & { from: number; to: number }) | null => {

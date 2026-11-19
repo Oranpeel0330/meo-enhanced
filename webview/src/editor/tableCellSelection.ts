@@ -66,6 +66,7 @@ export type TableCellSelectionEvent =
       readonly pointerId: number;
       readonly cell: TableCellCoordinates;
       readonly fallbackOffset: number;
+      readonly extendFrom?: number;
     }
   | {
       readonly type: 'activate';
@@ -156,6 +157,7 @@ export class TableCellSelection {
     readonly cell: TableCellCoordinates;
     readonly fallbackOffset: number;
     readonly nearestFallback: boolean;
+    readonly extendFrom?: number;
   } | null = null;
 
   accept(event: TableCellSelectionEvent): TableCellSelectionTransition {
@@ -231,7 +233,7 @@ export class TableCellSelection {
       if (!request || request.requestId !== event.requestId || this.pointerId !== request.pointerId) return rejected();
       this.pendingCaret = null;
       if (request.phase === 'begin') {
-        this.anchorCaret = event.numericOffset;
+        this.anchorCaret = request.extendFrom ?? event.numericOffset;
         this.headCaret = event.numericOffset;
         this.captured = true;
         return accepted(
@@ -239,7 +241,7 @@ export class TableCellSelection {
           { kind: 'set-action-target', pointerId: request.pointerId, cell: request.cell },
           {
             kind: 'text', phase: 'begin', pointerId: request.pointerId, cell: request.cell,
-            anchorCaret: event.numericOffset, headCaret: event.numericOffset
+            anchorCaret: this.anchorCaret, headCaret: event.numericOffset
           },
           { kind: 'capture-pointer', pointerId: request.pointerId }
         );
@@ -275,7 +277,7 @@ export class TableCellSelection {
         pointerId: event.pointerId, cell: event.cell, fallbackOffset: event.fallbackOffset,
         nearestFallback: true
       } as const;
-      this.pendingCaret = request;
+      this.pendingCaret = { ...request, extendFrom: event.extendFrom };
       return accepted(request);
     }
     if (this.pointerId !== event.pointerId || !this.anchor) {

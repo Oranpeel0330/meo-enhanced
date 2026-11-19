@@ -13,6 +13,7 @@ import {
   Annotation,
   type Extension,
   type Line,
+  type StateCommand,
   type Text,
   type Range
 } from '@codemirror/state';
@@ -551,6 +552,14 @@ export class CheckboxWidget extends UiLanguageSensitiveWidget {
   }
 }
 
+export function selectionEditsListMarker(from: number, to: number, markerFrom: number, markerTo: number): boolean {
+  // A caret on either edge leaves the marker rendered. A selection
+  // confined to the marker can include those edges to edit the whole prefix.
+  return from === to
+    ? from > markerFrom && from < markerTo
+    : from >= markerFrom && to <= markerTo;
+}
+
 export function addListMarkerDecoration(
   builder: Array<Range<Decoration>>,
   state: EditorState,
@@ -571,12 +580,9 @@ export function addListMarkerDecoration(
   const markerEnd = line.from + marker.markerEndOffset;
   const markerTo = line.from + marker.toOffset;
 
-  // A caret or a precise marker-only selection needs editable source. A text
-  // selection spanning the item keeps its marker and stable reading geometry.
   // A prefix without a separator also has no room for the widget's trailing gap.
-  const editingMarker = sourcePresentationSelection(state).ranges.some(range => range.empty
-    ? range.head > indentEnd && range.head < markerTo
-    : range.from >= indentEnd && range.to <= markerTo);
+  const editingMarker = sourcePresentationSelection(state).ranges.some(({ from, to }) =>
+    selectionEditsListMarker(from, to, indentEnd, markerTo));
   if (options?.useSourceStyleLiteral || marker.toOffset === marker.markerEndOffset || editingMarker) {
     if (markerTo > indentEnd) {
       builder.push(sourceListMarkerDeco.range(indentEnd, markerTo));
@@ -673,8 +679,7 @@ export function continuedListMarker(lineText: string): string | null {
 }
 
 /** Empty item exits; body start inserts above; body end continues below. */
-export function handleEnterInList(view: EditorView): boolean {
-  const { state } = view;
+export const handleEnterInList: StateCommand = ({ state, dispatch }) => {
   const selection = state.selection.main;
   if (state.readOnly || state.selection.ranges.length !== 1 || !selection.empty) return false;
   const line = state.doc.lineAt(selection.head);
@@ -684,11 +689,11 @@ export function handleEnterInList(view: EditorView): boolean {
   const contentStart = line.from + marker.toOffset;
   if (!line.text.slice(marker.toOffset).trim()) {
     if (selection.head !== contentStart && selection.head !== line.to) return false;
-    view.dispatch({
+    dispatch(state.update({
       changes: { from: line.from + prefixOffset, to: contentStart, insert: '' },
       selection: { anchor: line.from + prefixOffset },
       userEvent: 'input.list'
-    });
+    }));
     return true;
   }
   const atStart = selection.head === contentStart;
@@ -696,16 +701,15 @@ export function handleEnterInList(view: EditorView): boolean {
   const prefix = siblingListPrefix(line.text, marker, !atStart);
   if (prefix === null) return false;
   const from = atStart ? line.from : line.to;
-  view.dispatch({
+  dispatch(state.update({
     changes: { from, insert: atStart ? prefix + '\n' : '\n' + prefix },
     selection: { anchor: from + prefix.length + (atStart ? 0 : 1) },
     userEvent: 'input.list'
-  });
+  }));
   return true;
-}
+};
 
-export function handleBackspaceAtListContentStart(view: EditorView): boolean {
-  const { state } = view;
+export const handleBackspaceAtListContentStart: StateCommand = ({ state, dispatch }) => {
   const selection = state.selection.main;
   if (!selection.empty) {
     return false;
@@ -760,15 +764,15 @@ export function handleBackspaceAtListContentStart(view: EditorView): boolean {
     }
   }
 
-  view.dispatch({
+  dispatch(state.update({
     changes,
     selection: { anchor: selectionAnchor },
     effects: listHistoryFocusEffect(line.from, selection.head, selectionAnchor),
     annotations: isolateHistory.of('full'),
     userEvent: 'delete.backward'
-  });
+  }));
   return true;
-}
+};
 
 export function handleDeleteBeforeEmptyListItem(view: EditorView): boolean {
   const { state } = view;

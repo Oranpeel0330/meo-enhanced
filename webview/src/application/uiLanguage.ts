@@ -279,6 +279,7 @@ export type UiStrings = Readonly<{
   tableBack: string;
   tableCollapse: string;
   tableMoreActions: string;
+  tableEditEntireCell: string;
   tablePreviousActions: string;
   tableAlign: string;
   insertRowAbove: string;
@@ -563,6 +564,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     tableInsert: 'Insert', tableMove: 'Move', tableDelete: 'Delete', tableBack: 'Back',
     deleteTable: 'Delete table', sortTableAscending: 'Sort ascending', sortTableDescending: 'Sort descending',
     tableCollapse: 'Collapse table actions', tableMoreActions: 'Next page',
+    tableEditEntireCell: 'Edit entire cell',
     tablePreviousActions: 'Previous page',
     tableAlign: 'Align',
     insertRowAbove: 'Insert row above', insertRowBelow: 'Insert row below', moveRowUp: 'Move row up', moveRowDown: 'Move row down',
@@ -834,6 +836,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     tableInsert: '插入', tableMove: '移动', tableDelete: '删除', tableBack: '返回',
     deleteTable: '删除表格', sortTableAscending: '升序排列', sortTableDescending: '降序排列',
     tableCollapse: '收起表格操作', tableMoreActions: '下一页',
+    tableEditEntireCell: '编辑整个单元格',
     tablePreviousActions: '上一页',
     tableAlign: '对齐',
     insertRowAbove: '在上方插入行', insertRowBelow: '在下方插入行', moveRowUp: '上移行', moveRowDown: '下移行',
