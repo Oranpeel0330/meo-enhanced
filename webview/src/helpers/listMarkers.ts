@@ -345,7 +345,7 @@ function taskStatusCssClass(status: TaskStatus): string {
   return `is-${status}`;
 }
 
-function siblingListPrefix(lineText: string, marker: MarkdownListPrefix, advance: boolean, keepTaskState = false): string | null {
+function siblingListPrefix(lineText: string, marker: MarkdownListPrefix, advance: boolean, keepOriginalItemSuffix = false): string | null {
   let number = marker.orderedNumber;
   if (advance && number !== undefined) {
     const next = Number.parseInt(number, 10) + 1;
@@ -353,8 +353,10 @@ function siblingListPrefix(lineText: string, marker: MarkdownListPrefix, advance
     number = String(next);
   }
   const markerText = marker.bullet ?? `${number}${marker.orderedSuffix}`;
-  const task = marker.taskMarker === undefined ? '' : `[${keepTaskState ? marker.taskMarker : ' '}] `;
-  return lineText.slice(0, marker.fromOffset) + markerText + ' ' + task;
+  const separator = keepOriginalItemSuffix
+    ? lineText.slice(marker.markerEndOffset, marker.toOffset)
+    : marker.taskMarker === undefined ? ' ' : ' [ ] ';
+  return lineText.slice(0, marker.fromOffset) + markerText + separator;
 }
 
 export function listMarkerData(
