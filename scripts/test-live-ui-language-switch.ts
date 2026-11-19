@@ -52,6 +52,7 @@ function expectedLabels(language: UiLanguage, mermaidLine: number, formulaLine: 
       strings.alignColumnRight,
       strings.sortTableAscending,
       strings.sortTableDescending,
+      strings.tableEditEntireCell,
       strings.tablePreviousActions
     ],
     mermaidControls: strings.mermaidBlockControls(mermaidLine),

@@ -2199,11 +2199,19 @@ async function main() {
       panel.style.setProperty('--vscode-editor-foreground', 'rgb(255, 255, 255)');
       const findInput = panel.querySelector<HTMLInputElement>('.find-row:first-child .find-input')!;
       const replaceInput = panel.querySelector<HTMLInputElement>('.find-replace-row .find-input')!;
+      const roleColor = (role: 'text-placeholder' | 'text') => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(--meo-ui-${role})`;
+        panel.appendChild(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
       findInput.value = 'Tall Mermaid';
       findInput.dispatchEvent(new Event('input', { bubbles: true }));
       return {
-        mutedText: (() => { const probe = document.createElement('span'); probe.style.color = 'var(--meo-ui-text-muted)'; document.body.appendChild(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; })(),
-        mainText: (() => { const probe = document.createElement('span'); probe.style.color = 'var(--meo-ui-text)'; document.body.appendChild(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; })(),
+        placeholderText: roleColor('text-placeholder'),
+        mainText: roleColor('text'),
         findPlaceholder: getComputedStyle(findInput, '::placeholder').color,
         replacePlaceholder: getComputedStyle(replaceInput, '::placeholder').color,
         findClear: getComputedStyle(panel.querySelector<HTMLElement>('.find-row:first-child .find-clear-button')!).color,
@@ -2216,7 +2224,7 @@ async function main() {
       (element) => getComputedStyle(element).color
     );
     if (
-      findClearColors.findPlaceholder !== findClearColors.mutedText ||
+      findClearColors.findPlaceholder !== findClearColors.placeholderText ||
       findClearColors.replacePlaceholder !== findClearColors.findPlaceholder ||
       findClearColors.findClear !== findClearColors.replaceClear ||
       findClearColors.findClear === hoveredFindClearColor ||
