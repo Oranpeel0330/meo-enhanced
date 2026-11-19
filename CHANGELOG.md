@@ -3,6 +3,16 @@
 This changelog retains the release history of the original Markdown Editor
 Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
+## 0.4.3
+- Added custom editor actions that combine commands, Markdown snippets, and mode changes. Bind an action to one shortcut or a two-part chord, and review conflicting bindings before replacing them.
+- Added an example action that inserts the current local date and time. Custom actions can also insert snippets in individual table cells while preserving Markdown table structure.
+- Made Live table cells with explicit line breaks editable one line at a time while the other lines stay rendered. Whole-cell source editing remains available.
+- Preserved table caret positions, text selections, and the active cell outline while switching between cells and rendered content. Kept floating table header navigation and column resizing anchored to the current viewport.
+- Aligned table list markers, task checkboxes, and floating header text with the editor's line spacing. Refined column resize and Mermaid split resize highlights.
+- Unified list and quote continuation in the document and in table cells. Splitting a list item shows its marker immediately, and deleting an empty next item removes its complete prefix in one step.
+- Kept nested list markers and task checkboxes consistent across Live, Preview, and exports.
+- Updated both READMEs with custom-action instructions and screenshots.
+
 ## 0.4.2
 - Sized Live table rows by visible rendered content, removing blank space caused by hidden long link addresses.
 - Preserved the rendered row height when entering a cell editor, allowed longer source to expand, and restored the latest preview height after editing.
