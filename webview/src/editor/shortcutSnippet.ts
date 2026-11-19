@@ -2,7 +2,7 @@ import { snippet } from '@codemirror/autocomplete';
 import { isolateHistory } from '@codemirror/commands';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import type { EditorView } from '@codemirror/view';
-import { parseShortcutSnippet, shortcutSnippetFinalField as finalField, shortcutSnippetSupportsTable, type ShortcutSnippetPart } from '../../../src/foundation/shortcutSnippet';
+import { parseShortcutSnippet, shortcutSnippetFinalField as finalField, shortcutSnippetSupportsTable, type ShortcutSnippetPart } from '../../../src/application/shortcutSnippet';
 
 type Part = string | { field: number; initial?: string };
 

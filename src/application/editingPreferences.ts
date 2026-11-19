@@ -2,7 +2,7 @@ import {
   defaultInputAssistance, editorCommandIds, insertCurrentTimeExampleId, insertCurrentTimeExampleName, isCustomShortcut, type CustomShortcut, type CustomShortcutAction,
   type CustomShortcutScope, type EditingPreferences, type EditingPreferencesChange, type EditorCommandId, type ShortcutOverrides, type ShortcutReplacement
 } from '../foundation/editingPreferences';
-import { parseShortcutSnippet, shortcutSnippetSupportsTable } from '../foundation/shortcutSnippet';
+import { parseShortcutSnippet, shortcutSnippetSupportsTable } from './shortcutSnippet';
 
 export type ShortcutPlatform = 'mac' | 'other';
 export type ShortcutContext = 'global' | 'editor' | 'table' | 'native';
