@@ -8,6 +8,7 @@ import {
   projectFixedChromeGeometry
 } from '../fixedChromeGeometry';
 import { measureFixedContainingBlockMapping } from '../fixedChromeDomGeometry';
+import { tableColumnResizeHighlightPrefix } from '../tableColumnResizeHandle';
 
 export type CodeMirrorDomTableStickyHeaderAdapterOptions = TableStickyHeaderAdapterOptions & {
   readonly policy: TableStickyHeaderPolicy;
@@ -313,7 +314,7 @@ export function createCodeMirrorDomTableStickyHeaderAdapter(
         .filter((declaration) => declaration &&
           !declaration.startsWith('--meo-html-table-sticky-top:') &&
           !declaration.startsWith('--meo-html-table-sticky-left:') &&
-          !declaration.startsWith('--meo-table-resize-column-'))
+          !declaration.startsWith(tableColumnResizeHighlightPrefix))
         .sort()
         .join(';');
       const ancestorObserver = new MutationObserver((records) => {

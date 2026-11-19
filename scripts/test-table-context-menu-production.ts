@@ -664,6 +664,9 @@ async function main(): Promise<void> {
       }
     };
     const resizeHandle = '.meo-md-html-table:not(.meo-md-html-table-sticky-table) tbody td:first-child > .meo-md-html-table-column-resize-handle';
+    await page.mouse.move(850, 580);
+    assert.equal(await page.$eval(resizeHandle, handle => getComputedStyle(handle, '::after').content), 'none',
+      'the idle divider must not draw the resize guide');
     await page.hover(resizeHandle);
     const resizeAffordance = await page.$eval(resizeHandle, (handle) => {
       const style = getComputedStyle(handle, '::after');
@@ -799,9 +802,9 @@ async function main(): Promise<void> {
     assert.equal(result.tableUsesNormalContentLeft, true, 'the table must not move right to reserve trigger space');
     assert.equal(result.menuInsideViewport, true, 'the menu must remain inside the viewport');
     assert.deepEqual(resizeAffordance, {
-      content: 'none',
+      content: '""',
       cursor: 'col-resize'
-    }, 'table boundaries must remain resizable without drawing a blue guide');
+    }, 'the hovered divider must show the guide and retain the resize cursor');
     assert.ok(result.leadingControlCenterDelta <= 0.5, `close control is not centered between border and separator: ${result.leadingControlCenterDelta}px`);
     assert.ok(result.trailingControlCenterDelta <= 0.5, `page control is not centered between separator and border: ${result.trailingControlCenterDelta}px`);
     assert.equal(result.floating, 'absolute');

@@ -11,6 +11,7 @@ import {
   requestLiveInputDerivedWorkOnFrame
 } from './liveInputDerivedWork';
 import { isExternalDocumentPresentation } from './externalDocumentPresentation';
+import { tableColumnResizeHighlightProperty } from './tableColumnResizeHandle';
 import { planAutomaticTableWidths } from '../application/automaticTableWidths';
 
 export type TableColumnWidthAdapter = {
@@ -83,20 +84,7 @@ const handleSelector = '[data-table-resize-column]';
 const projectionEventName = 'meo-table-column-width-projected';
 const columnPermutationEventName = 'meo-table-column-permutation';
 const resizingClassName = 'meo-table-column-resizing';
-
-function columnHighlightProperty(column: string | number): string {
-  return `--meo-table-resize-column-${column}`;
-}
-
-export function createTableColumnResizeHandle(column: number): HTMLSpanElement {
-  const handle = document.createElement('span');
-  handle.className = 'meo-md-html-table-column-resize-handle';
-  handle.dataset.tableResizeColumn = String(column);
-  handle.setAttribute('aria-hidden', 'true');
-  // Cloned header cells and newly mounted rows inherit the same column highlight.
-  handle.style.setProperty('--meo-table-resize-highlight', `var(${columnHighlightProperty(column)}, none)`);
-  return handle;
-}
+const fixedWidthClassName = 'meo-table-column-width-fixed';
 
 const preferredDefaultColumnWidth = (table: HTMLTableElement): number => {
   const value = Number.parseFloat(table.dataset.tablePreferredColumnWidth ?? '');
@@ -306,6 +294,7 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
   const renderStickyColumns = (table: HTMLTableElement, widths: readonly number[]): void => {
     const stickyTable = stickyTableFor(table);
     if (!stickyTable) return;
+    stickyTable.classList.toggle(fixedWidthClassName, true);
     stickyTable.style.width = `${widths.reduce((sum, width) => sum + width, 0)}px`;
     stickyTable.style.maxWidth = 'none';
     stickyTable.style.minWidth = '0';
@@ -322,6 +311,7 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
   };
 
   const render = (table: HTMLTableElement, widths: readonly number[], totalWidth: number): void => preserveLayout(table, () => {
+    table.classList.toggle(fixedWidthClassName, true);
     table.style.width = `${totalWidth}px`;
     table.style.maxWidth = 'none';
     table.style.minWidth = '0';
@@ -335,6 +325,7 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
   });
 
   const reset = (table: HTMLTableElement): void => preserveLayout(table, () => {
+    table.classList.toggle(fixedWidthClassName, false);
     table.style.width = '';
     table.style.maxWidth = '';
     table.style.minWidth = '';
@@ -626,12 +617,12 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
     };
     const highlight = (column: string | undefined) => {
       if (highlightedColumn === column) return;
-      if (highlightedColumn !== undefined) handleRoot.style.removeProperty(columnHighlightProperty(highlightedColumn));
+      if (highlightedColumn !== undefined) handleRoot.style.removeProperty(tableColumnResizeHighlightProperty(highlightedColumn));
       highlightedColumn = column;
       if (column === undefined) {
         table.ownerDocument.removeEventListener('pointerover', updateHover, true);
       } else {
-        handleRoot.style.setProperty(columnHighlightProperty(column), '""');
+        handleRoot.style.setProperty(tableColumnResizeHighlightProperty(column), '""');
         // A replaced floating header can lose its pointerout before it reaches the shell.
         table.ownerDocument.addEventListener('pointerover', updateHover, true);
       }

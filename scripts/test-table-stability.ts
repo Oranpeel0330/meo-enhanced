@@ -375,7 +375,8 @@ async function main() {
       const lineNumberRightDelta = regularLineNumber && tableLineNumber
         ? textRight(tableLineNumber) - textRight(regularLineNumber)
         : null;
-      const firstCellText = document.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
+      const firstCell = document.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
+      const firstCellText = firstCell ? document.createTreeWalker(firstCell, NodeFilter.SHOW_TEXT).nextNode() : null;
       const lineNumberTextRange = tableLineNumber ? document.createRange() : null;
       const firstCellTextRange = firstCellText ? document.createRange() : null;
       if (tableLineNumber && lineNumberTextRange) lineNumberTextRange.selectNodeContents(tableLineNumber);
@@ -655,7 +656,6 @@ async function main() {
       const unorderedMarkerColor = getComputedStyle(listPreview.querySelector(':scope > ul > li')!, '::marker').color;
       const orderedListItem = listPreview.querySelector<HTMLElement>(':scope > ul > li > ol > li');
       const orderedMarkerColor = orderedListItem ? getComputedStyle(orderedListItem, '::marker').color : '';
-      document.querySelector<HTMLTextAreaElement>('tbody textarea')!.focus();
       const renderedListState = {
         topLevelItems: listPreview.querySelectorAll(':scope > ul > li').length,
         nestedOrderedItems: listPreview.querySelectorAll(':scope > ul > li > ol > li').length,
@@ -665,8 +665,12 @@ async function main() {
         inlineCodeText: listPreview.querySelector('code')?.textContent ?? '',
         text: listPreview.textContent ?? '',
         unorderedMarkerColor,
-        orderedMarkerColor,
-        editingPreviewVisibility: getComputedStyle(listPreview).visibility
+        orderedMarkerColor
+      };
+      document.querySelector<HTMLTextAreaElement>('tbody textarea')!.focus();
+      const editingListState = {
+        renderedListVisibility: getComputedStyle(listPreview.querySelector('ul')!).visibility,
+        activeSource: listPreview.querySelector('.meo-md-table-active-source-line .meo-md-table-source-body')?.textContent
       };
       listEditor.destroy();
 
@@ -1303,6 +1307,7 @@ async function main() {
         alignmentBeforeShift,
         alignmentAfterShift,
         renderedListState,
+        editingListState,
         nestedListIndentState,
         whitespaceState,
         continuedUnorderedValue,
@@ -1536,7 +1541,8 @@ async function main() {
       result.renderedListState.inlineCodeText !== 'literal<br>code' ||
       result.renderedListState.unorderedMarkerColor !== 'rgb(121, 184, 255)' ||
       result.renderedListState.orderedMarkerColor !== 'rgb(121, 184, 255)' ||
-      result.renderedListState.editingPreviewVisibility !== 'hidden'
+      result.editingListState.renderedListVisibility !== 'visible' ||
+      result.editingListState.activeSource !== 'tail `literal<br>code`'
     ) {
       failures.push(`table cell list rendering was incorrect: ${JSON.stringify(result.renderedListState)}`);
     }

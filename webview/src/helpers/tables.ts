@@ -3,7 +3,7 @@ import { isMarkdownTableDelimiter } from '../../../src/shared/markdownContentRul
 import { markdownTaskContentPrefix } from '../../../src/foundation/markdownTaskList';
 import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
-import { createTableColumnResizeHandle } from '../editor/tableColumnWidthAdapter';
+import { createTableColumnResizeHandle } from '../editor/tableColumnResizeHandle';
 import { createTableRowWindow, type TableRowWindow } from '../editor/tableRowWindow';
 import { blockInsertion, type MarkdownInputContext } from '../editor/blockInsertion';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';

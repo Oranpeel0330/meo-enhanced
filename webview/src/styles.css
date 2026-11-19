@@ -7371,11 +7371,17 @@ html[data-editor-appearance='dark'] body.vscode-dark
 
 .cm-editor .meo-md-html-table-cell-list {
   --meo-table-default-list-indent: 1.5em;
+  --meo-table-list-padding: max(var(--meo-table-list-indent, var(--meo-table-default-list-indent)),
+    calc((var(--meo-table-list-digits, 0) + 1) * 1ch + 0.45em));
   margin: 0;
-  padding-inline-start: min(max(0px, calc(100% - 1ch)),
-    max(var(--meo-table-list-indent, var(--meo-table-default-list-indent)),
-      calc((var(--meo-table-list-digits, 0) + 1) * 1ch + 0.45em)));
+  padding-inline-start: var(--meo-table-list-padding);
   text-align: left;
+}
+
+/* Natural column sizing includes source indentation. Once columns have a
+   fixed width, keep room for at least one content character. */
+.cm-editor :where(.meo-table-column-width-fixed) .meo-md-html-table-cell-list {
+  padding-inline-start: min(max(0px, calc(100% - 1ch)), var(--meo-table-list-padding));
 }
 
 .cm-editor .meo-md-html-table-cell-list .meo-md-html-table-cell-list {
