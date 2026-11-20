@@ -37,6 +37,11 @@ export function codeMirrorDocumentText(text: DocumentText): Text | string {
   return text instanceof CodeMirrorDocumentSnapshot ? text.value : typeof text === 'string' ? text : text.toString();
 }
 
+/** Editor and Session snapshots already carry the source line count. */
+export function documentSnapshotLineCount(text: DocumentText): number | null {
+  return text instanceof CodeMirrorDocumentSnapshot ? text.value.lines : null;
+}
+
 class CodeMirrorDocumentEdit implements DocumentTextEdit {
   private cachedChanges: DocumentTextEdit['changes'] | undefined;
   readonly before: DocumentTextSnapshot;

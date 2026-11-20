@@ -184,6 +184,47 @@ try {
     assert.deepEqual(errors, [], 'retiring table controls must not read layout during an editor update');
     console.log(`Table disposal preserved current selection and statistics (${large ? 'bounded' : 'ordinary'}/${transition})`);
   }
+  const editingSource = 'Local paragraph\n\n' + 'Distant paragraph\n\n'.repeat(4500);
+  await page.evaluate(text => (window as any).mountStatistics(text), editingSource);
+  await settle(9002, 0, false, 1);
+  await page.evaluate(() => {
+    const scope = window as any;
+    scope.holdNextStatistics = true;
+    const view = scope.editor.view;
+    view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+    view.focus();
+  });
+  await page.waitForFunction(() => typeof (window as any).releaseStatistics === 'function');
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.sendCharacter(' extra');
+  const edited = editingSource.replace('Local paragraph', 'Local paragraph extra');
+  assert.ok(await page.evaluate(() => (window as any).editor.getText()) === edited,
+    'the first edit must reach the document while the statistics request is still held');
+  await page.keyboard.down(modifier);
+  await page.keyboard.press('z');
+  await page.keyboard.up(modifier);
+  await page.waitForFunction(() => (window as any).editor.view.state.doc.line(1).text === 'Local paragraph', { timeout: 2500 });
+  assert.ok(await page.evaluate(() => (window as any).editor.getText()) === editingSource,
+    'undo must complete while statistics is still held');
+  await page.keyboard.down(modifier);
+  if (process.platform === 'darwin') {
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('Z');
+    await page.keyboard.up('Shift');
+  } else {
+    await page.keyboard.press('y');
+  }
+  await page.keyboard.up(modifier);
+  await page.waitForFunction(() => (window as any).editor.view.state.doc.line(1).text === 'Local paragraph extra', { timeout: 2500 });
+  assert.ok(await page.evaluate(() => (window as any).editor.getText()) === edited,
+    'redo must complete while statistics is still held');
+  await page.evaluate(() => (window as any).releaseStatistics());
+  await settle(9003, 0, false, 1);
+  const requests = await page.evaluate(() => (window as any).statisticsRequests);
+  assert.equal(requests.filter((request: { initial: boolean }) => request.initial).length, 1,
+    'only the initial statistics request transports the full source');
+  assert.deepEqual(requests.at(-1).changes, [{ from: 15, to: 15, insert: ' extra' }],
+    'pending edits and history fold into a patch against the worker revision');
   assert.deepEqual(errors, []);
   console.log(`Document statistics drag matrix passed (${assertions} assertions, ${statisticsCases.length} content cases)`);
 } finally { await closeTestBrowser(browser); server.stop(true); }

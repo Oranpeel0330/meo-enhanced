@@ -1,15 +1,25 @@
 import assert from 'node:assert/strict';
 import { mock } from 'bun:test';
-import { createDocumentStatisticsIndex as createIndex } from '../webview/src/adapters/documentStatisticsIndex';
+import { createDocumentStatisticsIndex as createIndex, type StatisticsBlockCache } from '../webview/src/adapters/documentStatisticsIndex';
 import { createDocumentStatisticsReporter } from '../webview/src/adapters/documentStatistics';
+import { maximumStatisticsBlockLength, maximumStatisticsDocumentLength } from '../webview/src/application/documentStatisticsWork';
 import { markdownLanguage } from '@codemirror/lang-markdown';
+import { DocInput } from '@codemirror/language';
+import { ChangeSet, Text } from '@codemirror/state';
+import { TreeFragment, type ChangedRange } from '@lezer/common';
 import type { MarkdownParser } from '@lezer/markdown';
 import { inlineMarkdownExtensions } from '../webview/src/helpers/inlineMarkdownParser';
 import { decodeWebviewToHostMessage } from '../src/protocol/messages';
+import type { DocumentTextSnapshot } from '../src/foundation/documentSnapshot';
 import { statisticsCases } from './document-statistics-cases';
 
 const grammar = (markdownLanguage.parser as MarkdownParser).configure(inlineMarkdownExtensions);
-const createDocumentStatisticsIndex = (text: string) => createIndex(text, grammar);
+const createDocumentStatisticsIndex = (text: string) => {
+  const doc = Text.of(text.split('\n'));
+  const index = createIndex(doc, grammar.parse(new DocInput(doc)));
+  assert.ok(index, 'statistics fixture must fit the automatic budget');
+  return index;
+};
 const stats = (text: string) => createDocumentStatisticsIndex(text)([], 1);
 for (const c of statisticsCases) assert.equal(stats(c.source).words, c.words, c.name);
 assert.equal(stats('[链接][id]\n\n[id]: https://example.test').words, 2, 'reference label and definition are hidden');
@@ -48,6 +58,10 @@ assert.equal(index([], null).line, null);
 assert.equal(decodeWebviewToHostMessage({ type: 'documentStatistics', statistics: stats(text) })?.type, 'documentStatistics');
 assert.equal(decodeWebviewToHostMessage({ type: 'documentStatistics', statistics: { ...stats(text), line: 999 } }), null);
 assert.equal(decodeWebviewToHostMessage({ type: 'documentStatistics', statistics: { ...stats(text), selectedWords: Infinity } }), null);
+const limited = { lines: 862_457, line: 1322, wordCountStatus: 'limited' } as const;
+assert.deepEqual(decodeWebviewToHostMessage({ type: 'documentStatistics', statistics: limited }),
+  { type: 'documentStatistics', statistics: limited });
+assert.equal(decodeWebviewToHostMessage({ type: 'documentStatistics', statistics: { ...limited, line: 862_458 } }), null);
 
 const items: any[] = [];
 mock.module('vscode', () => ({ StatusBarAlignment: { Right: 2 }, workspace: { onDidChangeConfiguration() { return { dispose() {} }; } }, window: { createStatusBarItem() {
@@ -66,6 +80,9 @@ a.active = false; b.active = true; a.listener(); b.listener();
 assert.equal(items[0].visible, false); assert.equal(items[1].visible, true);
 assert.match(items[1].text, /Words 2/);
 second.update(index([], null)); assert.match(items[1].text, /^1 lines/);
+second.update(limited); assert.match(items[1].text, /^Ln 1,322\/862,457 · Word count unavailable$/);
+a.active = true; a.listener(); first.update(limited);
+assert.match(items[0].text, /^行 1,322\/862,457 · 字数暂不可用$/);
 second.update(null); assert.equal(items[1].visible, false);
 first.dispose(); second.dispose(); assert.ok(items.every(i => i.disposed));
 const large = createDocumentStatisticsIndex('Hello 世界\n'.repeat(20_000));
@@ -81,7 +98,84 @@ assert.deepEqual(mixedIndex([
   { from: wordStart + 9, to: wordStart + 11 }
 ], 2), {
   words: 16_385, selectedWords: 2, hasSelection: true, lines: 3, line: 2, characters: mixed.length - 1
-}, 'selections crossing a span chunk still deduplicate formatted words and count supplementary characters');
+}, 'formatted words are deduplicated and supplementary characters counted');
+
+// A known formatting boundary and multiple selections across it must keep
+// exact totals even as the underlying Markdown tree is reused after an edit.
+const blockSource = 'he**ll**o 世界\n\n'.repeat(1024);
+const original = Text.of(blockSource.split('\n'));
+const originalTree = grammar.parse(new DocInput(original));
+let cacheWrites = 0;
+const cache: StatisticsBlockCache = new WeakMap();
+const remember = cache.set.bind(cache);
+cache.set = (key, summary) => { cacheWrites++; return remember(key, summary); };
+assert.equal(createIndex(original, originalTree, cache)?.([], 1).words, 3072);
+assert.ok(cacheWrites > 1000, 'the grouped fixture must initially populate its block summaries');
+const at = original.line(1025).to;
+const update = ChangeSet.of({ from: at, insert: ' Added' }, original.length);
+const edited = update.apply(original);
+const changes: ChangedRange[] = [];
+update.iterChangedRanges((fromA, toA, fromB, toB) => changes.push({ fromA, toA, fromB, toB }));
+const fragments = TreeFragment.applyChanges(TreeFragment.addTree(originalTree), changes);
+const editedTree = grammar.parse(new DocInput(edited), fragments);
+cacheWrites = 0;
+const updated = createIndex(edited, editedTree, cache);
+assert.ok(updated);
+assert.ok(cacheWrites > 0 && cacheWrites < 16, 'a local edit must reuse the distant paragraph summaries');
+assert.equal(updated([], 513).words, 3073);
+const multiSelection = [{ from: 2, to: at + 2 }, { from: at - 1, to: at + 6 }];
+assert.deepEqual(updated(multiSelection, 513), createDocumentStatisticsIndex(edited.toString())(multiSelection, 513));
+assert.equal(updated([{ from: 0, to: edited.length }], 1).selectedWords, 3073);
+const comment = ChangeSet.of([
+  { from: original.line(1025).from, insert: '<!--\n' },
+  { from: original.line(1027).to, insert: '\n-->' }
+], original.length);
+const commented = comment.apply(original);
+const commentChanges: ChangedRange[] = [];
+comment.iterChangedRanges((fromA, toA, fromB, toB) => commentChanges.push({ fromA, toA, fromB, toB }));
+const commentTree = grammar.parse(new DocInput(commented), TreeFragment.applyChanges(TreeFragment.addTree(originalTree), commentChanges));
+assert.equal(createIndex(commented, commentTree, cache)?.([], 1).words, 3066,
+  'a structural edit invalidates the earlier summaries inside the comment');
+const singleBlock = Text.of(['x'.repeat(maximumStatisticsBlockLength + 1)]);
+assert.equal(createIndex(singleBlock, grammar.parse(new DocInput(singleBlock))), null, 'a giant block must yield');
+
+let sourceCopies = 0, workerLoads = 0;
+const oversized = {
+  length: maximumStatisticsDocumentLength + 1,
+  toString() { sourceCopies++; throw new Error('Oversized statistics must not flatten the document'); }
+} as DocumentTextSnapshot;
+let oversizedReads = 0;
+let oversizedReporter!: ReturnType<typeof createDocumentStatisticsReporter>;
+const priorFetch = globalThis.fetch;
+const priorDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+Object.defineProperty(globalThis, 'document', { configurable: true,
+  value: { body: { dataset: { meoStatisticsWorkerSrc: 'about:blank' } } } });
+globalThis.fetch = Object.assign(async () => {
+  workerLoads++;
+  throw new Error('Oversized statistics must not fetch the worker');
+}, { preconnect: priorFetch.preconnect });
+try {
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Oversized statistics did not publish its line position')), 2000);
+    oversizedReporter = createDocumentStatisticsReporter(() => {
+      oversizedReads++;
+      return { text: oversized, lines: limited.lines, line: limited.line, selections: [] };
+    }, message => {
+      clearTimeout(timeout);
+      try { assert.deepEqual(message.statistics, limited); resolve(); }
+      catch (error) { reject(error); }
+    });
+    oversizedReporter.schedule();
+  });
+} finally {
+  oversizedReporter.dispose();
+  globalThis.fetch = priorFetch;
+  if (priorDocument) Object.defineProperty(globalThis, 'document', priorDocument);
+  else Reflect.deleteProperty(globalThis, 'document');
+}
+assert.equal(oversizedReads, 1);
+assert.equal(sourceCopies, 0);
+assert.equal(workerLoads, 0);
 const originalIndexOf = String.prototype.indexOf;
 for (const header of ['StatisticsScan', 'StatisticsScan | text']) {
   const paragraph = header + '\n' + 'Hello 世界\n'.repeat(20_000);

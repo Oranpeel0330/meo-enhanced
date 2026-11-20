@@ -74,7 +74,7 @@ import { createMenuSwitch } from './adapters/menuSwitch';
 import { createCodePaletteWebviewAdapter } from './adapters/codePaletteWebviewAdapter';
 import { createExportWebviewAdapter } from './adapters/exportWebviewAdapter';
 import { createDocumentSessionWebviewAdapter } from './adapters/documentSessionWebviewAdapter';
-import { codeMirrorDocumentText } from './adapters/documentSnapshot';
+import { codeMirrorDocumentText, documentSnapshotLineCount } from './adapters/documentSnapshot';
 import { createDocumentSaveFlushWebviewAdapter } from './adapters/documentSaveFlushWebviewAdapter';
 import { createPreviewWebviewAdapter } from './adapters/previewWebviewAdapter';
 import { createAppearanceWebviewAdapter } from './adapters/appearanceWebviewAdapter';
@@ -3029,11 +3029,13 @@ const documentStatistics = createDocumentStatisticsReporter(() => {
   const mode = getActiveEditorMode();
   if (mode === 'preview' ? !previewController.isReadingSurfaceReady()
     : !editor || !editorInteractive || editorLoadingPresentation.pending) return null;
-  const text = documentSessionAdapter.readCurrentText() ?? pendingInitialText;
+  const text = documentSessionAdapter.readCurrentText();
   if (text === null) return null;
+  const lines = documentSnapshotLineCount(text);
+  if (lines === null) return null;
   const selection = mode === 'preview' || !editor
     ? { selections: [], line: null } : editor.readStatisticsSelection();
-  return { text, ...selection };
+  return { text, lines, ...selection };
 }, message => vscode.postMessage(message));
 
 const documentCopyTransport = createDocumentCopyTransport({
@@ -3200,6 +3202,7 @@ const shortcutHandlerContext: ShortcutHandlerContext = {
 
 const handleLocalEditorChange = (edit: DocumentTextEdit) => {
   documentSessionAdapter.localDraftChanged(edit);
+  documentStatistics.recordEdit(edit);
   scheduleDocumentDerivedUiRefresh(edit.after);
   if (isPreviewSurfaceVisible()) previewAdapter.scheduleVisibleRefresh(edit.after);
 };
@@ -3899,7 +3902,11 @@ window.addEventListener('message', (event) => {
 
   queueMicrotask(() => { if (settingsWindow?.isOpen()) settingsWindow.present(); });
   if (message.type === 'webviewVisibilityResult') { readingLayout.accept(message); return; }
-  if (message.type === 'webviewVisibilityChanged') { readingLayout.refresh(); return; }
+  if (message.type === 'webviewVisibilityChanged') {
+    documentStatistics.setVisible(message.visible);
+    readingLayout.refresh();
+    return;
+  }
   if (message.type === 'editorLineHeightChanged') { applyEditorLineHeight(message.value); return; }
   if (message.type === 'uiLanguageChanged') { acceptUiLanguageSettings(message); return; }
   if (message.type === 'editorMouseWheelZoomChanged') { editorFontWheel.flush(); editorMouseWheelZoom = message.enabled; editorFontWheel.refresh(); return; }
