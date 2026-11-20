@@ -2,6 +2,10 @@ import type { DocumentText } from '../../../src/foundation/documentSnapshot';
 import type { DocumentStatisticsMessage } from '../../../src/protocol/documentStatistics';
 import type { StatisticsRequest, StatisticsSelection } from './documentStatisticsIndex';
 
+const defaultStatisticsTimeoutMs = 10_000;
+const largeStatisticsTimeoutMs = 30_000;
+const largeStatisticsTextLength = 8_000_000;
+
 export function createDocumentStatisticsReporter(
   read: () => { text: DocumentText; selections: StatisticsSelection[]; line: number | null; hasSelection?: boolean } | null,
   post: (message: DocumentStatisticsMessage) => void
@@ -46,7 +50,10 @@ export function createDocumentStatisticsReporter(
       const text = state.text !== sentText ? state.text.toString() : undefined;
       worker.postMessage({ id, text, selections: state.selections, line: state.line, hasSelection: state.hasSelection } satisfies StatisticsRequest);
       sentText = state.text; busy = true;
-      deadline = setTimeout(fail, 10_000);
+      // A full index of a very large revision can take longer than a selection
+      // lookup or an ordinary rebuild, even when it fits comfortably in memory.
+      deadline = setTimeout(fail, text !== undefined && text.length >= largeStatisticsTextLength
+        ? largeStatisticsTimeoutMs : defaultStatisticsTimeoutMs);
     } catch { if (!disposed) fail(); }
   };
   const schedule = () => { if (disposed) return; generation++; clearTimeout(timer); timer = setTimeout(() => void run(), 180); };

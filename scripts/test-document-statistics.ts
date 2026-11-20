@@ -71,6 +71,17 @@ first.dispose(); second.dispose(); assert.ok(items.every(i => i.disposed));
 const large = createDocumentStatisticsIndex('Hello 世界\n'.repeat(20_000));
 assert.equal(large([], 1).words, 60_000);
 assert.equal(large([{ from: 0, to: 5 }], 1).selectedWords, 1);
+const prefix = '字'.repeat(16_383) + '\r\n';
+const mixed = `${prefix}he**ll**o𠀀\r\n`;
+const mixedIndex = createDocumentStatisticsIndex(mixed);
+const wordStart = prefix.length;
+assert.deepEqual(mixedIndex([
+  { from: wordStart, to: wordStart + 2 },
+  { from: wordStart + 4, to: wordStart + 6 },
+  { from: wordStart + 9, to: wordStart + 11 }
+], 2), {
+  words: 16_385, selectedWords: 2, hasSelection: true, lines: 3, line: 2, characters: mixed.length - 1
+}, 'selections crossing a span chunk still deduplicate formatted words and count supplementary characters');
 const originalIndexOf = String.prototype.indexOf;
 for (const header of ['StatisticsScan', 'StatisticsScan | text']) {
   const paragraph = header + '\n' + 'Hello 世界\n'.repeat(20_000);

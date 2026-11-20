@@ -8,6 +8,10 @@ export type StatisticsRequest = {
   id: number; text?: string; selections: StatisticsSelection[]; line: number | null; hasSelection?: boolean;
 };
 
+const wordSpanChunkSize = 16_384;
+const wordSpanStride = 3;
+const wordSpanFrom = 0, wordSpanTo = 1, wordSpanWord = 2;
+
 /** Worker-owned source positions keep partial selections consistent with the total. */
 export function createDocumentStatisticsIndex(text: string, grammar: Pick<MarkdownParser, 'parse'>) {
   const replacements: (StatisticsSelection & { value: string })[] = [];
@@ -65,7 +69,15 @@ export function createDocumentStatisticsIndex(text: string, grammar: Pick<Markdo
     cursor = replacement.to;
   }
   append(cursor, text.length, text.slice(cursor));
-  const spans: (StatisticsSelection & { word: number })[] = [];
+  replacements.length = 0;
+  const projectedText = chunks.join('');
+  chunks.length = 0;
+  // CJK text can have a word span for nearly every source character. Packed
+  // chunks avoid millions of objects and duplicating the index as it grows.
+  const spans: Uint32Array[] = [];
+  let spanCount = 0;
+  const spanValue = (index: number, field: number) =>
+    spans[Math.floor(index / wordSpanChunkSize)]![index % wordSpanChunkSize * wordSpanStride + field]!;
   // Each CJK character is a word; other scripts use letter/number runs.
   const cjk = '[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}]';
   const excluded = `${cjk}|[0-9]\\uFE0F?\\u20E3`;
@@ -75,30 +87,48 @@ export function createDocumentStatisticsIndex(text: string, grammar: Pick<Markdo
   // Keycap emoji contain ASCII digits and must not become numeric words.
   const words = new RegExp(`${cjk}\\p{M}*|${start}${other}*(?:['’]${start}${other}*)*`, 'gu');
   let wordCount = 0, runIndex = 0;
-  for (const match of chunks.join('').matchAll(words)) {
+  for (const match of projectedText.matchAll(words)) {
     const end = match.index + match[0].length;
     while (runs[runIndex] && runs[runIndex]!.end <= match.index) runIndex++;
     for (let i = runIndex; runs[i] && runs[i]!.start < end; i++) {
       const run = runs[i]!;
       const from = run.atomic ? run.from : run.from + Math.max(0, match.index - run.start);
       const to = run.atomic ? run.to : run.from + Math.min(run.end, end) - run.start;
-      spans.push({ from, to, word: wordCount });
+      const offset = spanCount % wordSpanChunkSize * wordSpanStride;
+      if (offset === 0) spans.push(new Uint32Array(wordSpanChunkSize * wordSpanStride));
+      const chunk = spans[spans.length - 1]!;
+      chunk[offset + wordSpanFrom] = from;
+      chunk[offset + wordSpanTo] = to;
+      chunk[offset + wordSpanWord] = wordCount;
+      spanCount++;
     }
     wordCount++;
   }
-  const lines = text.split(/\r\n|\r|\n/).length;
-  const characters = Array.from(text).length;
+  const tailLength = spanCount % wordSpanChunkSize * wordSpanStride;
+  if (tailLength) spans[spans.length - 1] = spans[spans.length - 1]!.slice(0, tailLength);
+  runs.length = 0;
+  let lines = 1, characters = text.length;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit === 13 || unit === 10) {
+      lines++;
+      if (unit === 13 && text.charCodeAt(i + 1) === 10) i++;
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) { characters--; i++; }
+    }
+  }
   return (selections: readonly StatisticsSelection[], line: number | null,
     hasSelection = selections.some(s => s.to > s.from)): DocumentStatistics => {
     let selectedWords = 0, previousWord = -1;
     for (const range of [...selections].filter(s => s.to > s.from).sort((a, b) => a.from - b.from)) {
-      let low = 0, high = spans.length;
-      while (low < high) { const mid = (low + high) >>> 1; if (spans[mid]!.to <= range.from) low = mid + 1; else high = mid; }
+      let low = 0, high = spanCount;
+      while (low < high) { const mid = (low + high) >>> 1; if (spanValue(mid, wordSpanTo) <= range.from) low = mid + 1; else high = mid; }
       const start = low;
-      low = start; high = spans.length;
-      while (low < high) { const mid = (low + high) >>> 1; if (spans[mid]!.from < range.to) low = mid + 1; else high = mid; }
+      low = start; high = spanCount;
+      while (low < high) { const mid = (low + high) >>> 1; if (spanValue(mid, wordSpanFrom) < range.to) low = mid + 1; else high = mid; }
       if (low > start) {
-        const first = Math.max(spans[start]!.word, previousWord + 1), last = spans[low - 1]!.word;
+        const first = Math.max(spanValue(start, wordSpanWord), previousWord + 1), last = spanValue(low - 1, wordSpanWord);
         selectedWords += Math.max(0, last - first + 1); previousWord = Math.max(previousWord, last);
       }
     }
