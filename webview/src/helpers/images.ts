@@ -1,7 +1,7 @@
 import { EditorView, WidgetType } from '@codemirror/view';
 import type { ChangeDesc } from '@codemirror/state';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
-import { AppWindow, createElement, ExternalLink, Maximize2, RefreshCw, SquareArrowRightEnter } from 'lucide';
+import { AppWindow, createElement, Maximize2, RefreshCw } from 'lucide';
 import { getViewportController } from './viewportController';
 import { createImageResolutionTransport, type ImageResolutionTransport } from '../adapters/imageResolutionTransport';
 import { createClipboardImageSaveTransport, type ClipboardImageSaveTransport } from '../adapters/clipboardImageSaveTransport';
@@ -16,6 +16,7 @@ import { encodeMarkdownPath } from '../../../src/foundation/linkDestination';
 import { isWikiImageTarget, parseWikiReference, wikiImageSrc, wikiTargetFromImageSrc, WIKI_IMAGE_SCHEME } from '../../../src/foundation/wikiReference';
 import { openImageFullscreen, type ImageFullscreenViewer } from './imageFullscreen';
 import { getEnclosingSourceLinkHref, hrefFromSourceLinkNode, isPrimaryModifierPointerClick } from './linkNavigation';
+import { createLinkOpenIcon } from './linkOpenButton';
 
 const wikiImageIssues = new Map<string, string>();
 const wikiIssueRequests = new Map<string, number>();
@@ -611,7 +612,7 @@ export class ImageWidget extends WidgetType {
       openLink.dataset.tooltipLinkHref = this.linkUrl;
       openLink.dataset.tooltipKind = 'description';
       openLink.setAttribute('aria-label', isDocumentFragment ? strings.jumpWithinDocument : strings.openLink);
-      openLink.appendChild(createElement(isDocumentFragment ? SquareArrowRightEnter : ExternalLink, { width: 16, height: 16 }));
+      openLink.appendChild(createLinkOpenIcon(isDocumentFragment, 16));
       openLink.addEventListener('pointerdown', (event) => {
         event.preventDefault();
         event.stopPropagation();
