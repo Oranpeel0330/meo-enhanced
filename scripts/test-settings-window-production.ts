@@ -1888,7 +1888,19 @@ try {
   await page.click('[data-setting="lineHeight"] .appearance-typography-reset');
   assert.equal(await page.$eval(lineSpacing + ' output', el => el.textContent), '1.5 倍');
   await page.click('.settings-tab[data-tab="typing"]');
-  assert.equal(await page.$$eval('.settings-item', elements => elements.length), 16);
+  const typingSettingCount = Object.keys(defaultInputAssistance).length + 1; // Includes image storage.
+  assert.equal(await page.$$eval('.settings-item', elements => elements.length), typingSettingCount);
+  const pasteOptionsSwitch = '[data-setting="showPasteOptions"] [role="switch"]';
+  assert.equal(await page.$eval(pasteOptionsSwitch, e => e.getAttribute('aria-label')), '显示粘贴选项');
+  assert.equal(await page.$eval(pasteOptionsSwitch, e => e.getAttribute('aria-checked')), 'true');
+  await page.click(pasteOptionsSwitch);
+  await page.waitForFunction(() => (window as any).__preferences.input.showPasteOptions === false);
+  assert.deepEqual(await page.evaluate(() => {
+    const input = (window as any).__preferences.input;
+    return [input.pasteHtml, input.convertTables, input.pasteUrl];
+  }), [false, true, true], 'the menu switch does not change the default conversion choices');
+  await page.click(pasteOptionsSwitch);
+  await page.waitForFunction(() => (window as any).__preferences.input.showPasteOptions === true);
   const slashSwitch = '[data-setting="slash"] [role="switch"]';
   const slashAboveSwitch = '[data-setting="slashPreferAbove"] [role="switch"]';
   assert.equal(await page.$eval(slashAboveSwitch, e => e.getAttribute('aria-label')), '候选菜单优先在上方显示');
@@ -2468,7 +2480,7 @@ try {
         query: element.querySelector('.settings-item-title')!.textContent!,
         values: [...element.querySelectorAll('.settings-key, .image-location-mode-title, .image-naming-title, .image-location-field-label, .image-location-picker, .image-location-token')].map(control => control.getAttribute('aria-label') ?? control.textContent!)
       })));
-      assert.equal(items.length, tab === 'general' ? 10 : tab === 'appearance' ? 13 : tab === 'typing' ? 16 : editorCommandIds.length, 'search inventory includes every setting and command');
+      assert.equal(items.length, tab === 'general' ? 10 : tab === 'appearance' ? 13 : tab === 'typing' ? typingSettingCount : editorCommandIds.length, 'search inventory includes every setting and command');
       searchCases.push(...items.flatMap(item => [item.query, ...item.values].map(query => ({tab, id: item.id, query}))));
     }
     await page.click('.settings-close');
@@ -2483,7 +2495,8 @@ try {
     ['typing', 'pairMode', '自动闭合', 'auto close'], ['typing', 'skipMode', '跳出符号', 'overtype'],
     ['typing', 'deleteMode', '一起删除', 'paired deletion'], ['typing', 'lists', '清单', 'list continuation'],
     ['typing', 'convertTables', '制表符', 'TSV'], ['typing', 'pasteUrl', '地址栏', 'web address'],
-    ['typing', 'pasteHtml', '富文本', 'rich text'], ['typing', 'documentSuggestions', '锚点', 'backlink'],
+    ['typing', 'pasteHtml', '富文本', 'rich text'], ['typing', 'showPasteOptions', '仅保留文字', 'keep text only'],
+    ['typing', 'documentSuggestions', '锚点', 'backlink'],
     ['typing', 'html', '闭合标签', 'attribute'],
     ['typing', 'slash', '命令面板', 'command palette'], ['typing', 'emoji', '小黄脸', 'smiley'],
     ['typing', 'imageStorage', '自定义路径', 'image storage'],

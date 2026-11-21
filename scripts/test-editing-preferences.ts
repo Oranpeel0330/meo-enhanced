@@ -138,6 +138,10 @@ for (const [branch, action, required] of [
 assert.equal(defaults.input.selectionToolbar, true, 'existing users keep the selection toolbar by default');
 assert.equal(defaults.input.pasteHtml, false, 'HTML paste formatting is disabled by default');
 assert.equal(normalizeEditingPreferences(undefined).input.pasteHtml, false);
+const { showPasteOptions, ...olderInput } = defaults.input;
+assert.equal(showPasteOptions, true, 'paste options are shown by default');
+assert.equal(normalizeEditingPreferences({ input: olderInput }).input.showPasteOptions, true);
+assert.equal(normalizeEditingPreferences({ input: { ...olderInput, showPasteOptions: false } }).input.showPasteOptions, false);
 const { math: _math, ...beforeMath } = defaultInputAssistance;
 assert.equal(normalizeEditingPreferences({ input: beforeMath }).input.math, true, 'older preferences enable math completion');
 assert.equal(normalizeEditingPreferences({ input: { math: false } }).input.math, false);
@@ -371,6 +375,7 @@ const schema = JSON.parse(readFileSync('package.json', 'utf8')).contributes.conf
 assert.deepEqual(new Set(schema.properties.shortcuts.propertyNames.enum), new Set(editorCommandIds.filter(canBindCommand)));
 assert.deepEqual(schema.default, defaults);
 assert.equal(schema.properties.input.properties.pasteHtml.default, false);
+assert.equal(schema.properties.input.properties.showPasteOptions.default, true);
 
 let savedGlobal: Partial<EditingPreferences> | undefined;
 let savedWorkspace: Partial<EditingPreferences> | undefined;

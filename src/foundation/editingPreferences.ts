@@ -19,6 +19,7 @@ export type InputAssistance = {
   readonly skipMode: PairMode;
   readonly deleteMode: PairMode;
   readonly lists: boolean;
+  readonly showPasteOptions: boolean;
   readonly convertTables: boolean;
   readonly pasteUrl: boolean;
   readonly pasteHtml: boolean;
@@ -67,7 +68,8 @@ export type EditingPreferencesChange =
 
 export const defaultInputAssistance: InputAssistance = {
   selectionToolbar: true, wrapSelection: true, pairMode: 'smart', skipMode: 'smart', deleteMode: 'smart', lists: true,
-  convertTables: true, pasteUrl: true, pasteHtml: false, documentSuggestions: true, slash: true, slashPreferAbove: false, emoji: false, math: true, html: true
+  showPasteOptions: true, convertTables: true, pasteUrl: true, pasteHtml: false,
+  documentSuggestions: true, slash: true, slashPreferAbove: false, emoji: false, math: true, html: true
 };
 
 export function isEditorCommandId(value: unknown): value is EditorCommandId {

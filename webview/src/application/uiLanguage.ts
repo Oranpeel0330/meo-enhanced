@@ -184,6 +184,9 @@ export type UiStrings = Readonly<{
   copyImageFailed: string;
   copied: string;
   copy: string;
+  pasteOptions: string;
+  pasteKeepFormatting: string;
+  pasteKeepText: string;
   selectAllCode: string;
   all: string;
   codeLines: (count: number) => string;
@@ -504,6 +507,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     jumpToFootnoteReference: (number: number) => `Jump to footnote reference ${number}`,
     indentedCodeBlockLabel: 'Indented code block',
     copyCode: 'Copy source', copyImage: 'Copy as image', copyingImage: 'Copying image…', copiedImage: 'Image copied', copyImageFailed: 'Could not copy image. Try again.', copied: 'copied', copy: 'copy', selectAllCode: 'Select all code', all: 'all',
+    pasteOptions: 'Paste options', pasteKeepFormatting: 'Keep supported formatting', pasteKeepText: 'Keep text only',
     codeLines: (count: number) => `${count} lines`,
     showMoreCode: (count: number) => `Show ${count} more lines of code`,
     blockReadingArea: 'Block reading area. Enter to edit, arrow keys to leave.',
@@ -761,6 +765,7 @@ const CATALOG: Readonly<Record<UiLanguage, UiStrings>> = Object.freeze({
     jumpToFootnoteReference: (number: number) => `跳转到脚注引用 ${number}`,
     indentedCodeBlockLabel: '缩进代码块',
     copyCode: '复制源码', copyImage: '复制为图片', copyingImage: '正在复制图片…', copiedImage: '已复制图片', copyImageFailed: '无法复制图片，请重试。', copied: '已复制', copy: '复制', selectAllCode: '全选代码', all: '全选',
+    pasteOptions: '粘贴选项', pasteKeepFormatting: '保留常用格式', pasteKeepText: '仅保留文字',
     codeLines: (count: number) => `${count} 行`,
     showMoreCode: (count: number) => `显示其余 ${count} 行代码`,
     blockReadingArea: '块阅读区域，按 Enter 编辑，方向键离开',

@@ -21,6 +21,7 @@ import { nativeSymbolInput, planNativeHtmlCommentToggle } from './editor/nativeT
 import { canRunCustomEditorCommand, formatMultipleSelections, toggleHtmlComment, runEditorCommand, secondarySelections } from './editor/commands';
 import type { EditorCommandId } from '../../src/foundation/editingPreferences';
 import { pasteAssistance, insertPlainClipboardText } from './editor/pasteAssistance';
+import { createMarkdownContentParser } from '../../src/shared/markdownContentParser';
 import { ChangeSet, EditorState, Compartment, Prec, Transaction, StateEffect, type Annotation, type ChangeDesc, type ChangeSpec, type TransactionSpec, EditorSelection, type Extension, type SelectionRange, type Text } from '@codemirror/state';
 import { documentEdit, documentSnapshot } from './adapters/documentSnapshot';
 import type { DocumentText, DocumentTextEdit } from '../../src/foundation/documentSnapshot';
@@ -2318,7 +2319,10 @@ export function createEditor({
       inputAssistanceCompartment.of(inputAssistanceFacet.of(initialInputAssistance)),
       Prec.highest(htmlCommentEditing),
       Prec.highest(typingAssistance),
-      Prec.highest(pasteAssistance((view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text))),
+      Prec.highest(pasteAssistance(
+        (view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text),
+        createMarkdownContentParser().set({ linkify: false })
+      )),
       Prec.highest(createInputSuggestions({ inputContext, mathContext: getMathCompletionBody, requestLinks: requestLinkCandidates, currentHeadings: () => currentHeadingSuggestions(readDocumentTextProjection(view.state.doc)),
         openSettings: openInputSuggestionSettings,
         renderMathPreview: source => renderLatexMathToHtml(source, 'inline'),

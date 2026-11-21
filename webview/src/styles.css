@@ -8819,6 +8819,61 @@ textarea.settings-shortcut-field-input { resize: vertical; font-family: var(--me
 }
 html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-conflict, .settings-status) { color: var(--meo-ui-danger, #f48771); }
 
+.meo-paste-options {
+  position: fixed;
+  z-index: var(--meo-layer-document-popover);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  color: var(--meo-ui-text);
+  font: 12px/18px var(--meo-ui-font-family, system-ui, sans-serif);
+}
+.meo-paste-options-trigger, .meo-paste-options-menu {
+  box-sizing: border-box;
+  border: 1px solid var(--meo-ui-border-float);
+  border-radius: 6px;
+  box-shadow: var(--meo-ui-shadow);
+}
+.meo-paste-options-trigger {
+  background: var(--meo-ui-surface);
+  padding: 2px 7px;
+}
+.meo-paste-options-menu {
+  padding: 3px;
+  min-width: min(156px, 100%);
+  background: var(--meo-ui-surface-raised);
+}
+.meo-paste-options-menu[hidden] { display: none; }
+.meo-paste-options button {
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.meo-paste-options-menu button {
+  display: block;
+  width: 100%;
+  padding: 4px 8px 4px 25px;
+  border: 0;
+  border-radius: 3px;
+  text-align: start;
+  position: relative;
+  background: transparent;
+}
+.meo-paste-options-menu button[aria-checked="true"]::before {
+  content: "✓";
+  position: absolute;
+  inset-inline-start: 7px;
+}
+.meo-paste-options button:hover { background: var(--meo-ui-surface-hover); }
+.meo-paste-options button:focus-visible {
+  outline: 1px solid var(--meo-ui-focus);
+  outline-offset: -1px;
+  background: var(--meo-ui-surface-selected);
+}
+
 .meo-input-suggestions {
   --meo-suggestion-min-width: 288px;
   --meo-suggestion-width: 360px;
