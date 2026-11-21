@@ -49,7 +49,7 @@ export function sourceTablePaste(state: EditorState, payload: TableClipboardMatr
 export function createSourceTableCommandTarget(view: EditorView, initial: SourceTable, preserveViewport: (run: () => void) => void): TableCommandEditorTarget {
   return {
     view, identityKey: 'source-table', from: initial.from, isConnected: () => view.dom.isConnected && sourceTableAt(view.state)?.from === initial.from, preserveViewport,
-    buildAtomicCommandTransaction({ command }) {
+    buildAtomicCommandTransaction({ command, target }) {
       const table = sourceTableAt(view.state);
       if (!table || table.from !== initial.from) return { transaction: null, outcome: 'no-op' };
       const cells = table.matrix.cells.map(row => row.slice()); const alignments = table.matrix.alignments.slice(); let row = table.row, column = table.column;
@@ -58,6 +58,7 @@ export function createSourceTableCommandTarget(view: EditorView, initial: Source
         if (command === 'insert-row-above' && row === 0 || (cells.length + 1) * width > 10_000) return { transaction: null, outcome: 'no-op' };
         if (command === 'insert-row-below') row++;
         cells.splice(row, 0, Array<string>(width).fill(''));
+        if (target.focusInsertedRow) column = 0;
       } else if (command === 'delete-row') {
         if (row === 0 || cells.length <= 2) return { transaction: null, outcome: 'no-op' };
         cells.splice(row, 1); row = Math.min(row, cells.length - 1);

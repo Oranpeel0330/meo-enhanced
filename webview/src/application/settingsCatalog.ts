@@ -102,7 +102,7 @@ export const shortcutDescriptions: Partial<Record<EditorCommandId, readonly [str
   formatHtml: ['整理当前 HTML 片段或块状公式的缩进与换行；仅在块源码内生效。', 'Arrange indentation and line breaks in the current HTML fragment or formula block; available inside its source.'],
   copy: ['表格多格选区按行列复制，可粘贴到 Excel 等电子表格。', 'Copy selected table cells as rows and columns for pasting into spreadsheets such as Excel.'],
   plain: ['跳过富格式转换；合法 Markdown 仍按当前模式显示。', 'Bypass rich format conversion. Valid Markdown still displays according to the current mode.'],
-  tableNav: ['在表格内切换单元格；正文中按缩进规则处理。', 'Move between cells in a table. In prose, follow the indentation rules.'],
+  tableNav: ['在表格内切换单元格。Windows 上在末格按 Tab 新增一行。', 'Move between table cells. On Windows, Tab in the last cell adds a row.'],
   lineComment: ['注释当前行或选区涉及的完整行；在注释内执行可取消。', 'Comment the current line or all selected lines. Run inside a comment to remove its markers.'],
   selectionComment: ['注释所选文字；未选择时插入空注释。', 'Comment the selected text, or insert an empty comment at the cursor.'],
   copyCsv: ['复制选区或当前表格的单元格源码，以 CSV 编码。', 'Copy the cell source from the selection or current table, encoded as CSV.']
@@ -120,9 +120,11 @@ export const shortcutSections: Readonly<Record<string, readonly EditorCommandId[
   table: ['insertTable', 'tableNav', 'cellBreak', 'rowAbove', 'rowBelow', 'rowDelete', 'columnBefore', 'columnAfter', 'columnDelete', 'moveRowUp', 'moveRowDown', 'moveColumnLeft', 'moveColumnRight', 'alignLeft', 'alignCenter', 'alignRight', 'copyMarkdown', 'copyCsv', 'convert'],
   selection: ['selection', 'home', 'expandSelection', 'shrinkSelection', 'nextOccurrence', 'skipOccurrence', 'addCursor', 'splitCursors'],
   lines: ['lineComment', 'selectionComment', 'moveUp', 'moveDown', 'copyUp', 'copyDown', 'deleteLine', 'blankAbove', 'blankBelow'],
-  navigation: ['mode', 'preview', 'enter', 'tab', 'escape', 'delete']
+  navigation: ['mode', 'preview', 'openFileTree', 'resetWindowZoom', 'enter', 'tab', 'escape', 'delete']
 };
 export const commandTitles: Record<EditorCommandId, readonly [string, string]> = {
+  openFileTree: ['打开文件树', 'Open file tree'],
+  resetWindowZoom: ['恢复窗口实际大小', 'Reset window zoom'],
   formatHtml: ['格式化当前块', 'Format current block'],
   save: ['保存', 'Save'], saveAs: ['另存为…', 'Save as…'], undo: ['撤销', 'Undo'], redo: ['重做', 'Redo'], find: ['查找', 'Find'], replace: ['替换', 'Replace'], all: ['全选', 'Select all'], copy: ['复制', 'Copy'], cut: ['剪切', 'Cut'], paste: ['粘贴', 'Paste'], plain: ['粘贴为纯文本', 'Paste as plain text'],
   bold: ['粗体', 'Bold'], italic: ['斜体', 'Italic'], inlineCode: ['行内代码', 'Inline code'], strike: ['删除线', 'Strikethrough'], highlight: ['高亮', 'Highlight'], underline: ['下划线', 'Underline'], kbd: ['按键样式', 'Keyboard style'], link: ['链接', 'Link'], wikiLink: ['双链', 'Wiki link'], image: ['图片', 'Image'], inlineMath: ['行内公式', 'Inline math'], blockMath: ['块公式', 'Math block'],
@@ -256,6 +258,8 @@ export const shortcutSearchKeywords: Readonly<Record<EditorCommandId, SearchKeyw
   blankBelow: ['下面空行 后面空行', 'blank empty line after below'],
   mode: ['实时模式 源码模式 编辑模式', 'live source edit mode WYSIWYG'],
   preview: ['阅读模式 预览模式 查看渲染', 'reading preview rendered view mode'],
+  openFileTree: ['文件树 资源管理器 工作区 侧栏', 'file tree explorer workspace sidebar'],
+  resetWindowZoom: ['实际大小 窗口缩放 重置 缩放比例', 'actual size reset window zoom scale'],
   enter: ['回车 新行 继续列表', 'return enter new line continue list'],
   tab: ['制表符 缩进 导航 单元格', 'tab indentation navigation cells'],
   escape: ['退出 取消 关闭 弹窗', 'escape cancel close popup dismiss'],

@@ -25,11 +25,14 @@ export function createEditingPreferencesHost(options: {
     read: () => snapshot().preferences,
     snapshot,
     update(request: UpdateEditingPreferencesRequest): Promise<UpdatedEditingPreferencesResponse> {
+      // A remote extension host may run on a different OS from its Webview.
+      const platform = request.platform ?? options.platform;
+      const payload = JSON.stringify([platform, request.change]);
       const previous = completed.get(request.requestId);
-      if (previous) return previous.payload === JSON.stringify(request.change) ? previous.response : Promise.resolve({ type: 'updatedEditingPreferences', requestId: request.requestId, revision: snapshot().revision, result: { ok: false, error: { code: 'operation-failed', message: 'Request ID reused with a different change' } } });
+      if (previous) return previous.payload === payload ? previous.response : Promise.resolve({ type: 'updatedEditingPreferences', requestId: request.requestId, revision: snapshot().revision, result: { ok: false, error: { code: 'operation-failed', message: 'Request ID reused with a different change' } } });
       const response = tail.then(async (): Promise<UpdatedEditingPreferencesResponse> => {
         try {
-          const preferences = changeEditingPreferences(snapshot().preferences, request.change, options.platform);
+          const preferences = changeEditingPreferences(snapshot().preferences, request.change, platform);
           await options.write(preferences);
           const current = snapshot();
           return { type: 'updatedEditingPreferences', requestId: request.requestId, revision: current.revision, result: { ok: true, value: current.preferences } };
@@ -43,7 +46,7 @@ export function createEditingPreferencesHost(options: {
         }
       });
       tail = response;
-      completed.set(request.requestId, { payload: JSON.stringify(request.change), response });
+      completed.set(request.requestId, { payload, response });
       if (completed.size > 128) completed.delete(completed.keys().next().value!);
       return response;
     }

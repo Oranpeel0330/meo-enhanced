@@ -1,7 +1,7 @@
-import { commandContext, customShortcutActionAvailableAt, customShortcutActionCanContinue, customShortcutCanRunAt, defaultShortcuts, resolveShortcut,
-  shortcutFromStroke, type ShortcutLocation, type ShortcutPlatform, type ShortcutStroke } from '../../../src/application/editingPreferences';
+import { commandContext, customShortcutActionAvailableAt, customShortcutActionCanContinue, customShortcutCanRunAt, resolveShortcut,
+  shortcutPlatformFor, shortcutStrokeCandidates, type ShortcutLocation, type ShortcutPlatform, type ShortcutStroke } from '../../../src/application/editingPreferences';
 import type { CustomShortcut, CustomShortcutAction, EditorCommandId, ShortcutOverrides } from '../../../src/foundation/editingPreferences';
-const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+export const webviewShortcutPlatform = shortcutPlatformFor(navigator.platform);
 export const isPrimaryModifier = (event: KeyboardEvent): boolean => event.metaKey !== event.ctrlKey && (event.metaKey || event.ctrlKey);
 export const isShortcutKey = (event: KeyboardEvent, key: string, code: string): boolean => event.key.toLowerCase() === key || event.code === code;
 export { normalizeDocumentText as normalizeEol } from '../../../src/foundation/documentText';
@@ -15,24 +15,25 @@ export function createCustomShortcutMatcher() {
     match(event: KeyboardEvent, stroke: ShortcutStroke, rules: readonly CustomShortcut[], location: ShortcutLocation, mode: EditorMode,
       available?: (action: CustomShortcutAction) => boolean): CustomShortcut | 'waiting' | null {
       const eligible = (rule: CustomShortcut) => customShortcutCanRunAt(rule, location, mode, available);
-      const first = shortcutFromStroke(stroke);
+      const first = shortcutStrokeCandidates(stroke);
       if (pending && pending.rules === rules && pending.target === event.target && pending.location === location
         && pending.mode === mode && event.timeStamp - pending.at <= 1500) {
         if (['Control', 'Meta', 'Alt', 'Shift'].includes(event.key)) return null;
-        if (event.repeat && first === pending.first) return 'waiting';
-        const second = shortcutFromStroke(stroke, true);
+        if (event.repeat && first.includes(pending.first)) return 'waiting';
+        const second = shortcutStrokeCandidates(stroke, true);
         const prefix = pending.first;
-        const rule = rules.find(rule => rule.strokes[0] === prefix && rule.strokes[1] === second && eligible(rule));
+        const rule = rules.find(rule => rule.strokes[0] === prefix && second.includes(rule.strokes[1]) && eligible(rule));
         pending = null;
         if (rule) return event.repeat ? 'waiting' : rule;
       }
       pending = null;
-      if (!first) return null;
-      const candidates = rules.filter(rule => rule.strokes[0] === first && eligible(rule));
+      const matched = first.find(key => rules.some(rule => rule.strokes[0] === key && eligible(rule)));
+      if (!matched) return null;
+      const candidates = rules.filter(rule => rule.strokes[0] === matched && eligible(rule));
       const exact = candidates.find(rule => rule.strokes.length === 1);
       if (exact) return event.repeat ? 'waiting' : exact;
       if (!candidates.length) return null;
-      if (!event.repeat) pending = { first, at: event.timeStamp, rules, target: event.target, location, mode };
+      if (!event.repeat) pending = { first: matched, at: event.timeStamp, rules, target: event.target, location, mode };
       return 'waiting';
     }
   };
@@ -57,11 +58,12 @@ export interface ShortcutHandlerContext {
   requestPreview?: () => void | Promise<void>;
   requestPlainPaste?: () => void | Promise<void>;
   requestTableCopy?: (format: 'markdown' | 'csv') => void | Promise<void>;
+  requestWorkbenchAction?: (action: 'openFileTree' | 'resetWindowZoom') => void;
 }
 export const handleEditorShortcut = (event: KeyboardEvent, context: ShortcutHandlerContext): boolean => {
   const editor = context.editor;
   const matcher = context.customShortcutMatcher;
-  if (!editor || event.isComposing || event.keyCode === 229 || editor.view?.compositionStarted || event.getModifierState?.('AltGraph')) {
+  if (event.isComposing || event.keyCode === 229 || editor?.view?.compositionStarted || event.getModifierState?.('AltGraph')) {
     matcher?.cancel();
     return false;
   }
@@ -72,19 +74,19 @@ export const handleEditorShortcut = (event: KeyboardEvent, context: ShortcutHand
   if (targetElement) {
     if (targetElement.closest('[data-meo-settings]')) { matcher?.cancel(); return false; }
     const input = targetElement.closest('input, textarea, [contenteditable="true"]');
-    if (input && !editor.view?.dom.contains(input)) { matcher?.cancel(); return false; }
+    if (input && !editor?.view?.dom.contains(input)) { matcher?.cancel(); return false; }
   }
-  const editorFocused = editor.hasFocus();
-  const detached = context.editorSurfaceActive && (target as Node | null)?.nodeName === 'BODY';
+  const editorFocused = editor?.hasFocus() ?? false;
+  const detached = !!editor && context.editorSurfaceActive && (target as Node | null)?.nodeName === 'BODY';
   const editable = context.editorSurfaceActive && (editorFocused || detached);
   const table = editable && (editor.isTableFocused?.() ?? false);
   const scope = table ? 'table' : editable ? 'editor' : 'global';
-  const platform = context.platform ?? (isMac ? 'mac' : 'other');
+  const platform = context.platform ?? webviewShortcutPlatform;
   const stroke = { key: event.key, code: event.code, ctrl: !!event.ctrlKey, meta: !!event.metaKey, alt: !!event.altKey, shift: !!event.shiftKey, composing: event.isComposing, altGraph: event.getModifierState?.('AltGraph') ?? false };
   const nestedInput = targetElement?.matches('input, textarea') && !targetElement.closest('.meo-md-html-table-wrap');
   const consume = () => { event.preventDefault(); event.stopPropagation(); };
   const rules = context.customShortcuts;
-  if (matcher && rules?.length) {
+  if (editor && matcher && rules?.length) {
     const editingLocation = (focused: boolean): ShortcutLocation => {
       if (!context.editorSurfaceActive || !focused || nestedInput) return 'outsideEditor';
       if (editor.isCustomShortcutTableFocused?.() ?? editor.isTableFocused?.()) return editor.isTableInputFocused?.() ? 'tableInput' : 'table';
@@ -126,14 +128,19 @@ export const handleEditorShortcut = (event: KeyboardEvent, context: ShortcutHand
       if (handled) { consume(); return true; }
     }
   }
-  const command = resolveShortcut(stroke, context.shortcuts ?? {}, platform, scope);
+  const command = resolveShortcut(stroke, context.shortcuts ?? {}, platform, scope, rules);
+  if (command === 'openFileTree' || command === 'resetWindowZoom') {
+    if (!context.requestWorkbenchAction) return false;
+    consume();
+    if (!event.repeat) context.requestWorkbenchAction(command);
+    return true;
+  }
+  if (!editor) return false;
   if (nestedInput && command && !['undo', 'redo', 'plain'].includes(command) && commandContext(command) !== 'global') return false;
   if (detached && !editorFocused && command && !['undo', 'redo'].includes(command) && commandContext(command) !== 'global') return false;
   if (!command) {
     // A cleared/reassigned gesture must not fall through to CodeMirror's old default map.
-    const key = shortcutFromStroke(stroke);
-    const removedDefault = editable && key && Object.entries(defaultShortcuts(platform)).some(([id, keys]) => keys.includes(key) && commandContext(id as Parameters<typeof commandContext>[0]) !== 'native'
-      && (commandContext(id as Parameters<typeof commandContext>[0]) !== 'table' || table));
+    const removedDefault = editable && resolveShortcut(stroke, {}, platform, scope);
     if (removedDefault) { consume(); return true; }
     return false;
   }
@@ -150,6 +157,10 @@ function runShortcutCommand(command: EditorCommandId, context: ShortcutHandlerCo
     case 'find': case 'replace': context.openFindPanel(command); break;
     case 'mode': return context.requestMode(context.editableMode === 'live' ? 'source' : 'live') ?? true;
     case 'preview': return context.requestPreview?.() ?? Boolean(context.requestPreview);
+    case 'openFileTree': case 'resetWindowZoom':
+      if (!context.requestWorkbenchAction) return false;
+      context.requestWorkbenchAction(command);
+      return true;
     case 'undo': return editor.undo() ?? true;
     case 'redo': return editor.redo() ?? true;
     case 'all': editor.selectAll(); break;

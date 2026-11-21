@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { createEditingPreferencesHost, EDITING_PREFERENCES_SETTING } from './editingPreferences';
-import { normalizeEditingPreferences } from '../application/editingPreferences';
+import { normalizeEditingPreferences, shortcutPlatformFor } from '../application/editingPreferences';
 import type { EditingPreferences } from '../foundation/editingPreferences';
 import type { UiLanguage } from '../foundation/uiLanguage';
 
@@ -37,7 +37,7 @@ export async function createVscodeEditingPreferences(uiLanguage: UiLanguage, con
     }, vscode.ConfigurationTarget.Global);
   }
   return createEditingPreferencesHost({
-    platform: process.platform === 'darwin' ? 'mac' : 'other',
+    platform: shortcutPlatformFor(process.platform),
     read: () => vscode.workspace.getConfiguration('meoEnhanced').get(EDITING_PREFERENCES_SETTING),
     write: async preferences => {
       const configuration = vscode.workspace.getConfiguration('meoEnhanced');

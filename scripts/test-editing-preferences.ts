@@ -32,6 +32,32 @@ assert.ok(settingsSearchMatches(' ', 'anything'));
 assert.ok(settingsSearchMatches('_', 'symbols * _ ~'));
 assert.equal(settingsSearchMatches('image theme', 'Image storage folder'), false, 'all query terms must match the same setting');
 assert.equal(settingsSearchMatches('csv table', 'CSV only'), false);
+const windowsBindings = defaultShortcuts('windows');
+assert.deepEqual(windowsBindings.codeBlock, ['Ctrl + Shift + K']);
+assert.deepEqual(windowsBindings.deleteLine, []);
+assert.deepEqual(windowsBindings.cellBreak, ['Shift + Enter']);
+assert.deepEqual(windowsBindings.rowBelow, ['Ctrl + Enter']);
+assert.deepEqual(windowsBindings.lineComment, ['Ctrl + /']);
+assert.deepEqual(windowsBindings.mode, ['Alt + Shift + M']);
+assert.deepEqual(defaultShortcuts('other').deleteLine, ['Ctrl + Shift + K']);
+assert.deepEqual(defaultShortcuts('mac').cellBreak, ['Shift + Enter', 'Ctrl + Enter']);
+assert.deepEqual(effectiveShortcuts({ deleteLine: [] }, 'windows').codeBlock, [], 'An old explicit clear must not introduce a new action');
+assert.deepEqual(effectiveShortcuts({ cellBreak: ['Ctrl + Enter'] }, 'windows').rowBelow, []);
+assert.deepEqual(effectiveShortcuts({ bold: ['Alt + Shift + %'] }, 'windows').strike, []);
+assert.deepEqual(shortcutConflicts('bold', ['Alt + Shift + %'], {}, 'windows'), ['strike']);
+assert.deepEqual(shortcutConflicts('moveRowUp', ['Alt + ArrowUp'], {}, 'windows'), [], 'Text lines and table rows have disjoint built-in scopes');
+const upStroke = { key: 'ArrowUp', code: 'ArrowUp', alt: true, ctrl: false, meta: false, shift: false };
+assert.equal(resolveShortcut(upStroke, {}, 'windows', 'table'), 'moveRowUp');
+assert.equal(resolveShortcut(upStroke, {}, 'windows', 'editor'), 'moveUp');
+assert.equal(resolveShortcut(upStroke, { moveUp: [] }, 'windows', 'table'), null, 'An explicitly cleared move key stays clear');
+const strikeStroke = { key: '%', code: 'Digit5', alt: true, ctrl: false, meta: false, shift: true };
+assert.equal(resolveShortcut(strikeStroke, {}, 'windows', 'editor'), 'strike');
+assert.equal(resolveShortcut(strikeStroke, { bold: ['Alt + Shift + %'] }, 'windows', 'editor'), 'bold');
+const legacyRule: CustomShortcut = { id: 'legacy-file-key', name: 'File key', scope: 'editor',
+  strokes: ['Ctrl + Shift + #'], actions: [{ type: 'snippet', template: 'existing' }] };
+assert.deepEqual(effectiveShortcuts({}, 'windows', [legacyRule]).openFileTree, []);
+assert.deepEqual(decodeWebviewToHostMessage({ type: 'openFileTree' }), { type: 'openFileTree' });
+assert.deepEqual(decodeWebviewToHostMessage({ type: 'resetWindowZoom' }), { type: 'resetWindowZoom' });
 const defaults = { input: { ...defaultInputAssistance }, shortcuts: {} };
 const shortcutRule = {
   id: 'notes', name: 'Note template', scope: 'live', strokes: ['Ctrl + K', 'T'],

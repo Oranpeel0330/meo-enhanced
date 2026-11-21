@@ -121,6 +121,10 @@ assert(
 );
 assert(key({ type: 'keyboard', input: { ...keyboardInput, row: 2, col: 1, key: 'Tab' } })?.type === 'consume', 'Last Tab was not blocked in the final cell');
 assert(key({ type: 'keyboard', input: { ...keyboardInput, row: 0, col: 0, key: 'Tab', shiftKey: true } })?.type === 'pass-through', 'First Shift+Tab moved outside explicitly');
+assert(key({ type: 'keyboard', input: { ...keyboardInput, row: keyboardInput.rowCount - 1, col: keyboardInput.colCount - 1,
+  key: 'Tab', appendOnLastTab: true } })?.type === 'append-row', 'Windows Tab at the last cell appends');
+assert(key({ type: 'keyboard', input: { ...keyboardInput, key: 'Enter', ctrlKey: true,
+  useCtrlEnterForCellBreak: false } })?.type === 'consume', 'The configurable Ctrl+Enter command owns this Windows gesture');
 assert(key({ type: 'keyboard', input: { ...keyboardInput, key: 'Enter', shiftKey: true } })?.type === 'insert-line-break', 'Shift+Enter did not insert a line break');
 const enterNextRow = key({ type: 'keyboard', input: { ...keyboardInput, key: 'Enter' } });
 assert(

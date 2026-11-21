@@ -129,7 +129,7 @@ try {
             return;
           }
           try {
-            window.__preferences=window.EditingSettingsHarness.changeEditingPreferences(window.__preferences,message.change,'other');
+            window.__preferences=window.EditingSettingsHarness.changeEditingPreferences(window.__preferences,message.change,message.platform??'other');
             const revision=++window.__revision;
             queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'updatedEditingPreferences',requestId:message.requestId,revision,result:{ok:true,value:window.__preferences}}})));
           } catch(error) {
@@ -181,6 +181,105 @@ try {
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
     }, { text, mode, outline, legacyStrongColoring, largeDocumentOptimizationEnabled });
   };
+  if (process.argv.includes('--windows-shortcuts-only') || process.argv.length === 2) {
+    const editorSnapshot = () => page.evaluate(() => {
+      const scope = window as any;
+      const view = scope.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      const active = document.activeElement as HTMLElement | null;
+      return { content: view.state.doc.toString(), head: view.state.selection.main.head, row: active?.dataset.tableRow, column: active?.dataset.tableCol };
+    });
+    const select = (text: string, range = false) => page.evaluate(({ text, range }) => {
+      const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      const from = view.state.doc.toString().indexOf(text);
+      if (from < 0) throw new Error('Missing fixture text: ' + text);
+      view.dispatch({ selection: { anchor: range ? from : from + 1, head: range ? from + text.length : from + 1 } });
+      view.focus();
+    }, { text, range });
+    const press = async (key: string, ...modifiers: ('Control' | 'Alt' | 'Shift')[]) => {
+      for (const modifier of modifiers) await page.keyboard.down(modifier);
+      try { await page.keyboard.press(key as Parameters<typeof page.keyboard.press>[0]); }
+      finally { for (const modifier of modifiers.reverse()) await page.keyboard.up(modifier); }
+    };
+    for (const [mode, large] of [['live', false], ['source', false], ['live', true], ['source', true]] as const) {
+      await page.evaluate(() => Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' }));
+      const text = 'keep this\n\nstrike me\n\n| First | Second |\n| --- | --- |\n| alpha | one |\n| beta | omega |\n\nend'
+        + (large ? '\n\nOrdinary paragraph in the rest of the document.'.repeat(4_200) : '');
+      await openFixture(text, mode, false, 'hidden', false, large);
+      await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden')
+        && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+      const optimized = await page.evaluate(() => {
+        const harness = (window as any).EditingSettingsHarness;
+        return harness.usesLargeDocumentDerivedWorkBudget(harness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor')).state);
+      });
+      assert.equal(optimized, large, `${mode}: expected document-scale policy`);
+      await select('keep this', true);
+      await press('k', 'Control', 'Shift');
+      let snapshot = await editorSnapshot();
+      assert.match(snapshot.content, /```[\s\S]*keep this[\s\S]*```/, `${mode}: code fences replace the old delete-line gesture`);
+      await select('strike me', true);
+      await press('5', 'Alt', 'Shift');
+      assert.match((await editorSnapshot()).content, /~~strike me~~/, `${mode}: physical Digit5 toggles strikethrough`);
+      const beforeWorkbenchActions = (await editorSnapshot()).content;
+      await press('3', 'Control', 'Shift');
+      await press('0', 'Control', 'Shift');
+      const actions = await page.evaluate(() => (window as any).__messages.filter((message: any) =>
+        message.type === 'openFileTree' || message.type === 'resetWindowZoom'));
+      assert.deepEqual(actions, [{ type: 'openFileTree' }, { type: 'resetWindowZoom' }]);
+      assert.equal((await editorSnapshot()).content, beforeWorkbenchActions);
+
+      const enterCell = (row: number, col: number, text: string) => mode === 'live'
+        ? page.click(`.meo-md-html-table:not(.meo-md-html-table-sticky-table) textarea[data-table-row="${row}"][data-table-col="${col}"]`)
+        : select(text);
+      const tableRows = () => editorSnapshot().then(state => state.content.split('\n').filter(line => line.startsWith('|')));
+      await enterCell(2, 1, 'omega');
+      await press('Tab');
+      await page.waitForFunction(mode => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        if (view.state.doc.toString().split('\n').filter((line: string) => line.startsWith('|')).length !== 5) return false;
+        if (mode === 'source') return view.state.doc.lineAt(view.state.selection.main.head).text === '|  |  |';
+        const active = document.activeElement as HTMLElement | null;
+        return active?.dataset.tableRow === '3' && active.dataset.tableCol === '0';
+      }, {}, mode);
+      assert.equal((await tableRows()).length, 5);
+      const waitForRows = (length: number) => page.waitForFunction(length => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        return view.state.doc.toString().split('\n').filter((line: string) => line.startsWith('|')).length === length;
+      }, {}, length);
+      await press('z', 'Control');
+      await waitForRows(4);
+      await press('y', 'Control');
+      await waitForRows(5);
+      await enterCell(1, 0, 'alpha');
+      await press('ArrowDown', 'Alt');
+      let rows = await tableRows();
+      assert.match(rows[2], /beta/, `${mode}: move the next row ahead of the current row`);
+      assert.match(rows[3], /alpha/);
+      await enterCell(2, 0, 'alpha');
+      await press('ArrowUp', 'Alt');
+      rows = await tableRows();
+      assert.match(rows[2], /alpha/, `${mode}: move the current row back up`);
+      await enterCell(1, 0, 'alpha');
+      await press('Enter', 'Control');
+      rows = await tableRows();
+      assert.equal(rows.length, 6, `${mode}: Ctrl+Enter inserts a row`);
+      assert.match(rows[3], /^\|\s+\|\s+\|$/);
+      await enterCell(1, 0, 'alpha');
+      await press('Enter', 'Shift');
+      if (mode === 'live') {
+        await page.waitForFunction(() => (document.activeElement as HTMLTextAreaElement | null)?.value.includes('\n'));
+      } else assert.match((await editorSnapshot()).content, /<br\s*\/?>/);
+      assert.equal((await tableRows()).length, 6, `${mode}: Shift+Enter stays in the cell`);
+      assert.deepEqual(errors, []);
+      await page.close();
+      page = await browser.newPage();
+      page.on('pageerror', error => errors.push(String(error)));
+    }
+    console.log('Windows shortcuts changed real Live/Source documents, appended and moved table rows, kept cell breaks, and dispatched workbench actions');
+    if (process.argv.includes('--windows-shortcuts-only')) {
+      await closeTestBrowser(browser);
+      process.exit(0);
+    }
+  }
   if (process.argv.includes('--custom-shortcuts-only') || process.argv.length === 2) {
     const bind = async (stroke: string) => {
       await page.keyboard.down('Control');

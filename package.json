@@ -302,7 +302,7 @@
                               "cellBreak", "rowAbove", "rowBelow", "rowDelete", "columnBefore", "columnAfter", "columnDelete",
                               "moveRowUp", "moveRowDown", "moveColumnLeft", "moveColumnRight", "alignLeft", "alignCenter", "alignRight", "copyMarkdown", "copyCsv", "convert",
                               "expandSelection", "shrinkSelection", "nextOccurrence", "skipOccurrence", "addCursor", "splitCursors",
-                              "lineComment", "selectionComment", "moveUp", "moveDown", "copyUp", "copyDown", "deleteLine", "blankAbove", "blankBelow", "mode", "preview"
+                              "lineComment", "selectionComment", "moveUp", "moveDown", "copyUp", "copyDown", "deleteLine", "blankAbove", "blankBelow", "mode", "preview", "openFileTree", "resetWindowZoom"
                             ] }
                           }
                         },
@@ -484,7 +484,9 @@
                   "blankAbove",
                   "blankBelow",
                   "mode",
-                  "preview"
+                  "preview",
+                  "openFileTree",
+                  "resetWindowZoom"
                 ]
               }
             }

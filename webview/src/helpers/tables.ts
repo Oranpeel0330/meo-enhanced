@@ -1,4 +1,5 @@
 import { editorScrollIntoView } from '../editor/scrollEffects';
+import { webviewShortcutPlatform } from './shortcuts';
 import { isMarkdownTableDelimiter } from '../../../src/shared/markdownContentRules';
 import { markdownTaskContentPrefix } from '../../../src/foundation/markdownTaskList';
 import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
@@ -3642,9 +3643,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.syncTableLineNumbers();
   }
 
-  requestTableCommand(command: TableCommand, enabled = true) {
+  requestTableCommand(command: TableCommand, enabled = true, target = this.currentCommandTarget()) {
     this.clearDeleteTableConfirmation();
-    const target = this.currentCommandTarget();
     this.pendingContextMenuRestore = Boolean(this.domRefs && !this.domRefs.contextMenu.hidden);
     return this.tableCommandEnvironment.dispatch({
       type: 'request',
@@ -5032,7 +5032,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
       case 'insert-row-below': {
         const lastRow = selectedRows.length ? Math.max(...selectedRows) : bodyRow;
-        return this.buildAddRowAfter(dom, lastRow ?? -1, column ?? 0);
+        return this.buildAddRowAfter(dom, lastRow ?? -1, column ?? 0, target.focusInsertedRow);
       }
       case 'move-row-up':
         return this.buildMoveRows(dom, selectedRows, 'up', column ?? 0, target.row ?? 1);
@@ -5563,11 +5563,11 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     };
   }
 
-  buildAddRowAfter(dom: HTMLElement, rowIndex: number, focusColumn: number): TableCommandTransactionPlan {
+  buildAddRowAfter(dom: HTMLElement, rowIndex: number, focusColumn: number, focusInsertedRow = false): TableCommandTransactionPlan {
     const matrix = this.readCellMatrix();
     if (!matrix.headerCells.length) return { transaction: null, outcome: 'no-op' };
     const insertAt = Math.min(Math.max(rowIndex + 1, 0), matrix.rows.length);
-    const focusTarget = this.focusTargetAfterRowInsertion(insertAt, focusColumn);
+    const focusTarget = focusInsertedRow ? { row: insertAt + 1, col: 0, caret: 0 } : this.focusTargetAfterRowInsertion(insertAt, focusColumn);
     const sourcePlan = this.buildInsertSourceRowTransaction(dom, insertAt, matrix.headerCells.length, focusTarget);
     if (sourcePlan) return sourcePlan;
     matrix.rows.splice(insertAt, 0, new Array(matrix.headerCells.length).fill(''));
@@ -6107,6 +6107,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
           ctrlKey: event.ctrlKey,
           altKey: event.altKey,
           metaKey: event.metaKey,
+          appendOnLastTab: webviewShortcutPlatform === 'windows',
+          useCtrlEnterForCellBreak: webviewShortcutPlatform !== 'windows',
           row: rowIndex,
           col: colIndex,
           rowCount: this.tableData.rows.length + 1,
@@ -6123,6 +6125,14 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       if (keyboard?.type === 'consume') {
         event.preventDefault();
         event.stopPropagation();
+        return;
+      }
+      if (keyboard?.type === 'append-row') {
+        event.preventDefault();
+        event.stopPropagation();
+        void this.requestTableCommand('insert-row-below', true, {
+          tableId: this.tableCommandTargetId, row: rowIndex, column: colIndex, selection: null, focusInsertedRow: true
+        });
         return;
       }
       if (keyboard?.type === 'insert-line-break') {

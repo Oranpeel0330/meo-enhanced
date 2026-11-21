@@ -221,7 +221,8 @@ export function createSettingsWindow(options: {
     const description = shortcutDescriptions[command];
     const row = settingRow(commandTitle(command, language), description ? t(...description) : undefined); row.dataset.command = command;
     const controls = element('div', 'settings-shortcut-controls'); row.append(controls);
-    const keys = effectiveShortcuts(options.getPreferences().shortcuts, options.platform)[command];
+    const { shortcuts, customShortcuts } = options.getPreferences();
+    const keys = effectiveShortcuts(shortcuts, options.platform, customShortcuts)[command];
     const fixed = !canBindCommand(command);
     if (recording?.command === command) {
       const recorder = recording; row.classList.add('settings-recording');
@@ -284,7 +285,8 @@ export function createSettingsWindow(options: {
     const typing = typingCatalog.filter(item => matches(item.key, '输入 Input', ...item.title, ...item.description, ...sectionTitles[item.section], ...typingSearchKeywords[item.key],
       ...(['pairMode', 'skipMode', 'deleteMode'].includes(item.key) ? (['zh-CN', 'en'] as const).flatMap(locale => modeOptions(item.key as 'pairMode' | 'skipMode' | 'deleteMode', locale).flatMap(option => [option.value, option.label])) : []),
       ...(item.key === 'convertTables' ? tablePasteContexts.flatMap(context => [...context.title, ...context.description]) : [])));
-    const keys = effectiveShortcuts(options.getPreferences().shortcuts, options.platform);
+    const preferences = options.getPreferences();
+    const keys = effectiveShortcuts(preferences.shortcuts, options.platform, preferences.customShortcuts);
     const shortcuts = Object.entries(shortcutSections).flatMap(([section, commands]) => commands.filter(command => matches(command, '快捷键 键位 绑定 Shortcuts hotkeys keybindings', ...commandTitles[command], ...sectionTitles[section as Section], ...(shortcutDescriptions[command] ?? []), ...shortcutSearchKeywords[command], ...(keys[command].length ? keys[command] : [nativeShortcutLabels[command]]))).map(command => ({ section: section as Section, command })));
     const imageLocation = !!options.imageLocation && matches('imageStorage', '输入 Input', ...imageLocationSearchKeywords, ...sectionTitles.paste);
     const presets = options.previewPresets?.items(query()) ?? [];

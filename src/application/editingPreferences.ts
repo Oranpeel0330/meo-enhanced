@@ -1,10 +1,14 @@
 import {
   defaultInputAssistance, editorCommandIds, insertCurrentTimeExampleId, insertCurrentTimeExampleName, isCustomShortcut, type CustomShortcut, type CustomShortcutAction,
-  type CustomShortcutScope, type EditingPreferences, type EditingPreferencesChange, type EditorCommandId, type ShortcutOverrides, type ShortcutReplacement
+  type CustomShortcutScope, type EditingPreferences, type EditingPreferencesChange, type EditorCommandId, type ShortcutOverrides, type ShortcutPlatform, type ShortcutReplacement
 } from '../foundation/editingPreferences';
 import { parseShortcutSnippet, shortcutSnippetSupportsTable } from './shortcutSnippet';
 
-export type ShortcutPlatform = 'mac' | 'other';
+export type { ShortcutPlatform } from '../foundation/editingPreferences';
+export function shortcutPlatformFor(platform: string): ShortcutPlatform {
+  if (/^win/i.test(platform)) return 'windows';
+  return /mac|darwin|iphone|ipad|ipod/i.test(platform) ? 'mac' : 'other';
+}
 export type ShortcutContext = 'global' | 'editor' | 'table' | 'native';
 const shortcutLocations = ['outsideEditor', 'prose', 'table', 'tableInput'] as const;
 export type ShortcutLocation = typeof shortcutLocations[number];
@@ -21,7 +25,7 @@ export type ShortcutStroke = {
 };
 
 const fixedCommands = new Set<EditorCommandId>(['copy', 'cut', 'paste', 'selection', 'home', 'enter', 'tab', 'escape', 'delete', 'indent', 'tableNav']);
-const globalCommands = new Set<EditorCommandId>(['save', 'saveAs', 'find', 'replace', 'mode', 'preview']);
+const globalCommands = new Set<EditorCommandId>(['save', 'saveAs', 'find', 'replace', 'mode', 'preview', 'openFileTree', 'resetWindowZoom']);
 const tableCommands = new Set<EditorCommandId>([
   'cellBreak', 'rowAbove', 'rowBelow', 'rowDelete', 'columnBefore', 'columnAfter', 'columnDelete',
   'moveRowUp', 'moveRowDown', 'moveColumnLeft', 'moveColumnRight', 'alignLeft', 'alignCenter', 'alignRight', 'copyMarkdown', 'copyCsv'
@@ -53,6 +57,12 @@ export function defaultShortcuts(platform: ShortcutPlatform): Record<EditorComma
     deleteLine: platform === 'mac' ? ['Cmd + Shift + K'] : ['Ctrl + Shift + K'],
     cellBreak: ['Shift + Enter', 'Ctrl + Enter'], indent: ['Tab', 'Shift + Tab'], tableNav: ['Tab', 'Shift + Tab'],
     enter: ['Enter', 'Shift + Enter'], tab: ['Tab', 'Shift + Tab'], escape: ['Escape'], delete: ['Backspace', 'Delete']
+  });
+  if (platform === 'windows') Object.assign(result, {
+    codeBlock: ['Ctrl + Shift + K'], deleteLine: [], strike: ['Alt + Shift + 5'],
+    rowBelow: ['Ctrl + Enter'], cellBreak: ['Shift + Enter'],
+    moveRowUp: ['Alt + ArrowUp'], moveRowDown: ['Alt + ArrowDown'],
+    openFileTree: ['Ctrl + Shift + 3'], resetWindowZoom: ['Ctrl + Shift + 0']
   });
   return result;
 }
@@ -97,34 +107,68 @@ export function shortcutFromStroke(stroke: ShortcutStroke, secondStroke = false)
   ].join(' + '), secondStroke);
 }
 
-export function effectiveShortcuts(overrides: ShortcutOverrides, platform: ShortcutPlatform): Record<EditorCommandId, readonly string[]> {
+export function shortcutStrokeCandidates(stroke: ShortcutStroke, secondStroke = false): readonly string[] {
+  const key = shortcutFromStroke(stroke, secondStroke);
+  if (!key) return [];
+  // Preserve shortcuts recorded as the shifted character while also matching
+  // defaults expressed as a key on the number row.
+  const digit = /^Digit([0-9])$/.exec(stroke.code ?? '')?.[1];
+  const physical = digit && stroke.shift && (stroke.ctrl || stroke.alt || stroke.meta) && !key.endsWith(' + /')
+    ? shortcutFromStroke({ ...stroke, key: digit }, secondStroke) : null;
+  return physical && physical !== key ? [key, physical] : [key];
+}
+
+const protectedDefaultCommands: readonly EditorCommandId[] = [
+  'saveAs', 'formatHtml', 'codeBlock', 'strike', 'rowBelow', 'moveRowUp', 'moveRowDown', 'openFileTree', 'resetWindowZoom'
+];
+const shiftedNumberRowKeys: Readonly<Record<string, string>> = {
+  'Alt + Shift + %': 'Alt + Shift + 5', 'Ctrl + Shift + #': 'Ctrl + Shift + 3', 'Ctrl + Shift + )': 'Ctrl + Shift + 0'
+};
+
+function sameShortcutKey(left: string, right: string, platform: ShortcutPlatform): boolean {
+  return left === right || platform === 'windows' && (shiftedNumberRowKeys[left] ?? left) === (shiftedNumberRowKeys[right] ?? right);
+}
+
+export function effectiveShortcuts(
+  overrides: ShortcutOverrides, platform: ShortcutPlatform, customShortcuts: readonly CustomShortcut[] = []
+): Record<EditorCommandId, readonly string[]> {
   const defaults = defaultShortcuts(platform);
   for (const command of editorCommandIds) {
     const keys = overrides[command];
     if (keys && canBindCommand(command) && keys.every(key => normalizeShortcut(key))) defaults[command] = keys.map(key => normalizeShortcut(key)!);
   }
-  // Newly introduced defaults must not steal older custom bindings.
-  for (const added of ['saveAs', 'formatHtml'] as const) {
-    if (!Object.hasOwn(overrides, added) && editorCommandIds.some(command => command !== added
-      && canBindCommand(command) && Object.hasOwn(overrides, command)
-      && defaults[command].some(key => defaults[added].includes(key)))) defaults[added] = [];
+  // An explicit change to the former owner also keeps its original key from
+  // gaining a new meaning on upgrade.
+  if (platform === 'windows') {
+    if (Object.hasOwn(overrides, 'deleteLine') && !Object.hasOwn(overrides, 'codeBlock')) defaults.codeBlock = [];
+    if (Object.hasOwn(overrides, 'cellBreak') && !Object.hasOwn(overrides, 'rowBelow')) defaults.rowBelow = [];
+    if (Object.hasOwn(overrides, 'moveUp') && !Object.hasOwn(overrides, 'moveRowUp')) defaults.moveRowUp = [];
+    if (Object.hasOwn(overrides, 'moveDown') && !Object.hasOwn(overrides, 'moveRowDown')) defaults.moveRowDown = [];
+  }
+  for (const added of protectedDefaultCommands) {
+    if (Object.hasOwn(overrides, added)) continue;
+    defaults[added] = defaults[added].filter(key => !editorCommandIds.some(command =>
+      Object.hasOwn(overrides, command) && defaults[command].some(existing => sameShortcutKey(existing, key, platform))
+        && builtinLocationsOverlap(command, added, platform))
+      && !customShortcuts.some(rule => rule.strokes[0] && sameShortcutKey(rule.strokes[0], key, platform)
+        && customShortcutLocations(rule).some(position => builtinCommandAvailableAt(added, position, platform))));
   }
   return defaults;
 }
 
-export function shortcutConflicts(command: EditorCommandId, keys: readonly string[], overrides: ShortcutOverrides, platform: ShortcutPlatform): EditorCommandId[] {
-  const wanted = new Set(keys.map(key => normalizeShortcut(key)));
+export function shortcutConflicts(command: EditorCommandId, keys: readonly string[], overrides: ShortcutOverrides, platform: ShortcutPlatform,
+  customShortcuts: readonly CustomShortcut[] = []): EditorCommandId[] {
+  const wanted = keys.map(key => normalizeShortcut(key)).filter((key): key is string => key !== null);
   const context = commandContext(command);
-  const bindings = effectiveShortcuts(overrides, platform);
+  const bindings = effectiveShortcuts(overrides, platform, customShortcuts);
   return editorCommandIds.filter(other => {
     if (other === command) return false;
     const otherContext = commandContext(other);
     // Native navigation is a fallback. Clipboard chords remain reserved.
     if (otherContext === 'native' && !['copy', 'cut', 'paste'].includes(other)) return false;
     if (context === 'native') return false;
-    return bindings[other].some(key => wanted.has(normalizeShortcut(key)))
-      && (context === otherContext || context === 'global' || otherContext === 'global'
-        || context === 'editor' || otherContext === 'editor' || otherContext === 'native');
+    return bindings[other].some(key => wanted.some(candidate => sameShortcutKey(key, candidate, platform)))
+      && (otherContext === 'native' || builtinLocationsOverlap(command, other, platform));
   });
 }
 
@@ -163,6 +207,16 @@ function commandAvailableAt(command: EditorCommandId, position: ShortcutLocation
   const context = commandContext(command);
   return context === 'global' || context === 'editor' && position !== 'outsideEditor'
     || context === 'table' && isTableLocation(position);
+}
+
+function builtinCommandAvailableAt(command: EditorCommandId, position: ShortcutLocation, platform: ShortcutPlatform): boolean {
+  if (platform === 'windows' && (command === 'moveUp' || command === 'moveDown' || command === 'codeBlock')) return position === 'prose';
+  return commandAvailableAt(command, position);
+}
+
+function builtinLocationsOverlap(left: EditorCommandId, right: EditorCommandId, platform: ShortcutPlatform): boolean {
+  return shortcutLocations.some(position =>
+    builtinCommandAvailableAt(left, position, platform) && builtinCommandAvailableAt(right, position, platform));
 }
 
 export function customShortcutActionAvailableAt(action: CustomShortcutAction, position: ShortcutLocation): boolean {
@@ -224,31 +278,33 @@ export function customShortcutConflicts(
   const [first, second] = shortcut.strokes;
   if (!first) return [];
   const locations = customShortcutLocations(shortcut);
-  const bindings = effectiveShortcuts(preferences.shortcuts, platform);
-  const builtin = editorCommandIds.filter(command => {
+  const bindings = effectiveShortcuts(preferences.shortcuts, platform, preferences.customShortcuts);
+  const builtin = editorCommandIds.flatMap(command => {
     const context = commandContext(command);
-    if (context === 'native' && !['copy', 'cut', 'paste'].includes(command)) return false;
-    return bindings[command].includes(first)
-      && locations.some(position => context === 'native' || commandAvailableAt(command, position));
+    if (context === 'native' && !['copy', 'cut', 'paste'].includes(command)) return [];
+    const keys = bindings[command].filter(key => sameShortcutKey(key, first, platform));
+    return keys.length && locations.some(position => context === 'native' || builtinCommandAvailableAt(command, position, platform))
+      ? [{ type: 'command' as const, command, keys, fixed: !canBindCommand(command) }] : [];
   });
   const custom = (preferences.customShortcuts ?? []).filter(other => other.id !== shortcut.id
-    && first === other.strokes[0] && (!second || !other.strokes[1] || second === other.strokes[1])
+    && other.strokes[0] && sameShortcutKey(first, other.strokes[0], platform)
+    && (!second || !other.strokes[1] || sameShortcutKey(second, other.strokes[1], platform))
     && locations.some(position => shortcutModes.some(mode =>
       customShortcutCanRunAt(shortcut, position, mode) && customShortcutCanRunAt(other, position, mode))));
   return [
-    ...builtin.map(command => ({ type: 'command' as const, command, keys: [first], fixed: !canBindCommand(command) })),
+    ...builtin,
     ...custom.map(customConflict)
   ];
 }
 
 export function builtinShortcutConflicts(command: EditorCommandId, keys: readonly string[], preferences: EditingPreferences, platform: ShortcutPlatform): CustomShortcutConflict[] {
-  const bindings = effectiveShortcuts(preferences.shortcuts, platform);
+  const bindings = effectiveShortcuts(preferences.shortcuts, platform, preferences.customShortcuts);
   return [
-    ...shortcutConflicts(command, keys, preferences.shortcuts, platform).map(other => ({
-      type: 'command' as const, command: other, keys: bindings[other].filter(key => keys.includes(key)), fixed: !canBindCommand(other)
+    ...shortcutConflicts(command, keys, preferences.shortcuts, platform, preferences.customShortcuts).map(other => ({
+      type: 'command' as const, command: other, keys: bindings[other].filter(key => keys.some(candidate => sameShortcutKey(candidate, key, platform))), fixed: !canBindCommand(other)
     })),
-    ...(preferences.customShortcuts ?? []).filter(other => keys.includes(other.strokes[0])
-      && customShortcutLocations(other).some(position => commandAvailableAt(command, position))).map(customConflict)
+    ...(preferences.customShortcuts ?? []).filter(other => other.strokes[0] && keys.some(key => sameShortcutKey(key, other.strokes[0], platform))
+      && customShortcutLocations(other).some(position => builtinCommandAvailableAt(command, position, platform))).map(customConflict)
   ];
 }
 
@@ -315,10 +371,10 @@ export function changeEditingPreferences(current: EditingPreferences, change: Ed
     const conflicts = customShortcutConflicts(shortcut, current, platform);
     assertConfirmedReplacements(conflicts, change.confirmedReplacements);
     const shortcuts = { ...current.shortcuts };
-    const bindings = effectiveShortcuts(shortcuts, platform);
+    const bindings = effectiveShortcuts(shortcuts, platform, current.customShortcuts);
     const customShortcuts = [...current.customShortcuts ?? []];
     for (const conflict of conflicts) {
-      if (conflict.type === 'command') shortcuts[conflict.command] = bindings[conflict.command].filter(key => key !== shortcut.strokes[0]);
+      if (conflict.type === 'command') shortcuts[conflict.command] = bindings[conflict.command].filter(key => !conflict.keys.includes(key));
       else {
         const index = customShortcuts.findIndex(other => other.id === conflict.id);
         customShortcuts[index] = { ...customShortcuts[index], strokes: [] };
@@ -335,7 +391,7 @@ export function changeEditingPreferences(current: EditingPreferences, change: Ed
   const conflicts = builtinShortcutConflicts(change.command, keys, current, platform);
   assertConfirmedReplacements(conflicts, change.confirmedReplacements);
   const shortcuts = { ...current.shortcuts };
-  const bindings = effectiveShortcuts(shortcuts, platform);
+  const bindings = effectiveShortcuts(shortcuts, platform, current.customShortcuts);
   const customConflicts = new Set<string>();
   for (const conflict of conflicts) {
     if (conflict.type === 'command') shortcuts[conflict.command] = bindings[conflict.command].filter(key => !conflict.keys.includes(key));
@@ -347,17 +403,18 @@ export function changeEditingPreferences(current: EditingPreferences, change: Ed
   } : {}) };
 }
 
-export function resolveShortcut(stroke: ShortcutStroke, overrides: ShortcutOverrides, platform: ShortcutPlatform, context: 'global' | 'editor' | 'table'): EditorCommandId | null {
-  const key = shortcutFromStroke(stroke);
+export function resolveShortcut(stroke: ShortcutStroke, overrides: ShortcutOverrides, platform: ShortcutPlatform, context: 'global' | 'editor' | 'table',
+  customShortcuts?: readonly CustomShortcut[]): EditorCommandId | null {
+  const candidates = [...shortcutStrokeCandidates(stroke)];
+  const [key] = candidates;
   if (!key) return null;
-  const bindings = effectiveShortcuts(overrides, platform);
+  const bindings = effectiveShortcuts(overrides, platform, customShortcuts);
   // Older shortcut recordings kept the Shift needed to type '/'. Honor those
   // explicit bindings before falling back to the layout-independent gesture.
-  const candidates = stroke.shift && key.endsWith(' + /') && !key.includes(' + Shift + ')
-    ? [key.slice(0, -4) + ' + Shift + /', key] : [key];
+  if (stroke.shift && key.endsWith(' + /') && !key.includes(' + Shift + ')) candidates.unshift(key.slice(0, -4) + ' + Shift + /');
   const position = context === 'global' ? 'outsideEditor' : context === 'editor' ? 'prose' : 'table';
   for (const candidate of candidates) {
-    const command = editorCommandIds.find(command => bindings[command].includes(candidate) && commandAvailableAt(command, position));
+    const command = editorCommandIds.find(command => bindings[command].includes(candidate) && builtinCommandAvailableAt(command, position, platform));
     if (command) return command;
   }
   return null;

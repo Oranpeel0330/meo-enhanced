@@ -22,6 +22,8 @@ export type TableCellKeyboardInput = Readonly<{
   altKey?: boolean;
   metaKey?: boolean;
   composing?: boolean;
+  appendOnLastTab?: boolean;
+  useCtrlEnterForCellBreak?: boolean;
   row: number;
   col: number;
   rowCount: number;
@@ -36,6 +38,7 @@ export type TableCellKeyboardDecision =
   | { readonly type: 'pass-through' }
   | { readonly type: 'consume' }
   | { readonly type: 'insert-line-break' }
+  | { readonly type: 'append-row' }
   | { readonly type: 'commit-and-exit' }
   | { readonly type: 'focus-cell'; readonly target: TableCellCoordinates; readonly caretColumn: number }
   | {
@@ -115,7 +118,8 @@ function decideKeyboard(input: TableCellKeyboardInput): TableCellKeyboardDecisio
   const primaryModifier = Boolean(input.ctrlKey);
   if (input.key === 'Escape' && !input.shiftKey && !primaryModifier) return { type: 'commit-and-exit' };
   if (input.key === 'Enter') {
-    if ((input.shiftKey || primaryModifier) && !input.altKey && !input.metaKey) return { type: 'insert-line-break' };
+    if (input.shiftKey) return { type: 'insert-line-break' };
+    if (primaryModifier) return { type: input.useCtrlEnterForCellBreak === false ? 'consume' : 'insert-line-break' };
     if (input.row + 1 < input.rowCount) {
       return { type: 'focus-cell', target: { row: input.row + 1, col: input.col }, caretColumn: 0 };
     }
@@ -124,7 +128,7 @@ function decideKeyboard(input: TableCellKeyboardInput): TableCellKeyboardDecisio
   if (input.key === 'Tab' && !primaryModifier && !input.altKey && !input.metaKey) {
     const direction = input.shiftKey ? -1 : 1;
     const offset = input.row * input.colCount + input.col + direction;
-    if (offset >= input.rowCount * input.colCount) return { type: 'consume' };
+    if (offset >= input.rowCount * input.colCount) return { type: input.appendOnLastTab ? 'append-row' : 'consume' };
     if (offset < 0) return { type: 'pass-through' };
     return {
       type: 'focus-cell',

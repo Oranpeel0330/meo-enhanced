@@ -7,10 +7,11 @@ export const editorCommandIds = [
   'columnBefore', 'columnAfter', 'columnDelete', 'moveRowUp', 'moveRowDown', 'moveColumnLeft', 'moveColumnRight',
   'alignLeft', 'alignCenter', 'alignRight', 'copyMarkdown', 'copyCsv', 'convert',
   'selection', 'home', 'expandSelection', 'shrinkSelection', 'nextOccurrence', 'skipOccurrence', 'addCursor', 'splitCursors',
-  'lineComment', 'selectionComment', 'moveUp', 'moveDown', 'copyUp', 'copyDown', 'deleteLine', 'blankAbove', 'blankBelow', 'mode', 'preview', 'enter', 'tab', 'escape', 'delete'
+  'lineComment', 'selectionComment', 'moveUp', 'moveDown', 'copyUp', 'copyDown', 'deleteLine', 'blankAbove', 'blankBelow', 'mode', 'preview', 'openFileTree', 'resetWindowZoom', 'enter', 'tab', 'escape', 'delete'
 ] as const;
 
 export type EditorCommandId = typeof editorCommandIds[number];
+export type ShortcutPlatform = 'mac' | 'windows' | 'other';
 export type PairMode = 'smart' | 'always' | 'off';
 export type InputAssistance = {
   readonly selectionToolbar: boolean;

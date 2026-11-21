@@ -854,6 +854,12 @@ export function createPanelSessionController(params: PanelSessionControllerParam
       case 'managePreviewPresets':
         await params.managePreviewPresets?.();
         return;
+      case 'openFileTree':
+      case 'resetWindowZoom':
+        if (panel.active) {
+          await vscode.commands.executeCommand(raw.type === 'openFileTree' ? 'workbench.view.explorer' : 'workbench.action.zoomReset');
+        }
+        return;
       case 'imageLocation':
         await postToWebview(params.imageStorage ? await params.imageStorage.handle(raw, documentUri.toString()) : {
           type: 'imageLocationResult', requestId: raw.requestId,
