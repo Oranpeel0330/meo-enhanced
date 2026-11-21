@@ -8870,6 +8870,7 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
 }
 .meo-paste-options-trigger, .meo-paste-options-menu {
   box-sizing: border-box;
+  border-radius: 6px;
   box-shadow: var(--meo-ui-shadow);
 }
 .meo-paste-options-trigger {
@@ -8878,7 +8879,6 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   gap: 6px;
   padding: 3px 7px;
   border: 1px solid var(--meo-ui-border-control);
-  border-radius: 6px;
   background: var(--meo-ui-surface-hover);
 }
 .meo-paste-options-trigger:hover, .meo-paste-options-trigger[aria-expanded="true"] {
@@ -8888,7 +8888,6 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   min-width: min(164px, 100%);
   overflow: hidden;
   border: 1px solid var(--meo-ui-border-control);
-  border-radius: 10px;
   background: var(--meo-ui-surface);
 }
 .meo-paste-options-menu[hidden] { display: none; }
