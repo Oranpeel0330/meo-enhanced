@@ -9,8 +9,9 @@ const documentJumpIcon: IconNode = [
 
 export function createLinkOpenIcon(isDocumentFragment: boolean, size = 24): SVGElement {
   const attributes = { width: size, height: size, 'aria-hidden': 'true' };
+  // Frame the original paths more tightly and match the external icon's 2/24 stroke ratio.
   return isDocumentFragment
-    ? createElement(documentJumpIcon, { ...attributes, viewBox: '0 0 16 16', 'stroke-width': 0.833 })
+    ? createElement(documentJumpIcon, { ...attributes, viewBox: '1 0.875 14.25 14.25', 'stroke-width': 1.1875 })
     : createElement(ExternalLink, attributes);
 }
 
