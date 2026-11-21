@@ -541,7 +541,8 @@ async function main() {
       document.getElementById('app')!.replaceChildren();
       (window as any).__codeBlockLineNumbersEditor = (window as any).CodeBlockLineNumbersHarness.createEditor({
         parent: document.getElementById('app')!,
-        text: Array.from({ length: 6 }, (_, index) => `${'#'.repeat(index + 1)} Heading ${index + 1} that wraps across several visual lines for gutter alignment`).concat('Body').join('\n'),
+        text: Array.from({ length: 6 }, (_, index) => `${'#'.repeat(index + 1)} Heading ${index + 1} that wraps across several visual lines for gutter alignment`)
+          .concat('Body text that also wraps across several visual lines for comparison with the heading numbers.').join('\n'),
         initialMode: 'live',
         onApplyChanges() {}
       });
@@ -590,14 +591,27 @@ async function main() {
       const marker = Array.from(
         outerGutter?.querySelectorAll<HTMLElement>('.cm-lineNumbers > .cm-gutterElement') ?? []
       ).find((candidate) => candidate.textContent?.trim() === '7');
-      return marker ? {
-        alignItems: getComputedStyle(marker).alignItems,
+      const content: HTMLElement = editor.view.contentDOM;
+      const line = Array.from(content.querySelectorAll<HTMLElement>(':scope > .cm-line'))
+        .find((candidate) => candidate.textContent?.startsWith('Body text'));
+      const markerText = marker?.firstChild;
+      if (!line || !marker || !markerText) return null;
+      const textRange = document.createRange();
+      textRange.selectNodeContents(line);
+      const textRects = textRange.getClientRects();
+      if (textRects.length < 2) return null;
+      const firstLine = textRects[0]!;
+      const numberRange = document.createRange();
+      numberRange.selectNodeContents(markerText);
+      const number = numberRange.getBoundingClientRect();
+      return {
+        offset: number.top + number.height / 2 - (firstLine.top + firstLine.height / 2),
         fontSize: getComputedStyle(marker).fontSize,
         headingClass: marker.classList.contains('meo-md-heading-line-number')
-      } : null;
+      };
     });
-    if (!bodyLineAlignment || bodyLineAlignment.alignItems !== 'flex-start' || bodyLineAlignment.headingClass) {
-      throw new Error(`Body line number inherited heading alignment: ${JSON.stringify(bodyLineAlignment)}`);
+    if (!bodyLineAlignment || Math.abs(bodyLineAlignment.offset) > 1 || bodyLineAlignment.headingClass) {
+      throw new Error(`Body line number did not align to the first visual line: ${JSON.stringify(bodyLineAlignment)}`);
     }
     if (headingLineNumberOffsets.some((item) => item.markerFontSize !== bodyLineAlignment.fontSize)) {
       throw new Error(`Heading line number font size changed: ${JSON.stringify({ headingLineNumberOffsets, bodyLineAlignment })}`);
