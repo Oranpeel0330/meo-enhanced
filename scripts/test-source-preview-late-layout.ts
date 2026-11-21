@@ -108,8 +108,9 @@ const assertLateLayout = async (imageInside: boolean): Promise<void> => {
   await page.keyboard.press('Enter');
   const target = await page.evaluate(line => {
     const view = (document.querySelector('.cm-content') as any).cmTile.root.view;
+    const block = view.lineBlockAt(view.state.doc.line(line).from);
     const rect = view.scrollDOM.getBoundingClientRect();
-    return { delta: view.lineBlockAt(view.state.doc.line(line).from).top - view.scrollDOM.scrollTop,
+    return { delta: (view.documentTop + block.top - rect.top) / view.scaleY,
       x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   }, anchorLine);
   await page.mouse.move(target.x, target.y);
