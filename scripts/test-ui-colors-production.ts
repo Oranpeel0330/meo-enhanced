@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
+import sharp from 'sharp';
+import { installEditorCaretProbe, launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 import { createAppearanceSettingsOwner, type AppearanceSettingsStore } from '../src/host/appearanceSettings';
 import { decodeWebviewToHostMessage } from '../src/protocol/messages';
 import type { UpdateUiColorsRequest, UiColorsResult } from '../src/protocol/uiColors';
@@ -29,8 +30,9 @@ try {
   const openFixture = async () => {
     await page.setViewport({ width: 1100, height: 820 });
     await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}</style><body class="vscode-dark"><div id="app"></div></body>');
+    await installEditorCaretProbe(page);
     await page.addStyleTag({ path: 'webview/src/styles.css' });
-    await page.addStyleTag({ content: ':root{--vscode-editor-background:#22272e;--vscode-editorWidget-background:#22272e;--vscode-foreground:#e5e5e5;--vscode-editor-foreground:#ddd;--vscode-textLink-foreground:#79b8ff;--vscode-button-background:#2472c8;--vscode-font-family:Arial;--vscode-editor-font-family:monospace;--vscode-editor-font-size:14px}' });
+    await page.addStyleTag({ content: ':root{--vscode-editor-background:#22272e;--vscode-editorWidget-background:#22272e;--vscode-foreground:#e5e5e5;--vscode-editor-foreground:#ddd;--vscode-editorCursor-foreground:#45D1BB;--vscode-textLink-foreground:#79b8ff;--vscode-button-background:#2472c8;--vscode-font-family:Arial;--vscode-editor-font-family:monospace;--vscode-editor-font-size:14px}' });
     await page.addScriptTag({ content: `
       window.__messages=[];
       window.acquireVsCodeApi=()=>({getState(){},setState(){},postMessage(message){
@@ -58,6 +60,7 @@ try {
   };
   const value = (key: string) => page.$eval(input(key), element => (element as HTMLInputElement).value);
   const role = (key: string) => page.evaluate(key => { const probe = document.createElement('span'); probe.style.color = 'var(--meo-ui-' + key + ')'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color; }, key);
+  const caret = () => page.$eval('.cm-editor > .cm-scroller > .cm-content', element => window.readEditorCaretColor(element));
   const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
   const saturation = (color: string) => { const rgb = channels(color); return (Math.max(...rgb) - Math.min(...rgb)) / Math.max(...rgb); };
   const luminance = (color: string) => channels(color).map(value => {
@@ -103,7 +106,49 @@ try {
   };
   const resetColors = '.appearance-footer > button:first-child';
   const source = () => page.$$eval('.cm-content, .cm-line, .cm-line span, .cm-gutters', elements => elements.map(element => [element.textContent, getComputedStyle(element).color, getComputedStyle(element).backgroundColor]));
-  await openFixture(); await openSettings();
+  await openFixture();
+  const blink = await page.addStyleTag({ content: '.cm-cursorLayer{animation:none!important}' });
+  for (const mode of ['source', 'live']) {
+    await page.click(`[data-mode="${mode}"]`);
+    const editor = `.cm-editor.meo-mode-${mode}`;
+    await page.click(editor + ' .cm-line:nth-child(3)');
+    const cursor = editor + ' > .cm-scroller > .cm-cursorLayer .cm-cursor-primary';
+    await page.waitForSelector(cursor, { visible: true });
+    await page.keyboard.press('Home');
+    for (const scale of [1, 1.25, 1.5, 1.8, 2, 1]) {
+      // Workbench zoom changes both the resolution and the CSS viewport.
+      await page.setViewport({ width: Math.round(1100 / scale), height: Math.round(820 / scale), deviceScaleFactor: scale });
+      for (const position of ['stationary', 'moved']) {
+        if (position === 'moved') await page.keyboard.press('ArrowRight');
+        const probe = await page.$eval(cursor, async marker => {
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          const box = marker.getBoundingClientRect();
+          return {
+            left: box.left * devicePixelRatio,
+            middle: (box.top + box.height / 2) * devicePixelRatio,
+            width: box.width * devicePixelRatio
+          };
+        });
+        const { data, info } = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+        const row = Math.floor(probe.middle) * info.width;
+        const columns: number[] = [];
+        const sample: number[][] = [];
+        for (let x = Math.floor(probe.left) - 2; x < Math.ceil(probe.left + probe.width) + 2; x++) {
+          const offset = (row + x) * info.channels;
+          sample.push([...data.subarray(offset, offset + 3)]);
+          if (data[offset] === 69 && data[offset + 1] === 209 && data[offset + 2] === 187) columns.push(x);
+        }
+        const label = `${mode}, ${scale}×, ${position}`;
+        assert.ok(Math.abs(probe.width - 3) < 0.01, `${label} has a 3-device-pixel width (${probe.width})`);
+        assert.equal(columns.length, 3, `${label} paints a single 3-screen-pixel cursor in the VS Code theme color ${JSON.stringify({ probe, sample })}`);
+        assert.equal(columns[2]! - columns[0]!, 2, `${label} cursor pixels are contiguous`);
+      }
+    }
+  }
+  await blink.evaluate(style => style.remove());
+  await page.click('[data-mode="source"]');
+  await openSettings();
   assert.equal(await page.$eval(input('surface'), element => element.getAttribute('title')), null,
     'color inputs must not display native rectangular hints');
   await page.hover(input('surface'));
@@ -154,6 +199,9 @@ try {
   assert.deepEqual(await page.$$eval('.settings-jump', elements => elements.map(e => e.textContent)), ['界面模式', '文档排版', '基础颜色', '高级颜色']);
   const screenshots = process.env.MEO_UI_COLORS_SCREENSHOT_DIR;
   if (screenshots) await fs.mkdir(screenshots, { recursive: true });
+  assert.equal(await caret(), 'rgb(69, 209, 187)', 'Source follows the distinct native cursor color');
+  assert.equal(await value('caret'), '', 'the theme cursor is not stored as an override');
+  assert.equal(await page.$eval('[data-setting="caret"] .appearance-color-swatch', element => (element as HTMLInputElement).value), '#45d1bb');
   for (const [index, tab] of ['general', 'appearance', 'typing', 'presets', 'shortcuts'].entries()) {
     await page.click(`[data-tab="${tab}"]`);
     assert.deepEqual(await page.evaluate(() => {
@@ -178,6 +226,9 @@ try {
   await page.click('.settings-search'); await page.keyboard.type('危险');
   assert.deepEqual(await page.$$eval('.settings-jump', elements => elements.map(e => e.textContent)), ['高级颜色'], 'filtered navigation contains only matching sections');
   await page.click('.settings-search-clear');
+  await page.click('.settings-search'); await page.keyboard.type('光标');
+  assert.deepEqual(await page.$$eval('.appearance-item', elements => elements.map(e => (e as HTMLElement).dataset.setting)), ['caret']);
+  await page.click('.settings-search-clear');
   await page.click('[data-tab="general"]'); await page.click('[data-setting="language"] [data-value="en"]'); await page.click('[data-tab="appearance"]');
   assert.equal(await page.$eval('[data-appearance-mode="auto"]', e => e.textContent), 'Auto');
   await checkControlLayout();
@@ -191,7 +242,7 @@ try {
   await page.setViewport({width: 1100, height: 820});
   await page.click('[data-tab="general"]'); await page.click('[data-setting="language"] [data-value="zh-CN"]'); await page.click('[data-tab="appearance"]');
   // A manual appearance must not inherit UI colors from the opposite host.
-  const hostInputs = ['editor-background', 'editorWidget-background', 'foreground', 'button-background', 'textLink-foreground', 'testing-iconPassed', 'editorWarning-foreground', 'errorForeground'];
+  const hostInputs = ['editor-background', 'editorWidget-background', 'foreground', 'button-background', 'textLink-foreground', 'testing-iconPassed', 'editorWarning-foreground', 'errorForeground', 'editorCursor-foreground'];
   const originalHostInputs = await page.evaluate(ids => ids.map(id => {
     const key = '--vscode-' + id; const style = document.documentElement.style;
     return [key, style.getPropertyValue(key), style.getPropertyPriority(key)];
@@ -206,6 +257,7 @@ try {
     .map(key => [key, document.documentElement.style.getPropertyValue(key)]));
   await page.click('[data-appearance-mode="light"]');
   assert.equal(await role('accent'), 'rgb(0, 105, 204)', 'VS Code dark/MEO light uses the Light 2026 accent');
+  assert.equal(await caret(), 'rgb(32, 32, 32)', 'opposite appearance uses its bundled cursor color');
   assert.equal(await page.$eval(input('surface'), e => (e as HTMLInputElement).placeholder), '默认浅色配色');
   assert.match(await page.$eval('.appearance-color-reset', e => e.getAttribute('aria-label')!), /默认浅色配色/);
   if (screenshots) await page.screenshot({path: path.join(screenshots, '064-default-light.png')});
@@ -250,7 +302,7 @@ try {
   assert.match(await page.$eval('.appearance-note', e => e.textContent!), /dark default palette/);
   assert.match(await page.$eval('.appearance-color-reset', e => e.getAttribute('aria-label')!), /Default dark palette/);
   await page.click('.settings-search'); await page.keyboard.type('Default dark palette');
-  assert.equal(await page.$$eval('.appearance-item', elements => elements.length), 9, 'default palette searches expose all color inputs');
+  assert.equal(await page.$$eval('.appearance-item', elements => elements.length), 10, 'default palette searches expose all color inputs');
   await page.click('.settings-search-clear');
   await page.evaluate(inputs => { for (const [key, value, priority] of inputs) document.documentElement.style.setProperty(key!, value!, priority!); }, originalHostInputs);
   await changeHost('dark'); await page.click('[data-appearance-mode="auto"]');
@@ -340,11 +392,16 @@ try {
   assert.equal(owner.getUiColors().dark.textEmphasis, undefined);
   fail = false; await page.click('.appearance-save-retry'); await saved('dark', 'textEmphasis', '#99CCAA');
   await page.waitForFunction(() => document.querySelector<HTMLElement>('.appearance-save-retry')!.hidden);
+  await edit('caret', '#FFAA44');
+  assert.equal(await caret(), 'rgb(255, 170, 68)', 'a custom cursor previews in Source');
+  await saved('dark', 'caret', '#FFAA44');
   await page.click('.settings-close'); await openFixture(); await openSettings();
   assert.equal(await value('surface'), '#122739', 'reload receives persisted values');
   assert.equal(await value('textEmphasis'), '#99CCAA');
+  assert.equal(await value('caret'), '#FFAA44', 'the cursor override survives a reload');
   await page.click('.settings-close'); await page.click('[data-mode="live"]');
   await page.waitForSelector('.meo-md-heading-content');
+  assert.equal(await caret(), 'rgb(255, 170, 68)', 'Live uses the same saved cursor override');
   assert.equal(await page.$eval('.meo-md-heading-content', e => getComputedStyle(e).color), await role('text-emphasis-content'), 'saved content emphasis projects its contrast-corrected role onto the actual Live heading');
   const headingContrast = await page.evaluate(() => {
     const ink = getComputedStyle(document.querySelector('.meo-md-heading-content')!).color;
@@ -360,6 +417,9 @@ try {
   await openSettings();
   await page.click('[data-appearance-mode="light"]');
   assert.equal(await value('surface'), '', 'light and dark profiles are independent');
+  assert.equal(await value('caret'), '', 'the dark cursor override stays in its own profile');
+  await edit('caret', '#9B3000'); await saved('light', 'caret', '#9B3000');
+  assert.equal(await caret(), 'rgb(155, 48, 0)', 'Live applies the light cursor override');
   await checkControlLayout(); await checkColorFocus();
   await edit('surface', '#F8F4EF'); await saved('light', 'surface', '#F8F4EF');
   if (screenshots) await page.screenshot({path: path.join(screenshots, '060-appearance-light.png')});
@@ -380,13 +440,26 @@ try {
   await saved('light', 'accent', '#005588');
   assert.equal(await value('accent'), '#005588', 'late acknowledgements preserve the latest intent');
   await page.click('[data-appearance-mode="auto"]');
-  await page.evaluate(() => { document.body.className = 'vscode-high-contrast'; window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'HC', type: 'dark', colors: {}, tokenColors: []}}})); });
+  await page.evaluate(() => {
+    document.body.className = 'vscode-high-contrast';
+    document.documentElement.style.setProperty('--vscode-editorCursor-foreground', '#FFFF00');
+    window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'HC', type: 'dark', colors: {}, tokenColors: []}}}));
+  });
   assert.equal(await role('surface'), 'rgb(34, 39, 46)', 'high contrast uses the native palette');
+  assert.equal(await caret(), 'rgb(255, 255, 0)', 'the high-contrast theme takes precedence over the cursor override');
   assert.ok(await page.$eval('.appearance-note', e => e.textContent?.includes('高对比度')));
   await checkPlaceholders('native high contrast', 7);
   if (screenshots) await page.screenshot({ path: path.join(screenshots, 'appearance-high-contrast.png') });
-  await page.evaluate(() => { document.body.className = 'vscode-dark'; window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'dark', type: 'dark', colors: {}, tokenColors: []}}})); });
+  await page.evaluate(() => {
+    document.body.className = 'vscode-dark';
+    document.documentElement.style.setProperty('--vscode-editorCursor-foreground', '#98D2FF');
+    window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'dark', type: 'dark', colors: {}, tokenColors: []}}}));
+  });
   assert.equal(await value('surface'), '#122739');
+  assert.equal(await caret(), 'rgb(255, 170, 68)', 'returning to a regular theme restores the override');
+  await page.click('[data-setting="caret"] .appearance-color-reset'); await saved('dark', 'caret', null);
+  assert.equal(await caret(), 'rgb(152, 210, 255)', 'reset follows the newly applied VS Code theme in Live');
+  if (screenshots) await page.screenshot({ path: path.join(screenshots, 'appearance-cursor-dark.png') });
   await page.click(resetColors); await saved('dark', 'surface', null); await saved('light', 'surface', null);
   assert.deepEqual(owner.getUiColors(), {light: {}, dark: {}}, 'reset immediately clears both profiles');
   // Distinct syntax colors must reach actual reading content, not just swatches.
@@ -468,13 +541,14 @@ try {
       const link = document.querySelector('.meo-md-link')!;
       const before = getComputedStyle(link).color;
       const top = view.scrollDOM.scrollTop;
-      window.dispatchEvent(new MessageEvent('message', {data: {type: 'uiColorsChanged', colors: {light: {link: '#660033'}, dark: {}}}}));
+      window.dispatchEvent(new MessageEvent('message', {data: {type: 'uiColorsChanged', colors: {light: {link: '#660033', caret: '#9B3000'}, dark: {}}}}));
       await frame(); await frame();
       return {state: view.state === state, line: document.querySelector('.cm-line') === line,
         link: document.querySelector('.meo-md-link') === link, scroll: Math.abs(view.scrollDOM.scrollTop - top) < 1,
-        recolored: getComputedStyle(link).color !== before};
+        recolored: getComputedStyle(link).color !== before,
+        caret: window.readEditorCaretColor(view.contentDOM)};
     });
-    assert.deepEqual(stable, {state: true, line: true, link: true, scroll: true, recolored: true}, `${large ? 'large' : 'ordinary'} document color changes preserve editor state, DOM and viewport`);
+    assert.deepEqual(stable, {state: true, line: true, link: true, scroll: true, recolored: true, caret: 'rgb(155, 48, 0)'}, `${large ? 'large' : 'ordinary'} document color changes preserve editor state, DOM and viewport`);
     await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {data: {type: 'uiColorsChanged', colors: {light: {}, dark: {}}}})));
   }
   const checkFeedbackAction = async (label: string, blue = true) => {

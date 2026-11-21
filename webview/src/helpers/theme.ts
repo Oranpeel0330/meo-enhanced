@@ -146,7 +146,6 @@ export const applyBuiltInVisualBaseline = (appearance: Exclude<EditorAppearance,
   rootStyle.setProperty('--meo-code-block-active-line-bg-live', resolvedTheme.semanticColors.codeBlockActiveLineBackground);
   rootStyle.setProperty('--meo-surface-background', resolvedTheme.semanticColors.surfaceBackground);
   rootStyle.setProperty('--meo-selection-bg', resolvedTheme.semanticColors.selectionBackground);
-  rootStyle.setProperty('--meo-caret-color', resolvedTheme.semanticColors.caret);
   rootStyle.setProperty('--meo-active-line-bg', resolvedTheme.semanticColors.activeLineBackground);
   rootStyle.setProperty('--meo-inline-code-background', resolvedTheme.semanticColors.inlineCodeBackground);
 

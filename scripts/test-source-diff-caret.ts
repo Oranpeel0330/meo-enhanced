@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
+import { installEditorCaretProbe, launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 
 const build = await Bun.build({ entrypoints: ['scripts/test-editor-stability-entry.ts'], target: 'browser', format: 'iife' });
 assert.ok(build.success, build.logs.map(String).join('\n'));
@@ -11,6 +11,7 @@ try {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}</style><div id="app" class="editor-host"></div>');
+  await installEditorCaretProbe(page);
   await page.addStyleTag({ path: 'webview/src/styles.css' });
   await page.addStyleTag({ content: ':root{--meo-background:white;--meo-foreground:#24292e;--meo-caret-color:#24292e;--meo-font-live:Arial;--meo-font-live-size:16px;--meo-font-source:monospace;--meo-font-source-size:14px;--git-added:#4caf7d;--git-deleted:#e05252}' });
   await page.addScriptTag({ content: await build.outputs[0]!.text() });
@@ -62,7 +63,7 @@ try {
           const selected = await page.evaluate(() => { const view = (window as any).ed.view;
             return { focus: view.hasFocus, line: view.state.doc.lineAt(view.state.selection.main.head).number,
               head: view.state.selection.main.head, empty: view.state.selection.main.empty,
-              caret: getComputedStyle(view.contentDOM).caretColor,
+              caret: window.readEditorCaretColor(view.contentDOM),
               originalDomain: document.documentElement.classList.contains('meo-git-diff-selecting-original') }; });
           const label = `${fixture.name}/${width}/${pathway}/details=${details}/line=${number}`;
           assert.ok(selected.focus && selected.empty && !selected.originalDomain, label + ': no editable caret ' + JSON.stringify(selected));

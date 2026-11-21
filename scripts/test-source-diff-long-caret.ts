@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import sharp from 'sharp';
-import { closeTestBrowser, launchTestBrowser } from './browser-test-helpers';
+import { closeTestBrowser, installEditorCaretProbe, launchTestBrowser } from './browser-test-helpers';
 
 // Distribute differences and blank targets across several CodeMirror viewports.
 const current: string[] = [];
@@ -48,9 +48,10 @@ try {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.setContent('<!doctype html><style>html,body{height:100%;margin:0}.editor-root,#app{height:100%}#outside{position:fixed;right:0;top:0}</style><div class="editor-root"><button id="outside">Outside</button><div id="app" class="editor-host"></div></div>');
+  await installEditorCaretProbe(page);
   await page.addStyleTag({ path: 'webview/src/styles.css' });
   // Freeze blinking, without overriding the real theme's caret color or geometry.
-  await page.addStyleTag({ content: ':root{--vscode-editor-font-family:Consolas,monospace;--vscode-editor-font-size:14px;--git-added:#4caf7d;--git-deleted:#e05252}.cm-content{caret-animation:manual}' });
+  await page.addStyleTag({ content: ':root{--vscode-editor-font-family:Consolas,monospace;--vscode-editor-font-size:14px;--git-added:#4caf7d;--git-deleted:#e05252}.cm-content{caret-animation:manual}.cm-cursorLayer{animation:none!important}' });
   await page.addScriptTag({ content: await build.outputs[0]!.text() });
   const settle = () => page.evaluate(async () => { for (let i = 0; i < 3; i++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
   const check = async (label: string) => {
@@ -61,7 +62,7 @@ try {
       let nativeHead: number | null = null;
       try { if (native?.focusNode) nativeHead = view.posAtDOM(native.focusNode, native.focusOffset); } catch {}
       return { head, nativeHead, focus: view.hasFocus, empty: view.state.selection.main.empty,
-        line: view.state.doc.lineAt(head).number, color: getComputedStyle(view.contentDOM).caretColor,
+        line: view.state.doc.lineAt(head).number, color: window.readEditorCaretColor(view.contentDOM),
         nativeNode: native?.focusNode?.nodeName, nativeParent: native?.focusNode?.parentElement?.className,
         rootClass: document.documentElement.className, focusClass: document.querySelector('.editor-root')!.className,
         scrollTop: view.scrollDOM.scrollTop, viewport: view.viewport,

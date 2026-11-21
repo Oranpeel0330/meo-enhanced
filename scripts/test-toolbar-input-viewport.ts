@@ -6,7 +6,7 @@ import sharp from 'sharp';
 import { installBrowserTimeoutClock } from './browser-timeout-clock';
 import { testBrowserTimeoutClock } from './test-browser-timeout-clock';
 import type { Browser, Page } from 'puppeteer-core';
-import { closeTestBrowser, launchTestBrowser } from './browser-test-helpers';
+import { closeTestBrowser, installEditorCaretProbe, launchTestBrowser } from './browser-test-helpers';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-toolbar-input-viewport-'));
@@ -47,6 +47,7 @@ async function open(browser: Browser, mode: 'live' | 'source', documentText = te
   await page.setViewport({ width: 1000, height: 700, deviceScaleFactor: 1 });
   await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}#app{display:flex;flex-direction:column}</style><button id="outside">outside</button><div id="app"><div class="mode-toolbar meo-preload-toolbar"></div><div class="editor-wrapper meo-preload-editor-shell"><div class="editor-host"></div></div></div>');
   await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
+  await installEditorCaretProbe(page);
   await page.addScriptTag({ content: `
     window.__hostMessages=[];
     window.acquireVsCodeApi=()=>({
@@ -170,7 +171,7 @@ async function runFocusReturn(browser: Browser, mode: 'live' | 'source'): Promis
       const originalFocus = content.focus.bind(content);
       let visibleOldRestores = 0;
       content.focus = (options?: FocusOptions) => {
-        if (getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)') visibleOldRestores += 1;
+        if (window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)') visibleOldRestores += 1;
         originalFocus(options);
       };
       window.dispatchEvent(new Event('blur'));
@@ -238,7 +239,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
     await page.keyboard.type('FAST_RETURN', { delay: 2 });
     const firstInput = await page.evaluate(() => ({
       changed: (window as any).__hostMessages.filter((message: any) => message.type === 'draftChanged').at(-1)?.text,
-      caretVisible: getComputedStyle(document.querySelector<HTMLElement>('.cm-content')!).caretColor !== 'rgba(0, 0, 0, 0)'
+      caretVisible: window.readEditorCaretColor(document.querySelector<HTMLElement>('.cm-content')!) !== 'rgba(0, 0, 0, 0)'
     }));
     assert.match(firstInput.changed.split('\n')[2], /FAST_RETURN/, `${mode} window return lost the first input`);
     assert.equal(firstInput.caretVisible, true, `${mode} fast return input kept the caret hidden`);
@@ -252,7 +253,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 70));
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       return { focused: document.activeElement === content,
-        caretVisible: getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)' };
+        caretVisible: window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)' };
     });
     assert.deepEqual(idleReturn, { focused: true, caretVisible: true },
       `${mode} idle return exceeded the short caret display bound`);
@@ -265,7 +266,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
       document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Alt', bubbles: true }));
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       return { focused: document.activeElement === content,
-        caretVisible: getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)' };
+        caretVisible: window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)' };
     });
     assert.deepEqual(keyboardReturn, { focused: true, caretVisible: true },
       `${mode} confirmed keyboard return waited for the caret display bound`);
@@ -280,7 +281,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 70));
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       return { focused: document.activeElement === content,
-        caretVisible: getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)' };
+        caretVisible: window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)' };
     });
     assert.deepEqual(nativeReturn, { focused: true, caretVisible: true },
       `${mode} native focusin left the return caret hidden`);
@@ -292,7 +293,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
     await page.keyboard.type('EARLY_SIGNAL', { delay: 2 });
     const beforeSignal = await page.evaluate(() => ({
       changed: (window as any).__hostMessages.filter((message: any) => message.type === 'draftChanged').at(-1)?.text,
-      caretVisible: getComputedStyle(document.querySelector<HTMLElement>('.cm-content')!).caretColor !== 'rgba(0, 0, 0, 0)'
+      caretVisible: window.readEditorCaretColor(document.querySelector<HTMLElement>('.cm-content')!) !== 'rgba(0, 0, 0, 0)'
     }));
     assert.match(beforeSignal.changed.split('\n')[2], /EARLY_SIGNAL/,
       `${mode} input before return notifications lost characters`);
@@ -306,7 +307,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
       content.blur();
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       return { focused: document.activeElement === content,
-        hidden: getComputedStyle(content).caretColor === 'rgba(0, 0, 0, 0)' };
+        hidden: window.readEditorCaretColor(content) === 'rgba(0, 0, 0, 0)' };
     });
     assert.deepEqual(rapidBlur, { focused: false, hidden: true },
       `${mode} an old activation frame completed after another blur`);
@@ -315,7 +316,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
       const content = document.querySelector<HTMLElement>('.cm-content')!;
       window.dispatchEvent(new Event('focus'));
       content.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
-      const visible = getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)';
+      const visible = window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)';
       content.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
       return visible;
     });
@@ -326,7 +327,7 @@ async function runImmediateFocusReturn(browser: Browser, mode: 'live' | 'source'
       await input.send('Input.insertText', { text: '中' });
       await page.waitForFunction(() => (window as any).__hostMessages
         .filter((message: any) => message.type === 'draftChanged').at(-1)?.text?.includes('中'), { timeout: 3000 });
-      assert.equal(await page.$eval('.cm-content', (content) => getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)'), true,
+      assert.equal(await page.$eval('.cm-content', (content) => window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)'), true,
         `${mode} committed composition left the caret hidden`);
     } finally {
       await input.detach();
@@ -376,7 +377,7 @@ async function expectBareAltPreservesInput(page: Page, label: string): Promise<v
         ? active.selectionStart === previous.range[0] && active.selectionEnd === previous.range[1]
         : selection?.anchorNode === previous.anchor && selection?.anchorOffset === previous.anchorOffset
           && selection?.focusNode === previous.focus && selection?.focusOffset === previous.focusOffset,
-      caretVisible: active instanceof HTMLElement && getComputedStyle(active).caretColor !== 'rgba(0, 0, 0, 0)'
+      caretVisible: active instanceof HTMLElement && window.readEditorCaretColor(active) !== 'rgba(0, 0, 0, 0)'
     };
   });
   assert.deepEqual(result, { forwarded: [], focused: true, selectionKept: true, caretVisible: true },
@@ -438,7 +439,7 @@ async function runAltFocusPolicy(browser: Browser, mode: 'live' | 'source'): Pro
     await page.keyboard.up('Alt');
     assert.equal(await page.evaluate(() => (window as any).__forwardedKeys.length), 0,
       mode + ' unmatched Alt release reached Host after window return');
-    assert.equal(await page.$eval('.cm-content', element => getComputedStyle(element).caretColor !== 'rgba(0, 0, 0, 0)'), true,
+    assert.equal(await page.$eval('.cm-content', element => window.readEditorCaretColor(element) !== 'rgba(0, 0, 0, 0)'), true,
       mode + ' Alt return left the caret hidden');
 
     // An OS window switch can hide both Tab and Alt release from the Webview.
@@ -574,7 +575,7 @@ async function runComponentFocusReturn(browser: Browser): Promise<void> {
       const afterInput = await page.evaluate((selector) => {
         const target = document.querySelector<HTMLElement>(selector)!;
         return { focused: document.activeElement === target,
-          caretVisible: getComputedStyle(target).caretColor !== 'rgba(0, 0, 0, 0)' };
+          caretVisible: window.readEditorCaretColor(target) !== 'rgba(0, 0, 0, 0)' };
       }, fixture.selector);
       assert.deepEqual(afterInput, { focused: true, caretVisible: true }, `${fixture.kind} accepted hidden or unfocused input`);
     } finally {
@@ -708,7 +709,7 @@ async function runActivationClickPriority(browser: Browser, mode: 'live' | 'sour
       (window as any).__activationPaints = [];
       (window as any).__visibleOldRestores = 0;
       content.focus = (options?: FocusOptions) => {
-        if (getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)') {
+        if (window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)') {
           const line = document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent;
           if (line?.includes('line 3 ordinary content')) (window as any).__visibleOldRestores += 1;
         }
@@ -729,7 +730,7 @@ async function runActivationClickPriority(browser: Browser, mode: 'live' | 'sour
           (window as any).__activationPaints.push({
             line: document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent,
             focused: document.activeElement === content,
-            visible: getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)'
+            visible: window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)'
           });
         });
       }, { once: true });
@@ -776,7 +777,7 @@ async function runClickAfterSettledReturn(browser: Browser, mode: 'live' | 'sour
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 70));
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       return { focused: document.activeElement === content,
-        caretVisible: getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)' };
+        caretVisible: window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)' };
     });
     assert.deepEqual(beforeClick, { focused: true, caretVisible: true },
       `${mode} settled return left the old input point unavailable`);
@@ -807,7 +808,7 @@ async function runSeparatedActivationClick(browser: Browser, mode: 'live' | 'sou
       let clicking = false;
       const sample = () => ({
         line: document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent,
-        visible: getComputedStyle(content).caretColor !== 'rgba(0, 0, 0, 0)',
+        visible: window.readEditorCaretColor(content) !== 'rgba(0, 0, 0, 0)',
         focused: document.activeElement === content
       });
       const observe = () => {
@@ -860,7 +861,7 @@ async function runPaintedActivationClick(browser: Browser, mode: 'live' | 'sourc
     acknowledgements.push(input.send('Page.screencastFrameAck', { sessionId }).then(() => {}, error => { infrastructureErrors.push(error); }));
   };
   try {
-    await page.$eval('.editor-root', (root, mode) => (root as HTMLElement).style.setProperty(mode === 'source' ? '--meo-source-caret' : '--meo-caret-color', '#ff00ff'), mode);
+    await page.$eval('.editor-root', root => (root as HTMLElement).style.setProperty('--meo-caret-color', '#ff00ff'));
     // Stabilize the existing real caret's blink phase, never draw a substitute.
     await page.addStyleTag({ content: '.cm-content{caret-animation:manual!important}.cm-cursorLayer{animation:none!important}' });
     await page.click('.cm-line:nth-child(3)');
@@ -959,8 +960,8 @@ async function runPaintedActivationClick(browser: Browser, mode: 'live' | 'sourc
     }
     assertPaintedCaretFrames(mode, pixels);
     // The caret's original 0→34→68 timing and every paint sample are complete.
-    // This fixture has no Worker URI: its new selection debounce must publish
-    // exactly one unavailable-statistics report, then leave the clock empty.
+    // Without a Worker URI, the selection debounce still reports line
+    // position exactly once before leaving the clock empty.
     await page.evaluate(() => (window as any).__timeoutClock.advance(180));
     await page.waitForFunction(count => (window as any).__hostMessages.filter((message: any) => message.type === 'documentStatistics').length > count,
       {}, clock.statisticsReports);
@@ -968,7 +969,9 @@ async function runPaintedActivationClick(browser: Browser, mode: 'live' | 'sourc
       reports: (window as any).__hostMessages.filter((message: any) => message.type === 'documentStatistics') }));
     assert.deepEqual(settled.pending, [], mode + ' click left pending fake timeout callbacks');
     assert.equal(settled.reports.length, clock.statisticsReports + 1, mode + ' remaining callback was not the selection statistics report');
-    assert.equal(settled.reports.at(-1).statistics, null);
+    assert.deepEqual(settled.reports.at(-1).statistics, {
+      lines: text.split('\n').length, line: 5, wordCountStatus: 'limited'
+    });
     console.log(mode + ' activation caret pixels: ' + JSON.stringify({ pixels, clock }));
   } catch (error) { primaryError = error; }
   finally {

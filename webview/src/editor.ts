@@ -6,6 +6,7 @@ import { markdownSyntaxPublication } from './editor/markdownSyntaxPublication';
 import { editorViewportBounds } from './editor/editorViewportBounds';
 import { readingPreparationRange } from './application/readingWindow';
 import { isLivePointerSelectionActive } from './editor/livePointerSelection';
+import { bodyCaret } from './editor/bodyCaret';
 import { applyPrimaryEditorTransactions } from './editor/nativeSelectionRetention';
 import { sourceLinePositionAtTarget } from './editor/domSourceLine';
 import { currentHeadingSuggestions } from './editor/headingSuggestions';
@@ -509,6 +510,7 @@ export function createEditor({
   const startImeComposition = () => {
     imeCompositionBaseText ??= view.state.doc;
     imeCompositionActive = true;
+    view.dom.classList.add('meo-body-caret-composing');
     beginLiveInputComposition(view);
     if (imeCompositionFlushTimer !== null) {
       window.clearTimeout(imeCompositionFlushTimer);
@@ -581,6 +583,8 @@ export function createEditor({
     onGitDiffSummaryChange(summary, comparison);
   };
   const scheduleImeCompositionFlush = () => {
+    imeCompositionActive = false;
+    view.dom.classList.remove('meo-body-caret-composing');
     if (imeCompositionFlushTimer !== null) {
       window.clearTimeout(imeCompositionFlushTimer);
     }
@@ -2413,17 +2417,16 @@ export function createEditor({
       gitGutterCompartment.of(startMode === 'live' ? gitDiffGutterLiveRenderExtensions() : gitDiffGutterRenderExtensions()),
       highlightActiveLine(),
       EditorView.lineWrapping,
+      bodyCaret,
       EditorView.domEventHandlers({
         beforeinput(event) {
           if (imeCompositionActive && event.inputType === 'insertText' && !event.isComposing) {
-            imeCompositionActive = false;
             scheduleImeCompositionFlush();
           }
           return false;
         },
         blur() {
           if (imeCompositionActive) {
-            imeCompositionActive = false;
             scheduleImeCompositionFlush();
           }
           emitSourcePositionChange(false);
@@ -2438,7 +2441,6 @@ export function createEditor({
           return false;
         },
         compositionend() {
-          imeCompositionActive = false;
           scheduleImeCompositionFlush();
           return false;
         },
@@ -2944,7 +2946,6 @@ export function createEditor({
       event instanceof InputEvent && event.inputType === 'insertText' && !event.isComposing
     )) {
       if (!imeCompositionActive) return;
-      imeCompositionActive = false;
       scheduleImeCompositionFlush();
     }
   };

@@ -4835,7 +4835,6 @@ html[data-editor-appearance='light'] .cm-tooltip.meo-hex-color-adjustment {
      Opacity also hides the caret; only the source glyphs should disappear. */
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
-  caret-color: var(--meo-caret-color);
 }
 
 .cm-editor.meo-mode-live .meo-md-code-container-prefix * {
@@ -6726,7 +6725,6 @@ body.outline-resizing .preview-frame {
   min-width: 0;
   padding: 0 12px 0 4px;
   background: var(--meo-code-background);
-  caret-color: var(--meo-caret);
 }
 
 .cm-editor .meo-latex-math-source-editor .cm-line {
@@ -7479,6 +7477,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
   outline: none;
   background: transparent;
   color: var(--meo-foreground);
+  caret-color: var(--meo-caret-color);
   font: inherit;
   font-weight: inherit;
   font-style: inherit;
@@ -7526,7 +7525,6 @@ html[data-editor-appearance='dark'] body.vscode-dark
   background: transparent;
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
-  caret-color: var(--meo-caret);
 }
 
 .cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea {
@@ -7612,14 +7610,14 @@ html[data-editor-appearance='dark'] body.vscode-dark
 
 .cm-editor .meo-md-html-table-cell-content.is-editing-line.is-cell-composing > textarea {
   color: var(--meo-foreground);
-  caret-color: var(--meo-caret, var(--meo-caret-color));
+  caret-color: var(--meo-caret-color);
 }
 
 .cm-editor .meo-md-table-source-caret {
   display: none;
   position: absolute;
   width: 1px;
-  background-color: var(--meo-caret, var(--meo-caret-color));
+  background-color: var(--meo-caret-color);
   /* Match the native insertion caret under either motion preference. */
   animation: meo-table-cell-caret-blink 1.2s step-end infinite;
   pointer-events: none;
@@ -8000,14 +7998,24 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
   min-height: 1lh;
 }
 
-.cm-editor.meo-mode-live .cm-cursorLayer {
-  z-index: 4;
+.cm-editor > .cm-scroller > .cm-cursorLayer {
+  z-index: 4 !important;
 }
 
-.cm-editor .cm-cursor {
-  border-left-color: var(--meo-caret-color) !important;
-  border-left-width: 2px !important;
-  background-color: transparent !important;
+/* Keep Chromium's caret for IME and until a measured insertion point exists. */
+.cm-editor.cm-focused:not(.meo-body-caret-composing) > .cm-scroller:has(> .cm-cursorLayer > .cm-cursor-primary) > .cm-content:focus {
+  caret-color: transparent;
+}
+
+.cm-editor.meo-body-caret-composing > .cm-scroller > .cm-cursorLayer {
+  visibility: hidden;
+}
+
+.cm-editor > .cm-scroller > .cm-cursorLayer > .cm-cursor-primary {
+  margin-left: 0;
+  border: 0;
+  background-color: var(--meo-caret-color);
+  transform-origin: left;
 }
 
 .cm-editor .cm-fat-cursor {
@@ -9163,7 +9171,6 @@ html[data-meo-ui-contrast='high'] .meo-input-suggestion[aria-selected='true'] :i
 /* Source owns native editor chrome and TextMate styling independently of Live. */
 .cm-editor.meo-mode-source {
   --meo-foreground: var(--meo-source-foreground);
-  --meo-caret-color: var(--meo-source-caret);
   --meo-selection-bg: var(--meo-source-selection);
   --meo-active-line-bg: var(--meo-source-line);
   --meo-line-number-foreground: var(--meo-source-line-number);
