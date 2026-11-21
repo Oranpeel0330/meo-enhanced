@@ -129,7 +129,7 @@ try {
             return;
           }
           try {
-            window.__preferences=window.EditingSettingsHarness.changeEditingPreferences(window.__preferences,message.change,'other');
+            window.__preferences=window.EditingSettingsHarness.changeEditingPreferences(window.__preferences,message.change,message.platform??'other');
             const revision=++window.__revision;
             queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'updatedEditingPreferences',requestId:message.requestId,revision,result:{ok:true,value:window.__preferences}}})));
           } catch(error) {
@@ -181,6 +181,105 @@ try {
       window.dispatchEvent(new MessageEvent('message', { data: global.__initMessage }));
     }, { text, mode, outline, legacyStrongColoring, largeDocumentOptimizationEnabled });
   };
+  if (process.argv.includes('--windows-shortcuts-only') || process.argv.length === 2) {
+    const editorSnapshot = () => page.evaluate(() => {
+      const scope = window as any;
+      const view = scope.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      const active = document.activeElement as HTMLElement | null;
+      return { content: view.state.doc.toString(), head: view.state.selection.main.head, row: active?.dataset.tableRow, column: active?.dataset.tableCol };
+    });
+    const select = (text: string, range = false) => page.evaluate(({ text, range }) => {
+      const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+      const from = view.state.doc.toString().indexOf(text);
+      if (from < 0) throw new Error('Missing fixture text: ' + text);
+      view.dispatch({ selection: { anchor: range ? from : from + 1, head: range ? from + text.length : from + 1 } });
+      view.focus();
+    }, { text, range });
+    const press = async (key: string, ...modifiers: ('Control' | 'Alt' | 'Shift')[]) => {
+      for (const modifier of modifiers) await page.keyboard.down(modifier);
+      try { await page.keyboard.press(key as Parameters<typeof page.keyboard.press>[0]); }
+      finally { for (const modifier of modifiers.reverse()) await page.keyboard.up(modifier); }
+    };
+    for (const [mode, large] of [['live', false], ['source', false], ['live', true], ['source', true]] as const) {
+      await page.evaluate(() => Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' }));
+      const text = 'keep this\n\nstrike me\n\n| First | Second |\n| --- | --- |\n| alpha | one |\n| beta | omega |\n\nend'
+        + (large ? '\n\nOrdinary paragraph in the rest of the document.'.repeat(4_200) : '');
+      await openFixture(text, mode, false, 'hidden', false, large);
+      await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden')
+        && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+      const optimized = await page.evaluate(() => {
+        const harness = (window as any).EditingSettingsHarness;
+        return harness.usesLargeDocumentDerivedWorkBudget(harness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor')).state);
+      });
+      assert.equal(optimized, large, `${mode}: expected document-scale policy`);
+      await select('keep this', true);
+      await press('k', 'Control', 'Shift');
+      let snapshot = await editorSnapshot();
+      assert.match(snapshot.content, /```[\s\S]*keep this[\s\S]*```/, `${mode}: code fences replace the old delete-line gesture`);
+      await select('strike me', true);
+      await press('5', 'Alt', 'Shift');
+      assert.match((await editorSnapshot()).content, /~~strike me~~/, `${mode}: physical Digit5 toggles strikethrough`);
+      const beforeWorkbenchActions = (await editorSnapshot()).content;
+      await press('3', 'Control', 'Shift');
+      await press('0', 'Control', 'Shift');
+      const actions = await page.evaluate(() => (window as any).__messages.filter((message: any) =>
+        message.type === 'openFileTree' || message.type === 'resetWindowZoom'));
+      assert.deepEqual(actions, [{ type: 'openFileTree' }, { type: 'resetWindowZoom' }]);
+      assert.equal((await editorSnapshot()).content, beforeWorkbenchActions);
+
+      const enterCell = (row: number, col: number, text: string) => mode === 'live'
+        ? page.click(`.meo-md-html-table:not(.meo-md-html-table-sticky-table) textarea[data-table-row="${row}"][data-table-col="${col}"]`)
+        : select(text);
+      const tableRows = () => editorSnapshot().then(state => state.content.split('\n').filter(line => line.startsWith('|')));
+      await enterCell(2, 1, 'omega');
+      await press('Tab');
+      await page.waitForFunction(mode => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        if (view.state.doc.toString().split('\n').filter((line: string) => line.startsWith('|')).length !== 5) return false;
+        if (mode === 'source') return view.state.doc.lineAt(view.state.selection.main.head).text === '|  |  |';
+        const active = document.activeElement as HTMLElement | null;
+        return active?.dataset.tableRow === '3' && active.dataset.tableCol === '0';
+      }, {}, mode);
+      assert.equal((await tableRows()).length, 5);
+      const waitForRows = (length: number) => page.waitForFunction(length => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        return view.state.doc.toString().split('\n').filter((line: string) => line.startsWith('|')).length === length;
+      }, {}, length);
+      await press('z', 'Control');
+      await waitForRows(4);
+      await press('y', 'Control');
+      await waitForRows(5);
+      await enterCell(1, 0, 'alpha');
+      await press('ArrowDown', 'Alt');
+      let rows = await tableRows();
+      assert.match(rows[2], /beta/, `${mode}: move the next row ahead of the current row`);
+      assert.match(rows[3], /alpha/);
+      await enterCell(2, 0, 'alpha');
+      await press('ArrowUp', 'Alt');
+      rows = await tableRows();
+      assert.match(rows[2], /alpha/, `${mode}: move the current row back up`);
+      await enterCell(1, 0, 'alpha');
+      await press('Enter', 'Control');
+      rows = await tableRows();
+      assert.equal(rows.length, 6, `${mode}: Ctrl+Enter inserts a row`);
+      assert.match(rows[3], /^\|\s+\|\s+\|$/);
+      await enterCell(1, 0, 'alpha');
+      await press('Enter', 'Shift');
+      if (mode === 'live') {
+        await page.waitForFunction(() => (document.activeElement as HTMLTextAreaElement | null)?.value.includes('\n'));
+      } else assert.match((await editorSnapshot()).content, /<br\s*\/?>/);
+      assert.equal((await tableRows()).length, 6, `${mode}: Shift+Enter stays in the cell`);
+      assert.deepEqual(errors, []);
+      await page.close();
+      page = await browser.newPage();
+      page.on('pageerror', error => errors.push(String(error)));
+    }
+    console.log('Windows shortcuts changed real Live/Source documents, appended and moved table rows, kept cell breaks, and dispatched workbench actions');
+    if (process.argv.includes('--windows-shortcuts-only')) {
+      await closeTestBrowser(browser);
+      process.exit(0);
+    }
+  }
   if (process.argv.includes('--custom-shortcuts-only') || process.argv.length === 2) {
     const bind = async (stroke: string) => {
       await page.keyboard.down('Control');
@@ -1220,9 +1319,9 @@ try {
         return row.previousElementSibling === toggle && label.right <= stepper.left && label.top >= switchBox.bottom
           && Math.abs(label.left - parentLabel.left) < 1;
       }), 'the numeric row sits below the switch row and aligns with its text');
-      assert.equal(await width(), '800px');
+      assert.equal(await width(), '1200px');
       await fill(field, '850');
-      assert.equal(await width(), '800px', 'typing a draft does not reflow the document');
+      assert.equal(await width(), '1200px', 'typing a draft does not reflow the document');
       const count = await messageCount();
       await page.click(`${quick} [data-width-action="increase"]`);
       assert.equal(await width(), '950px');
@@ -1267,7 +1366,7 @@ try {
       await page.click('.settings-title');
       assert.equal(await width(), '1100px', 'valid blur commits the input');
       await page.click(`${full} [data-width-action="reset"]`);
-      assert.equal(await width(), '800px');
+      assert.equal(await width(), '1200px');
       const fullLayout = await layout(`${full} .content-width-input`);
       await fill(`${full} .content-width-input`, '7000'); await page.keyboard.press('Enter');
       assert.deepEqual(await layout(`${full} .content-width-input`), fullLayout, 'validation does not shift the full settings window');
@@ -1888,7 +1987,20 @@ try {
   await page.click('[data-setting="lineHeight"] .appearance-typography-reset');
   assert.equal(await page.$eval(lineSpacing + ' output', el => el.textContent), '1.5 倍');
   await page.click('.settings-tab[data-tab="typing"]');
-  assert.equal(await page.$$eval('.settings-item', elements => elements.length), 16);
+  const typingSettingCount = Object.keys(defaultInputAssistance).length + 1; // Includes image storage.
+  assert.equal(await page.$$eval('.settings-item', elements => elements.length), typingSettingCount);
+  const pasteOptionsSwitch = '[data-setting="showPasteOptions"] [role="switch"]';
+  assert.equal(await page.$eval(pasteOptionsSwitch, e => e.getAttribute('aria-label')), '显示粘贴选项');
+  assert.equal(await page.$eval(pasteOptionsSwitch, e => e.getAttribute('aria-checked')), 'true');
+  assert.equal(await page.$eval('[data-setting="pasteHtml"] [role="switch"]', e => e.getAttribute('aria-checked')), 'true');
+  await page.click(pasteOptionsSwitch);
+  await page.waitForFunction(() => (window as any).__preferences.input.showPasteOptions === false);
+  assert.deepEqual(await page.evaluate(() => {
+    const input = (window as any).__preferences.input;
+    return [input.pasteHtml, input.convertTables, input.pasteUrl];
+  }), [true, true, true], 'the menu switch does not change the default conversion choices');
+  await page.click(pasteOptionsSwitch);
+  await page.waitForFunction(() => (window as any).__preferences.input.showPasteOptions === true);
   const slashSwitch = '[data-setting="slash"] [role="switch"]';
   const slashAboveSwitch = '[data-setting="slashPreferAbove"] [role="switch"]';
   assert.equal(await page.$eval(slashAboveSwitch, e => e.getAttribute('aria-label')), '候选菜单优先在上方显示');
@@ -2468,7 +2580,7 @@ try {
         query: element.querySelector('.settings-item-title')!.textContent!,
         values: [...element.querySelectorAll('.settings-key, .image-location-mode-title, .image-naming-title, .image-location-field-label, .image-location-picker, .image-location-token')].map(control => control.getAttribute('aria-label') ?? control.textContent!)
       })));
-      assert.equal(items.length, tab === 'general' ? 10 : tab === 'appearance' ? 13 : tab === 'typing' ? 16 : editorCommandIds.length, 'search inventory includes every setting and command');
+      assert.equal(items.length, tab === 'general' ? 10 : tab === 'appearance' ? 14 : tab === 'typing' ? typingSettingCount : editorCommandIds.length, 'search inventory includes every setting and command');
       searchCases.push(...items.flatMap(item => [item.query, ...item.values].map(query => ({tab, id: item.id, query}))));
     }
     await page.click('.settings-close');
@@ -2478,12 +2590,14 @@ try {
     ['general', 'width', '版心', 'reading width'], ['general', 'widthValue', '像素', 'pixels'],
     ['general', 'boldHeadings', '标题字重', 'heading weight'], ['general', 'stickyHeader', '冻结表头', 'freeze header'],
     ['general', 'restorePosition', '上次位置', 'remember position'], ['general', 'largeDocument', '启动速度', 'large file'],
+    ['appearance', 'caret', '插入点', 'insertion point'],
     ['appearance', 'mode', '夜间', 'night'], ['appearance', 'surface', '底色', 'surface'], ['appearance', 'documentBackground', '画布', 'canvas'], ['appearance', 'textEmphasis', '圆点', 'bullet'], ['appearance', 'link', '脚注', 'footnote'], ['general', 'language', '本地化', 'locale'], ['appearance', 'fontSize', '文字大小', 'zoom'], ['appearance', 'lineHeight', '行高', 'leading'], ['appearance', 'lineHeight', '未完善', 'Beta'], ['appearance', 'mouseWheelZoom', '鼠标 滚轮', 'mouse wheel'],
     ['typing', 'selectionToolbar', '浮动工具栏', 'floating toolbar'], ['typing', 'wrapSelection', '环绕选区', 'surround selection'],
     ['typing', 'pairMode', '自动闭合', 'auto close'], ['typing', 'skipMode', '跳出符号', 'overtype'],
     ['typing', 'deleteMode', '一起删除', 'paired deletion'], ['typing', 'lists', '清单', 'list continuation'],
     ['typing', 'convertTables', '制表符', 'TSV'], ['typing', 'pasteUrl', '地址栏', 'web address'],
-    ['typing', 'pasteHtml', '富文本', 'rich text'], ['typing', 'documentSuggestions', '锚点', 'backlink'],
+    ['typing', 'pasteHtml', '富文本', 'rich text'], ['typing', 'showPasteOptions', '仅保留文字', 'keep text only'],
+    ['typing', 'documentSuggestions', '锚点', 'backlink'],
     ['typing', 'html', '闭合标签', 'attribute'],
     ['typing', 'slash', '命令面板', 'command palette'], ['typing', 'emoji', '小黄脸', 'smiley'],
     ['typing', 'imageStorage', '自定义路径', 'image storage'],

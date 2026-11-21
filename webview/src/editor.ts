@@ -6,6 +6,7 @@ import { markdownSyntaxPublication } from './editor/markdownSyntaxPublication';
 import { editorViewportBounds } from './editor/editorViewportBounds';
 import { readingPreparationRange } from './application/readingWindow';
 import { isLivePointerSelectionActive } from './editor/livePointerSelection';
+import { bodyCaret } from './editor/bodyCaret';
 import { applyPrimaryEditorTransactions } from './editor/nativeSelectionRetention';
 import { sourceLinePositionAtTarget } from './editor/domSourceLine';
 import { currentHeadingSuggestions } from './editor/headingSuggestions';
@@ -13,7 +14,9 @@ import { markdownSyntaxContext, type MarkdownInputContext } from './editor/block
 import { createInputSuggestions, refreshInputSuggestions } from './editor/inputSuggestions';
 import { insertShortcutSnippet, insertSourceCellSnippet } from './editor/shortcutSnippet';
 import type { LinkCandidate } from '../../src/protocol/editorServices';
-import { sourceTableAt, createSourceTableCommandTarget, tableShortcutCommands } from './editor/sourceTableCommands';
+import { sourceTableAt, createSourceTableCommandTarget, tableShortcutCommands, type SourceTable } from './editor/sourceTableCommands';
+import type { TableCommand } from './application/tableCommand';
+import { webviewShortcutPlatform } from './helpers/shortcuts';
 import { parseMarkdownTable, serializeDelimitedTable } from './application/delimitedTable';
 import { requestMountedTableShortcut, mountedTableClipboardText } from './helpers/tables';
 import { htmlCommentEditing } from './editor/htmlCommentEditing';
@@ -21,12 +24,13 @@ import { nativeSymbolInput, planNativeHtmlCommentToggle } from './editor/nativeT
 import { canRunCustomEditorCommand, formatMultipleSelections, toggleHtmlComment, runEditorCommand, secondarySelections } from './editor/commands';
 import type { EditorCommandId } from '../../src/foundation/editingPreferences';
 import { pasteAssistance, insertPlainClipboardText } from './editor/pasteAssistance';
+import { createMarkdownContentParser } from '../../src/shared/markdownContentParser';
 import { ChangeSet, EditorState, Compartment, Prec, Transaction, StateEffect, type Annotation, type ChangeDesc, type ChangeSpec, type TransactionSpec, EditorSelection, type Extension, type SelectionRange, type Text } from '@codemirror/state';
 import { documentEdit, documentSnapshot } from './adapters/documentSnapshot';
 import type { DocumentText, DocumentTextEdit } from '../../src/foundation/documentSnapshot';
 import { EditorView, keymap, highlightActiveLine, lineNumbers, highlightActiveLineGutter, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
-import { defaultKeymap, history, historyKeymap, indentMore, indentLess, isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
+import { defaultKeymap, deleteLine, history, historyKeymap, indentMore, indentLess, isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { markdownKeymap } from '@codemirror/lang-markdown';
 import { boundedMarkdownInputPrefix, editorMarkdownLanguage, getEditorMarkdownLanguage } from './liveMode';
 import { indentUnit, syntaxTree, forceParsing } from '@codemirror/language';
@@ -509,6 +513,7 @@ export function createEditor({
   const startImeComposition = () => {
     imeCompositionBaseText ??= view.state.doc;
     imeCompositionActive = true;
+    view.dom.classList.add('meo-body-caret-composing');
     beginLiveInputComposition(view);
     if (imeCompositionFlushTimer !== null) {
       window.clearTimeout(imeCompositionFlushTimer);
@@ -581,6 +586,8 @@ export function createEditor({
     onGitDiffSummaryChange(summary, comparison);
   };
   const scheduleImeCompositionFlush = () => {
+    imeCompositionActive = false;
+    view.dom.classList.remove('meo-body-caret-composing');
     if (imeCompositionFlushTimer !== null) {
       window.clearTimeout(imeCompositionFlushTimer);
     }
@@ -2273,6 +2280,26 @@ export function createEditor({
     tableCommandEffectAdapter,
     (error) => console.error('Table command Runtime failed', error)
   );
+  const requestSourceTableCommand = (view: EditorView, table: SourceTable, command: TableCommand, focusInsertedRow = false) => {
+    const registration = tableCommandTargetRegistry.register(createSourceTableCommandTarget(
+      view, table, run => viewportController.preserveDocumentAnchorWhileMutation(run, true)
+    ));
+    return tableCommandRuntime.dispatch({
+      type: 'request', command, target: {
+        tableId: registration.id, row: table.row, column: table.column, selection: null, ...(focusInsertedRow ? { focusInsertedRow } : {})
+      }, enabled: true
+    }).finally(() => registration.dispose());
+  };
+  const appendSourceTableRowOnTab = (view: EditorView): boolean => {
+    const { state } = view;
+    if (webviewShortcutPlatform !== 'windows' || currentMode !== 'source' || view.composing
+      || state.selection.ranges.length !== 1 || !state.selection.main.empty
+      || !isInsideTableCell(state, state.selection.main.head)) return false;
+    const table = sourceTableAt(state);
+    if (!table || table.row !== table.matrix.cells.length - 1 || table.column !== table.matrix.cells[0].length - 1) return false;
+    void requestSourceTableCommand(view, table, 'insert-row-below', true);
+    return true;
+  };
   const tableCommandEnvironment: TableCommandEnvironment = {
     dispatch(input) {
       return tableCommandRuntime.dispatch(input);
@@ -2318,7 +2345,10 @@ export function createEditor({
       inputAssistanceCompartment.of(inputAssistanceFacet.of(initialInputAssistance)),
       Prec.highest(htmlCommentEditing),
       Prec.highest(typingAssistance),
-      Prec.highest(pasteAssistance((view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text))),
+      Prec.highest(pasteAssistance(
+        (view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text),
+        createMarkdownContentParser().set({ linkify: false })
+      )),
       Prec.highest(createInputSuggestions({ inputContext, mathContext: getMathCompletionBody, requestLinks: requestLinkCandidates, currentHeadings: () => currentHeadingSuggestions(readDocumentTextProjection(view.state.doc)),
         openSettings: openInputSuggestionSettings,
         renderMathPreview: source => renderLatexMathToHtml(source, 'inline'),
@@ -2355,7 +2385,7 @@ export function createEditor({
             || editorView.state.selection.main.from < block.from || editorView.state.selection.main.to > block.to) return false;
           focusBlockReading(editorView, block); return true;
         } },
-        { key: 'Tab', run: (view) => indentMermaidSource(view, false) || indentDisplayMathSource(view, false) || indentListByTwoSpaces(view) || indentMore(view) },
+        { key: 'Tab', run: (view) => indentMermaidSource(view, false) || indentDisplayMathSource(view, false) || appendSourceTableRowOnTab(view) || indentListByTwoSpaces(view) || indentMore(view) },
         { key: 'Shift-Tab', run: (view) => indentMermaidSource(view, true) || indentDisplayMathSource(view, true) || outdentListByTwoSpaces(view) || indentLess(view) },
         { key: 'Alt-]', run: indentListByTwoSpaces },
         { key: 'Alt-[', run: outdentListByTwoSpaces },
@@ -2378,14 +2408,15 @@ export function createEditor({
             (view.state.facet(inputAssistanceFacet).lists && handleEnterInList(view))
         },
         { key: 'Shift-Enter', run: (view) => insertIndentedCodeNewline(view, resolvedSyntaxTreeAt(view.state, view.state.selection.main.to), false) || insertTableCellLineBreak(view) },
-        { key: 'Ctrl-Enter', run: (view) => finishDisplayMathEditing(view) || insertTableCellLineBreak(view) },
+        { key: 'Ctrl-Enter', run: (view) => finishDisplayMathEditing(view) || (webviewShortcutPlatform === 'windows'
+          ? isInsideTableCell(view.state, view.state.selection.main.head) : insertTableCellLineBreak(view)) },
         { key: 'ArrowUp', run: (view) => tryEnterAdjacentTable(view, 'up') || tryMoveAcrossRenderedBlockSource(view, false, true) },
         { key: 'ArrowDown', run: (view) => tryEnterAdjacentTable(view, 'down') || tryMoveAcrossRenderedBlockSource(view, true, true) },
         ...markdownKeymap.map(binding => ({ ...binding, run: (view: EditorView) =>
           (binding.key === 'Backspace' && selectedDisplayMathBody(view.state))
           || (binding.key === 'Enter' && !view.state.facet(inputAssistanceFacet).lists)
             ? false : binding.run?.(view) ?? false })),
-        ...defaultKeymap.map(binding => binding.key === 'Enter'
+        ...defaultKeymap.filter(binding => webviewShortcutPlatform !== 'windows' || binding.run !== deleteLine).map(binding => binding.key === 'Enter'
           ? { ...binding, run: insertLiteralSourceNewline, shift: insertLiteralSourceNewline } : binding),
         ...editorHistoryKeymap
       ]),
@@ -2413,17 +2444,16 @@ export function createEditor({
       gitGutterCompartment.of(startMode === 'live' ? gitDiffGutterLiveRenderExtensions() : gitDiffGutterRenderExtensions()),
       highlightActiveLine(),
       EditorView.lineWrapping,
+      bodyCaret,
       EditorView.domEventHandlers({
         beforeinput(event) {
           if (imeCompositionActive && event.inputType === 'insertText' && !event.isComposing) {
-            imeCompositionActive = false;
             scheduleImeCompositionFlush();
           }
           return false;
         },
         blur() {
           if (imeCompositionActive) {
-            imeCompositionActive = false;
             scheduleImeCompositionFlush();
           }
           emitSourcePositionChange(false);
@@ -2438,7 +2468,6 @@ export function createEditor({
           return false;
         },
         compositionend() {
-          imeCompositionActive = false;
           scheduleImeCompositionFlush();
           return false;
         },
@@ -2944,7 +2973,6 @@ export function createEditor({
       event instanceof InputEvent && event.inputType === 'insertText' && !event.isComposing
     )) {
       if (!imeCompositionActive) return;
-      imeCompositionActive = false;
       scheduleImeCompositionFlush();
     }
   };
@@ -4468,8 +4496,7 @@ export function createEditor({
       const tableCommand = tableShortcutCommands[command];
       const sourceTable = !tableRequest && tableCommand ? sourceTableAt(view.state) : null;
       if (sourceTable && tableCommand) {
-        const registration = tableCommandTargetRegistry.register(createSourceTableCommandTarget(view, sourceTable, run => viewportController.preserveDocumentAnchorWhileMutation(run, true)));
-        tableRequest = tableCommandRuntime.dispatch({ type: 'request', command: tableCommand, target: { tableId: registration.id, row: sourceTable.row, column: sourceTable.column, selection: null }, enabled: true }).finally(() => registration.dispose());
+        tableRequest = requestSourceTableCommand(view, sourceTable, tableCommand);
       }
       if (tableRequest) {
         if (reportFailure) void tableRequest.then(outcome => {

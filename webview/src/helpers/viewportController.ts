@@ -3337,20 +3337,19 @@ export class ViewportController {
     anchor: ViewportDocumentAnchor
   ): void {
     const roundTrip = record.modeRoundTripSnapshot;
-    if (roundTrip && this.canRestoreModeRoundTripSnapshot(record, owner)) {
+    const returningToCapture = this.canRestoreModeRoundTripSnapshot(record, owner);
+    // Keep the document's leading space visible when switching edit modes at the top.
+    const switchingAtTop = owner === 'editor' && roundTrip?.owner === 'editor'
+      && roundTrip.scrollTop === 0 && roundTrip.editorMode !== this.getMode();
+    if (roundTrip && (returningToCapture || switchingAtTop)) {
       if (owner === 'editor') {
-        this.writeScrollPosition({
-          top: roundTrip.scrollTop,
-          left: this.view.scrollDOM.scrollLeft
-        });
-        this.stabilizeScrollPosition({
-          top: roundTrip.scrollTop,
-          left: this.view.scrollDOM.scrollLeft
-        });
+        const target = { top: roundTrip.scrollTop, left: this.view.scrollDOM.scrollLeft };
+        this.writeScrollPosition(target);
+        this.stabilizeScrollPosition(target);
       } else {
         this.stabilizePreviewScrollTop(roundTrip.scrollTop, record);
       }
-      roundTrip.returned = true;
+      if (returningToCapture) roundTrip.returned = true;
       record.projectedOwners.add(owner);
       return;
     }
@@ -3553,10 +3552,9 @@ export class ViewportController {
   private captureEditorReadingAnchor(viewportOffset: number): ViewportDocumentAnchor {
     const scroller = this.view.scrollDOM;
     const boundedViewportOffset = Math.max(0, Math.min(viewportOffset, scroller.clientHeight));
-    const sampleHeight = scroller.scrollTop + boundedViewportOffset;
+    const bounds = scroller.getBoundingClientRect();
     if (this.getMode() === 'live') {
-      const scrollerRect = scroller.getBoundingClientRect();
-      const sampleY = scrollerRect.top + boundedViewportOffset;
+      const sampleY = bounds.top + boundedViewportOffset;
       const row = this.view.contentDOM?.querySelector?.('.meo-md-html-table') && Array.from(this.view.contentDOM.querySelectorAll<HTMLElement>(
         '.meo-md-html-table:not(.meo-md-html-table-sticky-table) tr[data-source-line-number]'
       )).find(row => { const rect = row.getBoundingClientRect(); return rect.top <= sampleY && rect.bottom > sampleY; });
@@ -3595,13 +3593,15 @@ export class ViewportController {
         }
       }
     }
-    const block = this.view.lineBlockAtHeight(sampleHeight);
+    // The height map starts at the first document line, below any scroller padding.
+    const documentTop = this.view.documentTop;
+    const block = this.view.lineBlockAtHeight(bounds.top + boundedViewportOffset - documentTop);
     // A wrapped source line can cover thousands of visual rows. Its start is
     // not the text currently being read. Preserve the measured visual row's
     // source position; the normalized range also projects it into Preview.
     if (block.height > this.view.defaultLineHeight * 1.5
       && typeof this.view.posAtCoords === 'function') {
-      const bounds = scroller.getBoundingClientRect(), content = this.view.contentDOM.getBoundingClientRect();
+      const content = this.view.contentDOM.getBoundingClientRect();
       const gutter = scroller.querySelector('.cm-gutters')?.getBoundingClientRect();
       const position = this.view.posAtCoords({ x: Math.min(bounds.right - 2,
         Math.max(bounds.left + 2, content.left + 2, (gutter?.right ?? bounds.left) + 2)),
@@ -3612,13 +3612,13 @@ export class ViewportController {
         return { position, lineOffset: 0, preciseTextPosition: true, viewportOffset: Math.max(0, coords.top - bounds.top),
           sourceRange: { startLine: line, endLine: line,
             progress: Math.max(0, Math.min(1,
-              (scroller.scrollTop + coords.top - bounds.top - block.top) / block.height)) } };
+              (coords.top - documentTop - block.top) / block.height)) } };
       }
     }
     return {
       position: block.from,
       lineOffset: 0,
-      viewportOffset: Math.max(0, block.top - scroller.scrollTop)
+      viewportOffset: Math.max(0, documentTop + block.top - bounds.top)
     };
   }
 

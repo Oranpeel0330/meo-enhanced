@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { assessLargeDocument } from '../src/foundation/largeDocument';
 import { defaultInputAssistance } from '../src/foundation/editingPreferences';
-import { browser, server, open, frames } from './input-presentation-test-helpers';
+import { browser, server, open, frames, captureResult } from './input-presentation-test-helpers';
 import { closeTestBrowser } from './browser-test-helpers';
 import { captureHistoryInteraction, assertHistoryRoundTrip, assertHistoryCoverage } from './history-interaction-contract';
 
@@ -15,7 +15,8 @@ const multiRanges: Range[] = [{ anchor: 5, head: 0 }, { anchor: 6, head: 10 }];
 const receipts = [
   'clipboard/source/html-paste',
   'clipboard/live/multi-paste',
-  'clipboard/source/multi-cut'
+  'clipboard/source/multi-cut',
+  'clipboard/live/optimized-paste-options'
 ];
 const completed: string[] = [];
 let failure: unknown;
@@ -136,6 +137,43 @@ try {
       assert.equal(after.mainIndex, 1, id + ': primary range after cut');
       assert.equal(host.readHost(), afterText, id + ': host text');
       await assertHistoryRoundTrip(page, { ...witness, label: id, before, after });
+      completed.push(id);
+      assert.deepEqual(host.errors, [], id + ': no runtime errors');
+    } finally { host.dispose(); await page.close(); }
+  }
+  {
+    const id = receipts[3]!;
+    const tail = '\n\n' + 'Long document padding.\n'.repeat(8200);
+    const original = prefix + 'left word right' + tail;
+    const afterText = prefix + 'left bold right' + tail;
+    assert.equal(assessLargeDocument(original).boundedEditorWork, true, id + ': production optimized-document policy');
+    const page = await browser.newPage();
+    const host = await open(page, original, false, 'live');
+    try {
+      await enableHtmlPaste(page);
+      await setRanges(page, [{ anchor: prefix.length + 9, head: prefix.length + 5 }], 0);
+      await centerSelection(page);
+      const before = await captureHistoryInteraction(page, witness);
+      assert.deepEqual(before.ranges, [{ anchor: prefix.length + 9, head: prefix.length + 5 }]);
+      await dispatchClipboard(page, 'paste', 'bold', '<strong>bold</strong>');
+      await frames(page, 4);
+      assert.equal(host.readHost(), prefix + 'left **bold** right' + tail, id + ': initial formatted paste reached the host');
+      await page.waitForSelector('.meo-paste-options-trigger', { visible: true });
+      await page.keyboard.press('Control');
+      await page.waitForSelector('.meo-paste-options-menu [data-paste-mode="plain"]', { visible: true });
+      await captureResult(page, 'paste-options-dark-en');
+      await Bun.sleep(650);
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      await frames(page, 8);
+      const after = await captureHistoryInteraction(page, witness);
+      assert.equal(after.text, afterText, id + ': exact final text');
+      assert.deepEqual(after.ranges, [{ anchor: prefix.length + 9, head: prefix.length + 9 }]);
+      assert.equal(host.readHost(), afterText, id + ': host text');
+      await assertHistoryRoundTrip(page, { ...witness, label: id, before, after });
+      await page.keyboard.type('Q');
+      await frames(page, 8);
+      assert.equal(host.readHost(), prefix + 'left boldQ right' + tail, id + ': input after redo lands at caret');
       completed.push(id);
       assert.deepEqual(host.errors, [], id + ': no runtime errors');
     } finally { host.dispose(); await page.close(); }

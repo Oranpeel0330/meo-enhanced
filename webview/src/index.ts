@@ -45,7 +45,7 @@ import { setGitDiffLineHighlightsEnabled } from './helpers/gitDiffLineHighlights
 import { applyBuiltInVisualBaseline, applyUiVisualBaseline } from './helpers/theme';
 import { setShikiTheme } from './helpers/shikiHighlighter';
 import { createFailureNoticeManager, getErrorMessage, isTransientMermaidRuntimeError, shouldAutoFallbackToSourceForLiveError, logWebviewRenderError, type EditorNoticeAction, type FailureNoticeManager } from './helpers/errors';
-import { createCustomShortcutMatcher, isPrimaryModifier, isShortcutKey, handleEditorShortcut, type ShortcutHandlerContext } from './helpers/shortcuts';
+import { createCustomShortcutMatcher, isPrimaryModifier, isShortcutKey, handleEditorShortcut, webviewShortcutPlatform, type ShortcutHandlerContext } from './helpers/shortcuts';
 import { normalizeDocumentText } from '../../src/foundation/documentText';
 import { createFindPanel, createFindPanelController, type FindPanelController } from './helpers/findPanel';
 import { createSelectionMenu, createSelectionMenuController, type SelectionMenuController } from './helpers/selectionMenu';
@@ -112,7 +112,7 @@ let uiColors: UiColors = { light: {}, dark: {} };
 let uiColorsPreview: UiColors | null = null;
 let editingPreferences: EditingPreferences = { input: { ...defaultInputAssistance }, shortcuts: {} };
 let editingPreferencesRevision = -1;
-let shortcutHints = effectiveShortcuts(editingPreferences.shortcuts, /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'mac' : 'other');
+let shortcutHints = effectiveShortcuts(editingPreferences.shortcuts, webviewShortcutPlatform, editingPreferences.customShortcuts);
 
 type CreateEditorFactory = (typeof import('./editor'))['createEditor'];
 
@@ -3193,6 +3193,7 @@ const shortcutHandlerContext: ShortcutHandlerContext = {
   requestPreview: () => editorModeRuntime.dispatch({ type: 'requestMode', mode: getActiveEditorMode() === 'preview' ? getActiveEditableMode() : 'preview', source: 'user' }),
   requestPlainPaste: () => pastePlainFromHost(),
   requestTableCopy: format => copyTableToHost(format),
+  requestWorkbenchAction: type => vscode.postMessage({ type }),
   get editorSurfaceActive() { return getActiveEditorMode() !== 'preview'; },
   requestSave,
   requestSaveAs,
@@ -3767,7 +3768,10 @@ const acceptEditingPreferences = (preferences: EditingPreferences, revision: num
   else if (getActiveEditorMode() !== 'preview') editor?.refreshSelectionOverlay();
   settingsWindow?.present(); refreshShortcutHints();
 };
-const editingPreferencesTransport = createEditingPreferencesTransport({ post: request => vscode.postMessage(request), onSnapshot: acceptEditingPreferences });
+const editingPreferencesTransport = createEditingPreferencesTransport({
+  post: request => vscode.postMessage({ ...request, platform: webviewShortcutPlatform }),
+  onSnapshot: acceptEditingPreferences
+});
 const editorServicesTransport = createEditorServicesTransport(request => vscode.postMessage(request));
 const versionInformationSource = createVersionInformationSource({
   productVersion,
@@ -3849,7 +3853,7 @@ function getSettingsWindow(): ReturnType<typeof createSettingsWindow> {
     previewPresets: previewPresetSettings,
     registerInput: input => editorFocusController.registerInput(input),
     imageLocation: imageLocationSettings,
-    initialLanguage: activeUiLanguage, platform: /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'mac' : 'other',
+    initialLanguage: activeUiLanguage, platform: webviewShortcutPlatform,
     getPreferences: () => editingPreferences, update: change => editingPreferencesTransport.update(change), returnFocus: () => getActiveEditorMode() === 'preview' ? moreToolsButton : editor ?? moreToolsButton,
     getGeneral: language => {
       const strings = getUiStrings(language);
@@ -4734,6 +4738,6 @@ documentViews = mountDocumentViews({
 });
 
 function refreshShortcutHints(): void {
-  shortcutHints = effectiveShortcuts(editingPreferences.shortcuts, /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'mac' : 'other');
+  shortcutHints = effectiveShortcuts(editingPreferences.shortcuts, webviewShortcutPlatform, editingPreferences.customShortcuts);
   tooltipBinding.refreshShortcuts();
 }

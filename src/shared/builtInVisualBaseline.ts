@@ -533,10 +533,10 @@ const buildSyntaxTokenColors = (
   for (const tokenId of Object.keys(defaultSyntaxTokenPalette) as SyntaxTokenKey[]) {
     const paletteKey = appearance === 'light' && tokenId === 'string'
       ? 'base09'
-      : appearance === 'light' && (tokenId === 'comment' || tokenId === 'quote')
+      : appearance === 'light' && tokenId === 'quote'
         ? 'base02'
         : defaultSyntaxTokenPalette[tokenId];
-    tokens[tokenId] = colors[paletteKey];
+    tokens[tokenId] = appearance === 'light' && tokenId === 'comment' ? '#747d87' : colors[paletteKey];
   }
 
   return Object.freeze(tokens);

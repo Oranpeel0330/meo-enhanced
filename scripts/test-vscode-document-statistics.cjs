@@ -12,6 +12,9 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
   const result = { passed: false, cases: [] };
   let browser = sharedBrowser;
   let statisticsPage, previousTimeout;
+  const workbench = vscode.workspace.getConfiguration('workbench');
+  const previousTheme = workbench.inspect('colorTheme')?.globalValue;
+  let themeChanged = false;
   try {
     await vscode.workspace.getConfiguration('meoEnhanced').update('language', 'en', vscode.ConfigurationTarget.Global);
     if (!browser) browser = await puppeteer.connect({ browserURL: process.env.MEO_STATISTICS_BROWSER_URL, defaultViewport: null });
@@ -38,25 +41,49 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
         : document.querySelector('.editor-host')?.hidden === false && !document.querySelector('.editor-host')?.inert
           && document.querySelector('.editor-loading')?.hidden === true;
     }, {}, mode);
-    const status = async pattern => {
-      await page.waitForFunction(source => [...document.querySelectorAll('.statusbar-item')].some(e => e.getBoundingClientRect().width && new RegExp(source).test(e.textContent)), {}, pattern);
+    const findStatus = pattern => page.waitForFunction(source => {
+      const re = new RegExp(source);
+      return [...document.querySelectorAll('.statusbar-item')].find(e => e.getBoundingClientRect().width && re.test(e.textContent));
+    }, {}, pattern.source);
+    const status = async pattern => { await (await findStatus(pattern)).dispose(); };
+    const hoverStatus = async (pattern, description, theme, themeClass, screenshot) => {
+      themeChanged = true;
+      await workbench.update('colorTheme', theme, vscode.ConfigurationTarget.Global);
+      await page.waitForSelector(`.monaco-workbench.${themeClass}`);
+      const target = await findStatus(pattern);
+      try {
+        await target.asElement().hover();
+        await page.waitForFunction(source => {
+          const re = new RegExp(source);
+          return [...document.querySelectorAll('.monaco-hover .hover-contents hr')].some(rule => {
+            const summary = rule.previousElementSibling;
+            const explanation = rule.nextElementSibling;
+            return rule.getBoundingClientRect().width && summary?.querySelector('br') && explanation
+              && re.test(`${summary.innerText}\n${explanation.innerText}`);
+          });
+        }, {}, description.source);
+        await page.screenshot({ path: path.join(output, screenshot) });
+      } finally {
+        await target.dispose();
+        await page.mouse.move(0, 0);
+      }
     };
     await ready(frame, await frame.$eval('.editor-root', e => e.dataset.mode));
-    await status('Words 11'); result.cases.push('initial total');
+    await status(/, 0\/11 words$/); result.cases.push('initial total');
     await frame.$eval('[data-mode="source"]', e => e.click());
     await ready(frame, 'source');
     await frame.$eval('.cm-content', e => e.focus());
     await page.keyboard.down('Control'); await page.keyboard.press('Home'); await page.keyboard.up('Control');
     await page.keyboard.down('Shift'); await page.keyboard.press('End'); await page.keyboard.up('Shift');
-    await status('3 selected / 11 words'); result.cases.push('source selection');
+    await status(/^1\/8 lines, 3\/11 words$/); result.cases.push('source selection');
     await page.keyboard.press('ArrowRight'); await page.keyboard.type(' Extra');
-    await status('Words 12'); result.cases.push('typing');
+    await status(/, 0\/12 words$/); result.cases.push('typing');
     await frame.$eval('[data-mode="preview"]', e => e.click());
     await ready(frame, 'preview');
-    await status('8 lines.*Words 12'); result.cases.push('preview drops caret');
+    await status(/^—\/8 lines, —\/12 words$/); result.cases.push('preview drops caret');
     await frame.$eval('[data-mode="live"]', e => e.click());
     await ready(frame, 'live');
-    await status('Ln .*Words 12');
+    await status(/^\d+\/8 lines, 0\/12 words$/);
     await frame.waitForSelector('.meo-md-html-table');
     await frame.$eval('.meo-md-html-table tbody td', e => {
       const box = e.getBoundingClientRect();
@@ -70,12 +97,14 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
     await frame.evaluate(() => { const input = document.activeElement; input.setSelectionRange(0, input.value.length); });
     result.table = await frame.evaluate(() => ({ value: document.activeElement?.value,
       start: document.activeElement?.selectionStart, end: document.activeElement?.selectionEnd }));
-    await status('2 selected / 12 words'); result.cases.push('native table selection');
-    await page.screenshot({ path: path.join(output, 'status-en.png') });
+    await hoverStatus(/^\d+\/8 lines, 2\/12 words$/, /^Current line \d+, 8 lines total\n2 words selected, 12 words total\nLines follow source line breaks\./,
+      'Dark 2026', 'vs-dark', 'status-en.png');
+    result.cases.push('native table selection and English hover');
     await vscode.workspace.getConfiguration('meoEnhanced').update('language', 'zh-CN', vscode.ConfigurationTarget.Global);
     await frame.evaluate(() => { const input = document.activeElement; input.setSelectionRange(input.value.length, input.value.length); });
-    await status('字数 12');
-    await page.screenshot({ path: path.join(output, 'status-zh.png') });
+    await hoverStatus(/^\d+\/8行，0\/12字$/, /^当前第 \d+ 行，共 8 行\n当前选中 0 字，共 12 字\n行数按源码换行计算。/,
+      'Light 2026', 'vs', 'status-zh.png');
+    result.cases.push('Chinese hover without a selection');
     await frame.evaluate(() => {
       const table = document.querySelector('.meo-md-html-table');
       const first = table.querySelector('thead th'), last = table.querySelector('tbody tr:last-child td:last-child');
@@ -84,20 +113,20 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
       table.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 2, buttons: 1, clientX: b.x + b.width / 2, clientY: b.y + b.height / 2 }));
       table.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 2, button: 0, clientX: b.x + b.width / 2, clientY: b.y + b.height / 2 }));
     });
-    await status('选中 5 / 共 12 字'); result.cases.push('rectangular header/body selection reaches native status bar');
+    await status(/，5\/12字$/); result.cases.push('rectangular header/body selection reaches native status bar');
     await page.screenshot({ path: path.join(output, 'status-table-selection.png') });
     await frame.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })));
-    await status('字数 12');
+    await status(/，0\/12字$/);
     const other = path.join(output, 'workspace', 'other.md'); fs.writeFileSync(other, '另一个文档');
     await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(other), 'meoEnhanced.editor', vscode.ViewColumn.Beside);
-    await status('字数 5'); result.cases.push('active split');
+    await status(/，0\/5字$/); result.cases.push('active split');
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
-    await status('字数 12'); result.cases.push('close restores previous');
+    await status(/，0\/12字$/); result.cases.push('close restores previous');
     await vscode.commands.executeCommand('workbench.action.files.save');
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
     const foregroundControl = await vscode.window.showTextDocument(vscode.Uri.file(control), { preview: false });
     assert.equal(foregroundControl.document.uri.toString(), vscode.Uri.file(control).toString());
-    await page.waitForFunction(() => ![...document.querySelectorAll('.statusbar-item')].some(e => e.getBoundingClientRect().width && /字数|Words|selected \/.*words/.test(e.textContent)));
+    await page.waitForFunction(() => ![...document.querySelectorAll('.statusbar-item')].some(e => e.getBoundingClientRect().width && /行，[\d,—]+\/[\d,—]+字$/.test(e.textContent)));
     result.cases.push('non-MEO active editor after close hides status');
     const largeFile = path.join(output, 'workspace', 'large.md');
     const largeText = 'MEOStatisticsLarge 世界\n' + 'Hello 世界\n'.repeat(19_999);
@@ -121,7 +150,7 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
       && !document.querySelector('.editor-host')?.hasAttribute('inert')
       && !document.querySelector('.mode-group [aria-busy="true"]'));
     await ready(largeFrame, await largeFrame.$eval('.editor-root', e => e.dataset.mode));
-    await status('字数 60,000');
+    await status(/，0\/60,000字$/);
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
     await largeFrame.evaluate(() => {
       window.__statisticsRequests = [];
@@ -137,7 +166,7 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
       const text = document.createTreeWalker(content.querySelector('.cm-line'), NodeFilter.SHOW_TEXT).nextNode();
       document.getSelection().setBaseAndExtent(text, 0, text, Math.min(5, text.length));
     });
-    await status('选中 1 / 共 60,000 字');
+    await status(/，1\/60,000字$/);
     const requests = await largeFrame.evaluate(() => window.__statisticsRequests);
     assert.ok(requests.length > 0 && requests.every(r => !r.fullText), 'selection changes reuse the worker index');
     result.cases.push('large document worker index reused on selection changes');
@@ -145,11 +174,11 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
     // One input transaction keeps this statistics/undo case independent of
     // inter-key delays that legitimately split a typing history group.
     await page.keyboard.sendCharacter(' Extra');
-    await status('字数 60,001');
+    await status(/，0\/60,001字$/);
     const largeDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(largeFile));
     assert.equal(largeDocument.getText(), largeText + ' Extra');
     await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control');
-    await status('字数 60,000');
+    await status(/，0\/60,000字$/);
     assert.equal(largeDocument.getText(), largeText);
     assert.equal(fs.readFileSync(largeFile, 'utf8'), largeDocument.getText());
     result.cases.push('large document edit and one undo update exact totals');
@@ -169,6 +198,7 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
     throw error;
   }
   finally {
+    if (themeChanged) await workbench.update('colorTheme', previousTheme, vscode.ConfigurationTarget.Global);
     if (statisticsPage) statisticsPage.setDefaultTimeout(previousTimeout);
     if (!sharedBrowser) browser?.disconnect();
     fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify(result, null, 2));

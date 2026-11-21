@@ -252,9 +252,10 @@
               "skipMode": "smart",
               "deleteMode": "smart",
               "lists": true,
+              "showPasteOptions": true,
               "convertTables": true,
               "pasteUrl": true,
-              "pasteHtml": false,
+              "pasteHtml": true,
               "documentSuggestions": true,
               "slash": true,
               "slashPreferAbove": false,
@@ -302,7 +303,7 @@
                               "cellBreak", "rowAbove", "rowBelow", "rowDelete", "columnBefore", "columnAfter", "columnDelete",
                               "moveRowUp", "moveRowDown", "moveColumnLeft", "moveColumnRight", "alignLeft", "alignCenter", "alignRight", "copyMarkdown", "copyCsv", "convert",
                               "expandSelection", "shrinkSelection", "nextOccurrence", "skipOccurrence", "addCursor", "splitCursors",
-                              "lineComment", "selectionComment", "moveUp", "moveDown", "copyUp", "copyDown", "deleteLine", "blankAbove", "blankBelow", "mode", "preview"
+                              "lineComment", "selectionComment", "moveUp", "moveDown", "copyUp", "copyDown", "deleteLine", "blankAbove", "blankBelow", "mode", "preview", "openFileTree", "resetWindowZoom"
                             ] }
                           }
                         },
@@ -363,6 +364,10 @@
                   "type": "boolean",
                   "default": true
                 },
+                "showPasteOptions": {
+                  "type": "boolean",
+                  "default": true
+                },
                 "convertTables": {
                   "type": "boolean",
                   "default": true
@@ -373,7 +378,7 @@
                 },
                 "pasteHtml": {
                   "type": "boolean",
-                  "default": false
+                  "default": true
                 },
                 "documentSuggestions": {
                   "type": "boolean",
@@ -484,7 +489,9 @@
                   "blankAbove",
                   "blankBelow",
                   "mode",
-                  "preview"
+                  "preview",
+                  "openFileTree",
+                  "resetWindowZoom"
                 ]
               }
             }
@@ -533,7 +540,7 @@
               "type": "object",
               "additionalProperties": false,
               "patternProperties": {
-                "^(surface|documentBackground|text|accent|textEmphasis|link|success|warning|danger)$": {
+                "^(surface|documentBackground|text|caret|accent|textEmphasis|link|success|warning|danger)$": {
                   "type": "string",
                   "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
                 }
@@ -642,13 +649,13 @@
         },
         "meoEnhanced.contentMaxWidth.visible": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "order": 3,
           "description": "%config.contentMaxWidth%"
         },
         "meoEnhanced.contentMaxWidth.value": {
           "type": "integer",
-          "default": 800,
+          "default": 1200,
           "minimum": 400,
           "maximum": 2400,
           "order": 3.1,

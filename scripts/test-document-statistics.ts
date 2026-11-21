@@ -64,7 +64,8 @@ assert.deepEqual(decodeWebviewToHostMessage({ type: 'documentStatistics', statis
 assert.equal(decodeWebviewToHostMessage({ type: 'documentStatistics', statistics: { ...limited, line: 862_458 } }), null);
 
 const items: any[] = [];
-mock.module('vscode', () => ({ StatusBarAlignment: { Right: 2 }, workspace: { onDidChangeConfiguration() { return { dispose() {} }; } }, window: { createStatusBarItem() {
+mock.module('vscode', () => ({ MarkdownString: class { constructor(readonly value: string) {} },
+  StatusBarAlignment: { Right: 2 }, workspace: { onDidChangeConfiguration() { return { dispose() {} }; } }, window: { createStatusBarItem() {
   const item = { visible: false, disposed: false, text: '', tooltip: '', show() { this.visible = true; }, hide() { this.visible = false; }, dispose() { this.disposed = true; this.visible = false; } };
   items.push(item); return item;
 } } }));
@@ -75,14 +76,24 @@ const first = createVscodeDocumentStatistics(a as never, () => 'zh-CN');
 const second = createVscodeDocumentStatistics(b as never, () => 'en');
 first.update(index([], 1)); second.update(stats('Another document'));
 assert.equal(items[0].visible, true); assert.equal(items[1].visible, false);
-assert.match(items[0].text, /行 1\/1 · 字数 4/);
+assert.equal(items[0].text, '1/1行，0/4字');
+first.update(index([{ from: 3, to: 5 }], 1));
+assert.equal(items[0].text, '1/1行，1/4字');
+assert.match(items[0].tooltip.value, /^当前第 1 行，共 1 行  \n当前选中 1 字，共 4 字\n\*\*\*\n行数按源码换行计算。/);
 a.active = false; b.active = true; a.listener(); b.listener();
 assert.equal(items[0].visible, false); assert.equal(items[1].visible, true);
-assert.match(items[1].text, /Words 2/);
-second.update(index([], null)); assert.match(items[1].text, /^1 lines/);
-second.update(limited); assert.match(items[1].text, /^Ln 1,322\/862,457 · Word count unavailable$/);
+assert.equal(items[1].text, '1/1 line, 0/2 words');
+assert.match(items[1].tooltip.value, /^Current line 1, 1 line total  \n0 words selected, 2 words total\n\*\*\*\nLines follow source line breaks\./);
+second.update(index([{ from: 3, to: 5 }], 1));
+assert.match(items[1].tooltip.value, /\n1 word selected, 4 words total\n/);
+second.update(index([], null));
+assert.equal(items[1].text, '—/1 line, —/4 words');
+assert.match(items[1].tooltip.value, /^Preview mode, 1 line total  \nSelection count unavailable, 4 words total/);
+second.update(limited);
+assert.equal(items[1].text, '1,322/862,457 lines, —/— words');
+assert.match(items[1].tooltip.value, /^Current line 1,322, 862,457 lines total  \nWord count unavailable/);
 a.active = true; a.listener(); first.update(limited);
-assert.match(items[0].text, /^行 1,322\/862,457 · 字数暂不可用$/);
+assert.equal(items[0].text, '1,322/862,457行，—/—字');
 second.update(null); assert.equal(items[1].visible, false);
 first.dispose(); second.dispose(); assert.ok(items.every(i => i.disposed));
 const large = createDocumentStatisticsIndex('Hello 世界\n'.repeat(20_000));

@@ -1,4 +1,5 @@
 import { insertCurrentTimeExampleId, insertCurrentTimeExampleName, type CustomShortcut, type CustomShortcutAction, type EditorCommandId, type InputAssistance } from '../../../src/foundation/editingPreferences';
+import { DEFAULT_EDITOR_CONTENT_WIDTH } from '../../../src/foundation/editorContentWidth';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
 export type SettingsTab = 'general' | 'appearance' | 'typing' | 'presets' | 'shortcuts' | 'extensions' | 'about';
 
@@ -25,6 +26,7 @@ export const appearanceCatalog = [
   { id: 'surface', title: ['界面背景', 'UI background'], description: ['菜单栏、面板与弹出菜单的背景来源。', 'Base surface for toolbars, panels and menus.'], keywords: ['背景 底色 面板 菜单', 'background surface panel menu'], advanced: false },
   { id: 'documentBackground', title: ['文档背景', 'Document background'], description: ['Live、Source、目录及默认预览的背景颜色。', 'Background for Live, Source, outline and default preview.'], keywords: ['正文 文档 背景 底色 画布', 'document content background canvas live source'], advanced: false },
   { id: 'text', title: ['界面文字', 'UI text'], description: ['控件文字与图标共用的颜色。', 'Shared text and icon color for controls.'], keywords: ['前景 字体 图标 文字', 'foreground text font icon'], advanced: false },
+  { id: 'caret', title: ['光标颜色', 'Cursor color'], description: ['实时和源码模式的文本光标颜色。', 'Text cursor color in Live and Source.'], keywords: ['光标 插入点 游标', 'cursor caret insertion point'], advanced: false },
   { id: 'accent', title: ['操作强调', 'Action accent'], description: ['开关、焦点与操作状态的强调色。', 'Accent for switches, focus and action states.'], keywords: ['强调 开关 焦点 选中', 'accent switch focus selected'], advanced: false },
   { id: 'textEmphasis', title: ['标题与列表', 'Headings and lists'], description: ['Live 标题、列表标记、目录强调与菜单匹配，默认跟随 Source 标题色。', 'Live headings, list markers, outline emphasis and menu matches. Follows Source heading color by default.'], keywords: ['内容强调 标题 列表 圆点 编号 目录 斜杠 匹配', 'content emphasis heading list bullet number outline slash match'], advanced: false },
   { id: 'link', title: ['链接', 'Links'], description: ['Live 正文与表格链接、脚注引用及淡底，默认跟随 Source 链接色。', 'Live text and table links, footnote references and tint. Follows Source link color by default.'], keywords: ['链接 超链接 脚注 引用 底色', 'link hyperlink footnote reference tint'], advanced: false },
@@ -83,9 +85,10 @@ export const typingCatalog: readonly { key: keyof InputAssistance; section: Typi
   { key: 'skipMode', section: 'symbols', title: ['跳过已有右符号', 'Skip an existing closing symbol'], description: ['右侧已有匹配符号时，决定移动光标还是插入新符号。', 'Choose whether typing a matching closing symbol moves the cursor or inserts another symbol.'] },
   { key: 'deleteMode', section: 'symbols', title: ['退格删除空符号对', 'Backspace in an empty pair'], description: ['决定退格时删除一对符号还是一个字符。', 'Choose whether Backspace deletes the empty pair or a single character.'] },
   { key: 'lists', section: 'structure', title: ['自动续写列表', 'Continue lists automatically'], description: ['Enter 续写列表和任务项；空项再按 Enter 退出。', 'Enter continues lists and tasks. Enter on an empty item exits the list.'] },
-  { key: 'convertTables', section: 'paste', title: ['将电子表格粘贴为表格', 'Paste spreadsheet cells as a table'], description: ['CSV 文本请使用“转换选中表格文本”命令。', 'For CSV text, use “Convert selected table text”.'] },
-  { key: 'pasteUrl', section: 'paste', title: ['粘贴网址生成链接', 'Turn a pasted URL into a link'], description: ['选中文字后粘贴网址，以选中文字作为链接名称。代码中保持原样。', 'Paste a URL over selected text to use it as the link label. Code remains literal.'] },
-  { key: 'pasteHtml', section: 'paste', title: ['粘贴时保留常用格式', 'Keep supported formatting when pasting'], description: ['将网页或文档的标题、列表和文字格式转换为 Markdown。纯文本粘贴跳过转换。', 'Convert headings, lists and common text styles from HTML to Markdown. Plain text paste bypasses conversion.'] },
+  { key: 'showPasteOptions', section: 'paste', title: ['显示粘贴选项', 'Show paste options'], description: ['正文粘贴后，可在光标旁调整这一次的格式。点击按钮或单按 Ctrl 展开。', 'Adjust the formatting of the last paste in the document. Click the button or press Ctrl on its own.'] },
+  { key: 'pasteHtml', section: 'paste', title: ['默认保留常用格式', 'Keep supported formatting by default'], description: ['普通粘贴时将网页或文档的标题、列表和文字格式转换为 Markdown。', 'Convert headings, lists and common text styles from HTML to Markdown on a regular paste.'] },
+  { key: 'convertTables', section: 'paste', title: ['默认将电子表格粘贴为表格', 'Paste spreadsheet cells as a table by default'], description: ['CSV 文本请使用“转换选中表格文本”命令。', 'For CSV text, use “Convert selected table text”.'] },
+  { key: 'pasteUrl', section: 'paste', title: ['默认将粘贴的网址转为链接', 'Turn pasted URLs into links by default'], description: ['选中文字后粘贴网址，以选中文字作为链接名称。代码中保持原样。', 'Paste a URL over selected text to use it as the link label. Code remains literal.'] },
   { key: 'documentSuggestions', section: 'candidates', title: ['文档、路径和标题候选', 'Document, path and heading suggestions'], description: ['输入链接或双链时显示候选，选择后插入。', 'Show suggestions while writing a link or wiki link. Choose one to insert it.'] },
   { key: 'slash', section: 'candidates', title: ['斜杠命令', 'Slash commands'], description: ['在正文输入 / 搜索命令；/table3x4 插入 3 数据行 × 4 列的表格。', 'Type / in prose to search commands. /table3x4 inserts 3 data rows × 4 columns.'] },
   { key: 'emoji', section: 'candidates', title: ['表情名称候选', 'Emoji name suggestions'], description: ['输入 :名称 并选择候选后插入表情；未选择时保留原文。', 'Type :name and choose a suggestion to insert an emoji. Unselected text stays literal.'] },
@@ -102,7 +105,7 @@ export const shortcutDescriptions: Partial<Record<EditorCommandId, readonly [str
   formatHtml: ['整理当前 HTML 片段或块状公式的缩进与换行；仅在块源码内生效。', 'Arrange indentation and line breaks in the current HTML fragment or formula block; available inside its source.'],
   copy: ['表格多格选区按行列复制，可粘贴到 Excel 等电子表格。', 'Copy selected table cells as rows and columns for pasting into spreadsheets such as Excel.'],
   plain: ['跳过富格式转换；合法 Markdown 仍按当前模式显示。', 'Bypass rich format conversion. Valid Markdown still displays according to the current mode.'],
-  tableNav: ['在表格内切换单元格；正文中按缩进规则处理。', 'Move between cells in a table. In prose, follow the indentation rules.'],
+  tableNav: ['在表格内切换单元格。Windows 上在末格按 Tab 新增一行。', 'Move between table cells. On Windows, Tab in the last cell adds a row.'],
   lineComment: ['注释当前行或选区涉及的完整行；在注释内执行可取消。', 'Comment the current line or all selected lines. Run inside a comment to remove its markers.'],
   selectionComment: ['注释所选文字；未选择时插入空注释。', 'Comment the selected text, or insert an empty comment at the cursor.'],
   copyCsv: ['复制选区或当前表格的单元格源码，以 CSV 编码。', 'Copy the cell source from the selection or current table, encoded as CSV.']
@@ -120,9 +123,11 @@ export const shortcutSections: Readonly<Record<string, readonly EditorCommandId[
   table: ['insertTable', 'tableNav', 'cellBreak', 'rowAbove', 'rowBelow', 'rowDelete', 'columnBefore', 'columnAfter', 'columnDelete', 'moveRowUp', 'moveRowDown', 'moveColumnLeft', 'moveColumnRight', 'alignLeft', 'alignCenter', 'alignRight', 'copyMarkdown', 'copyCsv', 'convert'],
   selection: ['selection', 'home', 'expandSelection', 'shrinkSelection', 'nextOccurrence', 'skipOccurrence', 'addCursor', 'splitCursors'],
   lines: ['lineComment', 'selectionComment', 'moveUp', 'moveDown', 'copyUp', 'copyDown', 'deleteLine', 'blankAbove', 'blankBelow'],
-  navigation: ['mode', 'preview', 'enter', 'tab', 'escape', 'delete']
+  navigation: ['mode', 'preview', 'openFileTree', 'resetWindowZoom', 'enter', 'tab', 'escape', 'delete']
 };
 export const commandTitles: Record<EditorCommandId, readonly [string, string]> = {
+  openFileTree: ['打开文件树', 'Open file tree'],
+  resetWindowZoom: ['恢复窗口实际大小', 'Reset window zoom'],
   formatHtml: ['格式化当前块', 'Format current block'],
   save: ['保存', 'Save'], saveAs: ['另存为…', 'Save as…'], undo: ['撤销', 'Undo'], redo: ['重做', 'Redo'], find: ['查找', 'Find'], replace: ['替换', 'Replace'], all: ['全选', 'Select all'], copy: ['复制', 'Copy'], cut: ['剪切', 'Cut'], paste: ['粘贴', 'Paste'], plain: ['粘贴为纯文本', 'Paste as plain text'],
   bold: ['粗体', 'Bold'], italic: ['斜体', 'Italic'], inlineCode: ['行内代码', 'Inline code'], strike: ['删除线', 'Strikethrough'], highlight: ['高亮', 'Highlight'], underline: ['下划线', 'Underline'], kbd: ['按键样式', 'Keyboard style'], link: ['链接', 'Link'], wikiLink: ['双链', 'Wiki link'], image: ['图片', 'Image'], inlineMath: ['行内公式', 'Inline math'], blockMath: ['块公式', 'Math block'],
@@ -141,7 +146,7 @@ export const generalSearchKeywords = {
   lineNumbers: ['行号 行数 行编号 边栏', 'line numbers numbering gutter'],
   foldCode: ['代码折叠 收起代码 展开代码 长代码', 'code folding collapse expand long code'],
   width: ['内容宽度 文档宽度 限制文档宽度 最大文档宽度 页面宽度 最大宽度 限宽 版心 阅读宽度', 'content width limit document width page width max width reading width wrap'],
-  widthValue: ['最大内容宽度 限制文档宽度 最大文档宽度 像素 自定义宽度 版心 阅读宽度 限宽 400 800 2400', 'maximum document width maximum content width limit document width max document width pixels px custom reading column 400 800 2400'],
+  widthValue: [`最大内容宽度 限制文档宽度 最大文档宽度 像素 自定义宽度 版心 阅读宽度 限宽 400 ${DEFAULT_EDITOR_CONTENT_WIDTH} 2400`, `maximum document width maximum content width limit document width max document width pixels px custom reading column 400 ${DEFAULT_EDITOR_CONTENT_WIDTH} 2400`],
   boldHeadings: ['标题加粗 标题字重 标题粗细', 'heading bold weight title thickness'],
   stickyHeader: ['表头固定 冻结表头 表头吸顶 表格滚动', 'sticky header freeze pin table header scrolling'],
   restorePosition: ['恢复位置 记住位置 继续阅读 阅读进度 上次位置', 'restore remember position resume reading progress last location'],
@@ -155,6 +160,7 @@ export const typingSearchKeywords: Readonly<Record<keyof InputAssistance, Search
   skipMode: ['跳过括号 跳过引号 跳出符号 右括号 覆盖输入', 'skip closing bracket quote overtype overwrite jump'],
   deleteMode: ['成对删除 配对删除 一起删除 空括号 退格', 'paired deletion delete together empty brackets backspace'],
   lists: ['列表续写 自动列表 自动编号 有序 无序 任务 清单 回车', 'list continuation auto numbering ordered unordered bullet tasks checklist enter'],
+  showPasteOptions: ['粘贴 浮层 剪贴板 清除格式 仅保留文字 纯文本 Ctrl', 'paste clipboard popup menu remove formatting keep text only plain text Ctrl'],
   convertTables: ['电子表格 Excel 表格转换 单元格 矩阵 多行多列 制表符', 'spreadsheet Excel cells table conversion tab separated TSV matrix'],
   pasteUrl: ['网址粘贴 贴链接 超链接 网络地址 地址栏', 'paste URL hyperlink web address selected text link'],
   pasteHtml: ['网页粘贴 富文本 保留格式 样式转换 HTML Markdown', 'paste rich text formatting HTML webpage Markdown conversion'],
@@ -256,6 +262,8 @@ export const shortcutSearchKeywords: Readonly<Record<EditorCommandId, SearchKeyw
   blankBelow: ['下面空行 后面空行', 'blank empty line after below'],
   mode: ['实时模式 源码模式 编辑模式', 'live source edit mode WYSIWYG'],
   preview: ['阅读模式 预览模式 查看渲染', 'reading preview rendered view mode'],
+  openFileTree: ['文件树 资源管理器 工作区 侧栏', 'file tree explorer workspace sidebar'],
+  resetWindowZoom: ['实际大小 窗口缩放 重置 缩放比例', 'actual size reset window zoom scale'],
   enter: ['回车 新行 继续列表', 'return enter new line continue list'],
   tab: ['制表符 缩进 导航 单元格', 'tab indentation navigation cells'],
   escape: ['退出 取消 关闭 弹窗', 'escape cancel close popup dismiss'],

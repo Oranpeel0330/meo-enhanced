@@ -2497,6 +2497,11 @@ html[data-meo-ui-contrast='high'] :is(.format-button, .preview-toolbar-action, .
   --meo-live-table-header-background: var(--meo-document-table);
 }
 
+html[data-editor-appearance='light'] .cm-editor.meo-mode-live {
+  /* Live document comments use the light baseline independently of the Source palette. */
+  --meo-token-comment-color: var(--meo-live-comment-color);
+}
+
 html[data-editor-appearance='dark'] .cm-editor.meo-mode-live {
   --meo-foreground: #d2d8df;
   --meo-semantic-blockquoteForeground: #b6bcc3;
@@ -2546,7 +2551,7 @@ html[data-editor-appearance='dark'] .cm-editor.meo-mode-live {
 }
 
 .editor-host > .cm-editor > .cm-scroller {
-  padding-top: var(--meo-native-input-scroll-offset, 0px);
+  padding-top: calc(16px + var(--meo-native-input-scroll-offset, 0px));
 }
 
 :is(.cm-editor .cm-scroller, .mm-view-canvas, .mm-view-canvas *)::-webkit-scrollbar {
@@ -4528,6 +4533,12 @@ html[data-editor-appearance='light'] .cm-tooltip.meo-hex-color-adjustment {
   cursor: text;
 }
 
+.cm-editor.meo-mode-live .cm-content .cm-line :is(.meo-md-html-break-source, .meo-md-html-break-source *),
+.cm-editor.meo-mode-live .meo-md-table-source-break:not(.is-cell-composing *) {
+  color: var(--meo-token-comment-color, #676f7d) !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+
 .cm-editor .meo-md-html-comment[data-display='block'] {
   display: block;
 }
@@ -4835,7 +4846,6 @@ html[data-editor-appearance='light'] .cm-tooltip.meo-hex-color-adjustment {
      Opacity also hides the caret; only the source glyphs should disappear. */
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
-  caret-color: var(--meo-caret-color);
 }
 
 .cm-editor.meo-mode-live .meo-md-code-container-prefix * {
@@ -6726,7 +6736,6 @@ body.outline-resizing .preview-frame {
   min-width: 0;
   padding: 0 12px 0 4px;
   background: var(--meo-code-background);
-  caret-color: var(--meo-caret);
 }
 
 .cm-editor .meo-latex-math-source-editor .cm-line {
@@ -7479,6 +7488,7 @@ html[data-editor-appearance='dark'] body.vscode-dark
   outline: none;
   background: transparent;
   color: var(--meo-foreground);
+  caret-color: var(--meo-caret-color);
   font: inherit;
   font-weight: inherit;
   font-style: inherit;
@@ -7526,7 +7536,6 @@ html[data-editor-appearance='dark'] body.vscode-dark
   background: transparent;
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
-  caret-color: var(--meo-caret);
 }
 
 .cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea {
@@ -7612,14 +7621,14 @@ html[data-editor-appearance='dark'] body.vscode-dark
 
 .cm-editor .meo-md-html-table-cell-content.is-editing-line.is-cell-composing > textarea {
   color: var(--meo-foreground);
-  caret-color: var(--meo-caret, var(--meo-caret-color));
+  caret-color: var(--meo-caret-color);
 }
 
 .cm-editor .meo-md-table-source-caret {
   display: none;
   position: absolute;
   width: 1px;
-  background-color: var(--meo-caret, var(--meo-caret-color));
+  background-color: var(--meo-caret-color);
   /* Match the native insertion caret under either motion preference. */
   animation: meo-table-cell-caret-blink 1.2s step-end infinite;
   pointer-events: none;
@@ -8000,14 +8009,24 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
   min-height: 1lh;
 }
 
-.cm-editor.meo-mode-live .cm-cursorLayer {
-  z-index: 4;
+.cm-editor > .cm-scroller > .cm-cursorLayer {
+  z-index: 4 !important;
 }
 
-.cm-editor .cm-cursor {
-  border-left-color: var(--meo-caret-color) !important;
-  border-left-width: 2px !important;
-  background-color: transparent !important;
+/* Keep Chromium's caret for IME and until a measured insertion point exists. */
+.cm-editor.cm-focused:not(.meo-body-caret-composing) > .cm-scroller:has(> .cm-cursorLayer > .cm-cursor-primary) > .cm-content:focus {
+  caret-color: transparent;
+}
+
+.cm-editor.meo-body-caret-composing > .cm-scroller > .cm-cursorLayer {
+  visibility: hidden;
+}
+
+.cm-editor > .cm-scroller > .cm-cursorLayer > .cm-cursor-primary {
+  margin-left: 0;
+  border: 0;
+  background-color: var(--meo-caret-color);
+  transform-origin: left;
 }
 
 .cm-editor .cm-fat-cursor {
@@ -8422,10 +8441,9 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 .settings-jump { display: block; box-sizing: border-box; width: 100%; border: 0; padding: 8px 10px; border-radius: 6px; margin: 2px 0; text-align: left; white-space: nowrap; color: var(--meo-ui-text-muted); background: transparent; font: inherit; cursor: pointer; }
 .settings-jump:hover { background: var(--meo-ui-surface-hover); }
 .settings-jump.is-active { color: var(--meo-ui-text-selected); background: var(--meo-ui-surface-selected); }
-.settings-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px 24px 24px; scroll-behavior: auto; }
-.settings-section { padding-bottom: 6px; border-bottom: 1px solid var(--meo-ui-separator); }
-.settings-section + .settings-section { margin-top: 30px; }
-.settings-section-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.settings-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px 24px 24px; scroll-behavior: auto; container: settings-pane / inline-size; }
+.settings-section + .settings-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--meo-ui-separator); }
+.settings-section-title { margin: 0 0 6px; font-size: 16px; font-weight: 600; line-height: 1.4; }
 .settings-extension-heading { display: flex; align-items: baseline; flex-wrap: wrap; }
 .settings-extension-heading .settings-section-title { margin: 0; }
 .settings-extension-version { margin-left: 8px; color: var(--meo-ui-text-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
@@ -8482,13 +8500,13 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
   .settings-about-versions { grid-template-columns: 92px minmax(0, 1fr); gap: 9px 10px; }
   .settings-about-support-links { grid-template-columns: minmax(0, 1fr); gap: 9px; }
 }
-.settings-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--meo-ui-separator); }
+.settings-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 11px 0; border-bottom: 1px solid var(--meo-ui-separator); }
 .settings-item:last-child { border-bottom: 0; }
+.settings-item:has(> .settings-switch) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
 .settings-item[data-setting] { transition: background-color 180ms ease; }
 .settings-item.is-revealed { background-color: var(--meo-ui-surface-selected); }
 .settings-item-dependent { padding-left: 24px; }
-.settings-item-dependent.is-disabled .settings-item-text { color: var(--meo-ui-text-disabled); }
-.settings-item-dependent.is-disabled .settings-description { color: var(--meo-ui-text-disabled); }
+.settings-item-dependent.is-disabled :is(.settings-item-title, .settings-description) { color: var(--meo-ui-text-disabled); }
 .more-tools-width-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; box-sizing: border-box; min-height: 30px; padding: 1px 8px 3px 32px; }
 .more-tools-width-row::before { content: ''; position: absolute; top: 3px; left: 15px; box-sizing: border-box; width: 11px; height: 11px; border-left: 1px solid var(--meo-ui-text); border-bottom: 1px solid var(--meo-ui-text); border-bottom-left-radius: 5px; pointer-events: none; }
 .more-tools-width-row[hidden] { display: none; }
@@ -8510,8 +8528,10 @@ html[data-meo-ui-contrast='high'] .content-width-stepper:not(:focus-within):not(
 .settings-item .content-width-stepper { height: 30px; grid-template-columns: 24px 34px 18px 24px; }
 .content-width-error { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .content-width-error[hidden] { display: none; }
-.settings-item-text { flex: 1 1 180px; min-width: 0; }
+.settings-item-text { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
 .settings-item-title { font-size: 13px; font-weight: 400; line-height: 1.5; }
+.settings-item-text > .settings-item-title { font-weight: 600; }
+.settings-item-text > .settings-description { margin-top: 5px; }
 .settings-item-title-with-badge { display: flex; align-items: center; gap: 6px; }
 .meo-beta-badge { display: inline-flex; flex: 0 0 auto; align-items: center; box-sizing: border-box; padding: 1px 5px; border: 1px solid var(--meo-ui-border-float); border-radius: 4px; background: var(--meo-ui-surface-field); color: var(--meo-ui-accent-text); font: 600 10px/14px var(--meo-ui-font-family, sans-serif); letter-spacing: .02em; white-space: nowrap; vertical-align: middle; cursor: help; }
 .meo-beta-badge:focus-visible { border-color: var(--meo-ui-focus); box-shadow: 0 0 0 1px var(--meo-ui-focus); }
@@ -8522,7 +8542,8 @@ html[data-meo-ui-contrast='high'] .content-width-stepper:not(:focus-within):not(
 .appearance-item .settings-item-text { flex: 1 1 220px; }
 .appearance-item { padding-block: 12px; }
 .appearance-typography-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-left: auto; }
-.appearance-mode-control { flex: 0 1 240px; height: 32px; margin-left: auto; }
+.settings-button.appearance-typography-reset { flex: 0 0 30px; padding: 0; }
+.appearance-mode-control { flex: 0 1 240px; max-width: 100%; height: 32px; margin-left: auto; }
 .appearance-mode-control .segmented-control-button { height: 100%; font-size: 12px; }
 .appearance-color-controls { display: flex; align-items: center; gap: 8px; flex: 0 1 240px; width: 240px; max-width: 100%; min-width: 0; margin-left: auto; }
 .appearance-color-field { box-sizing: border-box; display: flex; align-items: center; gap: 8px; flex: 1 1 0; min-width: 0; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: var(--meo-ui-surface-field); }
@@ -8562,14 +8583,16 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
   margin-top: 1px;
   color: var(--meo-ui-warning);
 }
-.settings-description { color: var(--meo-ui-text-muted); margin: 4px 0 0; font-size: 12px; line-height: 1.5; max-width: 480px; }
-.settings-paste-contexts { flex-basis: 100%; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; margin: 0; font-size: 12px; line-height: 1.65; }
-.settings-paste-contexts dt { color: var(--meo-ui-text); }
+.settings-description { color: var(--meo-ui-text-muted); margin: 3px 0 0; font-size: 12px; line-height: 1.65; max-width: 480px; }
+.settings-paste-contexts { grid-column: 1 / -1; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 3px 0 0; padding: 10px 12px; border-radius: 6px; background: var(--meo-ui-surface-field); font-size: 12px; line-height: 1.65; }
+.settings-paste-contexts dt { color: var(--meo-ui-text); font-weight: 600; }
 .settings-paste-contexts dd { margin: 0; color: var(--meo-ui-text-muted); }
 .settings-switch { flex: 0 0 auto; display: inline-flex; padding: 5px; border: 0; background: transparent; border-radius: 5px; cursor: pointer; }
 .settings-switch:focus-visible { outline: 1px solid var(--meo-ui-focus); outline-offset: 2px; }
 .settings-radio-group { flex-basis: 100%; display: grid; gap: 8px; padding: 3px 0 0; }
-.settings-radio { display: flex; align-items: flex-start; gap: 9px; width: fit-content; cursor: pointer; line-height: 1.5; }
+.settings-item-expanded > .settings-radio-group { gap: 9px; margin: 2px 0 0; padding: 0 0 0 12px; }
+.settings-radio { display: flex; align-items: flex-start; gap: 9px; width: fit-content; max-width: 100%; cursor: pointer; line-height: 1.5; }
+.settings-radio > span { min-width: 0; overflow-wrap: anywhere; }
 .settings-radio input { appearance: none; flex: 0 0 auto; box-sizing: border-box; width: 14px; height: 14px; margin: 3px 0 0; border: 1px solid var(--meo-ui-border-control); border-radius: 50%; background: var(--meo-ui-surface-field); cursor: pointer; }
 .settings-radio input:checked { border: 2px solid var(--meo-ui-accent-text); background: radial-gradient(circle, var(--meo-ui-accent-text) 0 3px, var(--meo-ui-surface-field) 3px); }
 .settings-radio input:focus-visible { outline: 1px solid var(--meo-ui-focus); outline-offset: 2px; }
@@ -8580,7 +8603,7 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
 .settings-choice .editor-font-size-stepper { flex: 0 0 76px; width: 76px; height: 30px; grid-template-columns: 24px 24px 24px; }
 .settings-choice .editor-font-size-stepper-button, .settings-choice .editor-font-size-value { font-size: 13px; line-height: 1; }
 [data-setting='lineHeight'] .editor-font-size-stepper { flex-basis: 104px; width: 104px; grid-template-columns: 24px 52px 24px; }
-.settings-shortcut-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex: 0 1 auto; }
+.settings-shortcut-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex: 0 1 auto; max-width: 100%; }
 .settings-shortcut-keys { display: flex; flex-wrap: wrap; gap: 5px; }
 .settings-key { border: 1px solid var(--meo-ui-border-control); padding: 3px 6px; border-radius: 4px; background: var(--meo-ui-surface-field); color: inherit; font: 11px var(--meo-ui-editor-font-family, monospace); }
 .settings-button { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; min-height: 30px; padding: 0 12px; border: 1px solid var(--meo-ui-border-control); border-radius: 5px; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 400; line-height: 18px; cursor: pointer; white-space: nowrap; }
@@ -8593,7 +8616,7 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
 .settings-context { display: block; margin-top: 3px; }
 .settings-recorder { box-sizing: border-box; width: 168px; height: 30px; padding: 4px 7px; border: 1px solid var(--meo-ui-border-control); border-radius: 5px; background: var(--meo-ui-surface-field); color: inherit; outline: none; font: 12px var(--meo-ui-editor-font-family, monospace); }
 .settings-recorder:focus { border-color: var(--meo-ui-focus); }
-.settings-item[data-command] { padding-block: 8px; }
+.settings-item:is([data-command], .settings-custom-shortcut-row) { padding-block: 8px; }
 .settings-warning, .settings-shortcut-conflict, .settings-status { color: var(--meo-ui-danger, #be1100); }
 .settings-shortcut-conflict { flex-basis: 100%; margin: 0; font-size: 12px; }
 .settings-shortcut-section-heading, .settings-shortcut-action-heading {
@@ -8606,7 +8629,7 @@ html[data-meo-ui-contrast='high'] .appearance-color-field:not(:focus-within):not
 .settings-custom-shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 12px; }
 .settings-custom-shortcut-copy { display: flex; align-items: baseline; gap: 8px; }
 .settings-custom-shortcut-copy > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.settings-custom-shortcut-copy > .settings-item-title { flex: 0 1 auto; max-width: 58%; color: var(--meo-ui-text-strong); }
+.settings-custom-shortcut-copy > .settings-item-title { flex: 0 1 auto; max-width: 58%; }
 .settings-custom-shortcut-summary { color: var(--meo-ui-text-muted-on-raised, var(--meo-ui-text-muted)); font-size: 13px; line-height: 1.5; }
 .settings-shortcut-row-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .settings-shortcut-then { align-self: center; color: var(--meo-ui-text-muted); font-size: 11px; }
@@ -8725,7 +8748,6 @@ textarea.settings-shortcut-field-input { resize: vertical; font-family: var(--me
 .settings-status { margin: 10px 24px 0; font-size: 12px; }
 .settings-empty { color: var(--meo-ui-text-muted); }
 .settings-preset-description { margin: 8px 0 12px; max-width: none; }
-.settings-section:has(> .settings-preset-list) { padding-bottom: 0; border-bottom: 0; }
 .settings-preset-list { border: 1px solid var(--meo-ui-border-float); border-radius: 6px; }
 .settings-preset-list > .settings-preset-row { flex-wrap: nowrap; padding: 7px 10px; gap: 4px; }
 .settings-preset-label { flex: 1 1 0; display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
@@ -8809,7 +8831,6 @@ textarea.settings-shortcut-field-input { resize: vertical; font-family: var(--me
   .settings-choice { flex-wrap: wrap; }
   .settings-choice-button { padding-inline: 6px; font-size: 12px; }
   .settings-item[data-setting='fontSize'] .settings-segmented { min-width: 100px; }
-  .settings-shortcut-controls { justify-content: flex-start; }
   .appearance-color-controls { gap: 4px; }
   .appearance-color-field { gap: 4px; padding-inline: 4px; }
   .appearance-color-chip { width: 20px; height: 20px; padding: 2px; }
@@ -8817,7 +8838,81 @@ textarea.settings-shortcut-field-input { resize: vertical; font-family: var(--me
   .appearance-color-hex::placeholder { font-size: 11px; }
   .settings-button.appearance-color-reset { flex-basis: 26px; width: 26px; }
 }
+@container settings-pane (max-width: 480px) {
+  .settings-item:has(> :is(.settings-choice, .appearance-mode-control, .appearance-color-controls, .content-width-field)) > .settings-item-text,
+  .settings-preset-row[data-preset-action] > .settings-item-text { flex-basis: 100%; }
+  .settings-item > :is(.settings-choice, .appearance-mode-control, .appearance-color-controls) { margin-inline-start: 0; justify-content: flex-start; }
+  .settings-preset-row[data-preset-action] { flex-wrap: wrap; }
+}
+@container settings-pane (max-width: 320px) {
+  .settings-item[data-command] > .settings-item-text { flex-basis: 100%; }
+  .settings-shortcut-controls { justify-content: flex-start; }
+  .settings-recorder { max-width: 100%; }
+  .settings-paste-contexts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .settings-paste-contexts dt:not(:first-child) { margin-top: 6px; }
+}
+@container settings-pane (max-width: 224px) {
+  .appearance-typography-controls > .settings-segmented { flex-basis: 100%; }
+}
 html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-conflict, .settings-status) { color: var(--meo-ui-danger, #f48771); }
+
+.meo-paste-options {
+  position: fixed;
+  z-index: var(--meo-layer-document-popover);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  color: var(--meo-ui-text);
+  font: 13px/18px var(--meo-ui-font-family, system-ui, sans-serif);
+}
+.meo-paste-options-trigger, .meo-paste-options-menu {
+  box-sizing: border-box;
+  box-shadow: var(--meo-ui-shadow);
+}
+.meo-paste-options-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  border: 1px solid var(--meo-ui-border-control);
+  border-radius: 6px;
+  background: var(--meo-ui-surface-hover);
+}
+.meo-paste-options-trigger:hover, .meo-paste-options-trigger[aria-expanded="true"] {
+  background: var(--meo-ui-surface-pressed);
+}
+.meo-paste-options-menu {
+  min-width: min(164px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--meo-ui-border-control);
+  border-radius: 10px;
+  background: var(--meo-ui-surface);
+}
+.meo-paste-options-menu[hidden] { display: none; }
+.meo-paste-options button {
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.meo-paste-options-menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 12px;
+  border: 0;
+  text-align: start;
+  background: transparent;
+}
+.meo-paste-options-menu button:focus {
+  outline: none;
+  background: var(--meo-ui-surface-selected);
+}
+.meo-paste-options-trigger:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: -2px;
+}
 
 .meo-input-suggestions {
   --meo-suggestion-min-width: 288px;
@@ -8973,12 +9068,12 @@ html[data-meo-ui-contrast='normal'] .meo-input-suggestions:not(.meo-narrow-sugge
 .image-location-settings [hidden] { display: none; }
 .image-location-option { min-width: 0; }
 .image-location-mode-caption { min-width: 0; }
-.image-location-mode-description { display: block; margin-top: 2px; }
+.image-location-mode-description { display: block; margin-top: 2px; font-weight: 400; }
 .image-location-details { margin: 8px 0 4px 22px; min-width: 0; }
 .image-location-preview { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; padding: 12px; border-radius: 6px; background: var(--meo-ui-surface-field); font-size: 12px; line-height: 1.5; }
 .image-location-preview dt { color: var(--meo-ui-text-muted); }
 .image-location-preview dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.image-location-field-label { display: block; margin-bottom: 5px; font-size: 12px; }
+.image-location-field-label { display: block; margin-bottom: 5px; font-size: 12px; font-weight: 600; }
 .image-location-path { display: flex; align-items: center; min-width: 0; border: 1px solid var(--meo-ui-border-control); border-radius: 5px; background: var(--meo-ui-surface-field); color: var(--meo-ui-text); }
 .image-location-path:focus-within { border-color: var(--meo-ui-focus); }
 .image-location-prefix, .image-location-suffix { flex: 0 1 auto; padding: 0 9px; font: 12px var(--meo-ui-editor-font-family, monospace); color: var(--meo-ui-text-muted); overflow-wrap: anywhere; }
@@ -9163,7 +9258,6 @@ html[data-meo-ui-contrast='high'] .meo-input-suggestion[aria-selected='true'] :i
 /* Source owns native editor chrome and TextMate styling independently of Live. */
 .cm-editor.meo-mode-source {
   --meo-foreground: var(--meo-source-foreground);
-  --meo-caret-color: var(--meo-source-caret);
   --meo-selection-bg: var(--meo-source-selection);
   --meo-active-line-bg: var(--meo-source-line);
   --meo-line-number-foreground: var(--meo-source-line-number);

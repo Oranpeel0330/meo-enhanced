@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
 import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 import { defaultInputAssistance } from '../src/foundation/editingPreferences';
 
@@ -7,6 +8,7 @@ if (!build.success) throw new Error(build.logs.map(String).join('\n'));
 const browser = await launchTestBrowser();
 try {
   const page = await browser.newPage();
+  page.setDefaultTimeout(8_000);
   await page.setViewport({ width: 1000, height: 700 });
   await page.setContent('<!doctype html><div id="app"></div>');
   await page.addStyleTag({ path: 'webview/src/styles.css' });
@@ -15,8 +17,9 @@ try {
     await page.evaluate(({ mode, text, from, to, preferences }) => {
       const global = window as any;
       global.editor?.destroy();
+      global.EditingFeaturesHarness.applyUiTheme(mode === 'live' ? 'light' : 'dark', true);
       global.editor = global.EditingFeaturesHarness.createEditor({ parent: document.querySelector('#app')!,
-        text, initialMode: mode, initialInputAssistance: preferences, onApplyChanges() {} });
+        text, initialMode: mode, uiLanguage: mode === 'live' ? 'zh-CN' : 'en', initialInputAssistance: preferences, onApplyChanges() {} });
       global.editor.view.dispatch({ selection: { anchor: from, head: to } }); global.editor.view.focus();
     }, { mode, text, from, to, preferences: { ...defaultInputAssistance, ...preferences } });
   };
@@ -36,12 +39,128 @@ try {
     await page.evaluate(() => (window as any).editor.redo());
     assert.equal(await page.evaluate(() => (window as any).editor.getText()), after);
   };
+  const trigger = '.meo-paste-options-trigger';
+  const option = (mode: string) => '.meo-paste-options-menu [data-paste-mode="' + mode + '"]';
+  const choose = async (mode: string) => {
+    await page.waitForSelector(trigger, { visible: true });
+    await page.click(trigger);
+    await page.waitForSelector(option(mode), { visible: true });
+    const pasted = await page.evaluate(() => (window as any).editor.getText());
+    await page.hover(option(mode));
+    assert.equal(await page.$eval(option(mode), element => element === document.activeElement), true, 'hover moves the menu highlight');
+    assert.equal(await page.evaluate(() => (window as any).editor.getText()), pasted, 'hover does not apply a paste option');
+    await page.click(option(mode));
+    return page.evaluate(() => (window as any).editor.getText());
+  };
   const table = '<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>';
   const markdown = '| A | B |\n| --- | --- |\n| 1 | 2 |';
   const mixedHtml = '<p>前文标记：这段文字应保留。</p>' + table + '<p>后文标记：这段文字也应保留。</p>';
   const mixedPlain = '前文标记：这段文字应保留。\nA\tB\n1\t2\n后文标记：这段文字也应保留。';
   const mixedMarkdown = '前文标记：这段文字应保留。\n\n' + markdown + '\n\n后文标记：这段文字也应保留。';
   for (const mode of ['source', 'live']) {
+    await page.setViewport({ width: mode === 'source' ? 480 : 1000, height: 700 });
+    await prepare(mode, '', 0, 0, { convertTables: false, pasteHtml: false });
+    assert.equal(await paste(mixedPlain, mixedHtml), mixedPlain);
+    assert.equal(await choose('formatted'), mixedMarkdown, mode + ': one paste overrides both defaults');
+    await undoRedo('', mixedMarkdown);
+
+    const originalMarkdown = '# Heading with **bold**\n\n- [x] A [link](https://example.com)\n- Use C#\n\n' + markdown;
+    const textOnly = 'Heading with bold\n\nA link\nUse C#\n\nA\tB\n1\t2';
+    await prepare(mode);
+    await page.keyboard.down('Control');
+    assert.equal(await paste(originalMarkdown, ''), originalMarkdown);
+    await page.keyboard.up('Control');
+    await page.waitForSelector(trigger, { visible: true });
+    assert.equal(await page.$eval(trigger, element => element.getAttribute('aria-expanded')), 'false', mode + ': releasing the paste modifier does not open the menu');
+    assert.deepEqual(await page.$eval(trigger, element => ({
+      text: Array.from(element.childNodes).filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join(''),
+      icons: element.querySelectorAll('svg').length,
+      border: getComputedStyle(element).borderTopWidth,
+      monochrome: [...element.querySelectorAll('svg')].every(icon => getComputedStyle(icon).color === getComputedStyle(element).color)
+    })), { text: 'Ctrl', icons: 2, border: '1px', monochrome: true }, mode + ': the compact button has a border and neutral icons');
+    await page.mouse.move(0, 0);
+    await page.keyboard.press('Control');
+    await page.waitForSelector(option('plain'), { visible: true });
+    assert.equal(await page.$eval(option('plain'), element => element.textContent), mode === 'live' ? '仅保留文字' : 'Keep text only');
+    if (mode === 'live') {
+      await page.waitForSelector('.meo-md-html-table', { visible: true });
+      const geometry = await page.evaluate(async () => {
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const table = document.querySelector('.meo-md-html-table')!.getBoundingClientRect();
+        const button = document.querySelector('.meo-paste-options-trigger')!.getBoundingClientRect();
+        const view = (window as any).editor.view;
+        const block = view.lineBlockAt(view.state.selection.main.head);
+        return { left: table.left, right: table.right, button: button.left, block: block.type };
+      });
+      assert.ok(geometry.button >= geometry.left - 8 && geometry.button < geometry.right,
+        'a rendered table anchors the menu near its visible content: ' + JSON.stringify(geometry));
+    }
+    if (process.argv.includes('--capture')) {
+      mkdirSync('.local/input-presentation', { recursive: true });
+      const appearance = mode === 'live' ? 'light-zh' : 'dark-en';
+      await page.screenshot({ path: '.local/input-presentation/paste-options-' + appearance + '.png' });
+    }
+    assert.equal(await page.$eval(option('formatted'), element => element === document.activeElement), true);
+    await page.hover(option('formatted'));
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.$eval(option('plain'), element => element === document.activeElement), true);
+    assert.equal(await page.evaluate(() => (window as any).editor.getText()), originalMarkdown, mode + ': moving the highlight does not apply the option');
+    const rows = await page.$eval('.meo-paste-options-menu', menu => {
+      let rowTop = menu.getBoundingClientRect().top + menu.clientTop;
+      return [...menu.querySelectorAll('button')].map(element => {
+        const bounds = element.getBoundingClientRect();
+        const fillsRow = Math.abs(bounds.top - rowTop) < 1 && Math.abs(bounds.width - menu.clientWidth) < 1;
+        rowTop = bounds.bottom;
+        return {
+          background: getComputedStyle(element).backgroundColor,
+          before: getComputedStyle(element, '::before').content,
+          decoration: getComputedStyle(element).textDecorationLine,
+          fillsRow
+        };
+      });
+    });
+    assert.equal(rows[0].background, 'rgba(0, 0, 0, 0)', mode + ': the previous option is clear even with the pointer still over it');
+    assert.deepEqual(rows.map(row => row.before), ['none', 'none'], mode + ': choices have no checkmarks');
+    assert.deepEqual(rows.map(row => row.decoration), ['none', 'none'], mode + ': focusing an option does not underline the label');
+    assert.ok(rows.every(row => row.fillsRow), mode + ': both choices fill the panel edge to edge');
+    assert.notEqual(rows[1].background, 'rgba(0, 0, 0, 0)', mode + ': only the focused option is highlighted');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => (window as any).editor.getText()), textOnly, mode + ': Markdown syntax and table structure are removed');
+    await undoRedo('', textOnly);
+
+    await prepare(mode, 'label', 0, 5);
+    assert.equal(await paste('https://example.com', ''), '[label](https://example.com)');
+    assert.equal(await choose('plain'), 'https://example.com', mode + ': text choice replaces the auto-generated link');
+    await undoRedo('label', 'https://example.com');
+
+    await prepare(mode);
+    const formatted = '# Heading\n\n**Word**\n\n| A | B |\n| --- | --- |\n| **1** | 2 |';
+    assert.equal(await paste('Heading\nWord\nA\tB\n1\t2',
+      '<h1>Heading</h1><p><b>Word</b></p>' + table.replace('<td>1', '<td><b>1</b>')), formatted, mode + ': regular paste keeps supported formatting by default');
+    assert.equal(await choose('plain'), 'Heading\n\nWord\n\nA\tB\n1\t2', mode + ': rich clipboard table and prose become text');
+
+    await prepare(mode);
+    assert.equal(await paste('A\tB\n1\t2', '<p>Unstructured HTML</p>'), markdown);
+    assert.equal(await choose('plain'), 'A\tB\n1\t2', mode + ': recognized spreadsheet text keeps every row and column');
+
+    await prepare(mode, '', 0, 0, { showPasteOptions: false, pasteHtml: true });
+    assert.equal(await paste('bold', '<b>bold</b>'), '**bold**');
+    assert.equal(await page.$(trigger), null, mode + ': disabling the menu leaves ordinary formatting enabled');
+    await prepare(mode, '', 0, 0, { pasteHtml: false });
+    assert.equal(await paste('C# and a * b', ''), 'C# and a * b');
+    assert.equal(await page.$(trigger), null, mode + ': ordinary symbols have no alternative paste result');
+    assert.equal(await paste('bold', '<b>bold</b>'), 'C# and a * bbold');
+    await page.waitForSelector(trigger, { visible: true });
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(await page.$(trigger), null, mode + ': moving the caret retires the action');
+    assert.equal(await paste('word', '<strong>word</strong>'), 'C# and a * bbolwordd');
+    await page.waitForSelector(trigger, { visible: true });
+    await page.keyboard.press('Control');
+    await page.waitForSelector(option('plain'), { visible: true });
+    await page.keyboard.press('Escape');
+    assert.equal(await page.$(trigger), null, mode + ': Escape retires the action');
+    assert.equal(await page.evaluate(() => document.activeElement === (window as any).editor.view.contentDOM), true);
+
     for (const pasteHtml of [false, true]) for (const convertTables of [false, true]) {
       await prepare(mode, '', 0, 0, { pasteHtml, convertTables });
       const expected = pasteHtml && convertTables ? mixedMarkdown : mixedPlain;
@@ -134,5 +253,5 @@ try {
   const largePlain = 'Before\n' + 'a\tb\n'.repeat(3000) + 'Between\n' + 'a\tb\n'.repeat(3000) + 'After';
   await prepare('source', '', 0, 0, { pasteHtml: true });
   assert.equal(await paste(largePlain, '<p>Before</p>' + largeTable + '<p>Between</p>' + largeTable + '<p>After</p>'), largePlain, 'all tables share the clipboard capacity');
-  console.log('Mixed HTML production paste: both modes, switches, block edges, dual MIME, multiple tables, capacity, literal code and undo/redo passed');
+  console.log('Production paste: both modes, paste options, HTML/Markdown/table text, switches, block edges, dual MIME, capacity, literal code and undo/redo passed');
 } finally { await closeTestBrowser(browser); }

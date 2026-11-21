@@ -10,9 +10,11 @@ export const historyAcceptance: readonly Acceptance[] = [
     rule: 'Commit pending input before persistence; saving itself adds no document history entry.' },
   { commands: ['undo', 'redo'], effect: 'replay', tests: ['test-editor-history-runtime.ts', 'test-history-matrix.ts'],
     rule: 'Replay the shared document history and restore the current semantic interaction, without creating another entry.' },
-  { commands: ['find', 'all', 'selection', 'home', 'expandSelection', 'shrinkSelection', 'nextOccurrence', 'skipOccurrence', 'addCursor', 'splitCursors', 'mode', 'preview', 'escape', 'tableNav'],
+  { commands: ['find', 'all', 'selection', 'home', 'expandSelection', 'shrinkSelection', 'nextOccurrence', 'skipOccurrence', 'addCursor', 'splitCursors', 'mode', 'preview', 'escape'],
     effect: 'neutral', tests: ['test-editing-features-production.ts', 'test-preview-shortcuts-production.ts', 'test-mode-selection-continuity.ts'],
     rule: 'Navigation, selection and view changes do not edit the document or add a document undo step; commit pre-existing input separately.' },
+  { commands: ['openFileTree', 'resetWindowZoom'], effect: 'neutral', tests: ['test-settings-window-production.ts', 'test-panel-session-ready-init.ts'],
+    rule: 'Workbench navigation and zoom leave the document and its undo stack untouched.' },
   { commands: ['copy', 'copyMarkdown', 'copyCsv'], effect: 'neutral', tests: ['test-table-clipboard-production.ts', 'test-editing-features-production.ts'],
     rule: 'Copy retains document text and history; native clipboard delivery has its separate acceptance boundary.' },
   { commands: ['cut', 'paste', 'plain'], effect: 'edit', tests: ['test-clipboard-history-production.ts', 'test-editing-features-production.ts', 'test-mixed-html-paste-production.ts', 'test-table-clipboard-production.ts'],
@@ -34,9 +36,9 @@ export const historyAcceptance: readonly Acceptance[] = [
   { commands: ['lineComment', 'selectionComment', 'moveUp', 'moveDown', 'copyUp', 'copyDown', 'deleteLine', 'blankAbove', 'blankBelow'], effect: 'edit',
     tests: ['test-editing-features-production.ts', 'test-html-comment-input-production.ts'],
     rule: 'Structural edits and comments keep one history group and restore directed or multiple selections.' },
-  { commands: ['enter', 'tab', 'delete'], effect: 'contextual',
-    tests: ['test-input-assistance-production.ts', 'test-live-command-presentation.ts', 'test-table-history.ts'],
-    rule: 'Text/list/cell input is undoable; keyboard control activation and focus navigation must not become document edits.' }
+  { commands: ['enter', 'tab', 'tableNav', 'delete'], effect: 'contextual',
+    tests: ['test-input-assistance-production.ts', 'test-live-command-presentation.ts', 'test-table-history.ts', 'test-settings-window-production.ts'],
+    rule: 'Text input and appending a table row from the final cell are undoable; focus navigation alone never edits the document.' }
 ];
 
 export function inspectHistoryAcceptance(commands: readonly string[] = editorCommandIds, entries: readonly Acceptance[] = historyAcceptance): string[] {

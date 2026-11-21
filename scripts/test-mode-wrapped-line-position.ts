@@ -26,6 +26,21 @@ try {
       assert.deepEqual(coldHost.errors, []);
     } finally { coldHost.dispose(); await coldPage.close(); }
   }
+  const topPage = await browser.newPage();
+  const topHost = await open(topPage, 'Overview\n\n# First heading\n\n' + 'Document text.\n\n'.repeat(60));
+  try {
+    await topPage.setViewport({ width: 560, height: 500 });
+    await frames(topPage);
+    for (const mode of ['live', 'source']) {
+      await topPage.click(`button[data-mode="${mode}"]`);
+      await topPage.waitForFunction(mode => document.querySelector(`.cm-editor.meo-mode-${mode}`)
+        && !document.querySelector('.mode-group [aria-busy="true"]'), {}, mode);
+      await frames(topPage, 8);
+      assert.equal(await topPage.$eval('.editor-host > .cm-editor > .cm-scroller', scroller => scroller.scrollTop), 0,
+        `switching to ${mode} at the document start must preserve the leading space`);
+    }
+    assert.deepEqual(topHost.errors, []);
+  } finally { topHost.dispose(); await topPage.close(); }
   const page = await browser.newPage(), host = await open(page, text);
   try {
     const read = () => page.evaluate(() => {

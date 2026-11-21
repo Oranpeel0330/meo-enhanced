@@ -1,4 +1,4 @@
-import { isEditingPreferences, isEditingPreferencesChange, type EditingPreferences, type EditingPreferencesChange } from '../foundation/editingPreferences';
+import { isEditingPreferences, isEditingPreferencesChange, type EditingPreferences, type EditingPreferencesChange, type ShortcutPlatform } from '../foundation/editingPreferences';
 import { decodeRequestResult, type RequestResult } from './requestResult';
 
 export const EDITING_PREFERENCES_TIMEOUT_MS = 10_000;
@@ -6,6 +6,7 @@ export type UpdateEditingPreferencesRequest = {
   readonly type: 'updateEditingPreferences';
   readonly requestId: string;
   readonly change: EditingPreferencesChange;
+  readonly platform?: ShortcutPlatform;
 };
 export type EditingPreferencesUpdateResult = RequestResult<EditingPreferences> | {
   readonly ok: false;
@@ -25,9 +26,11 @@ function revision(value: unknown): number | null { return value === undefined ? 
 function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object'; }
 
 export function decodeUpdateEditingPreferencesRequest(value: unknown): UpdateEditingPreferencesRequest | null {
-  return isRecord(value) && value.type === 'updateEditingPreferences' && typeof value.requestId === 'string'
-    && value.requestId.length > 0 && value.requestId.length <= 100 && isEditingPreferencesChange(value.change)
-    ? { type: value.type, requestId: value.requestId, change: value.change } : null;
+  if (!isRecord(value) || value.type !== 'updateEditingPreferences' || typeof value.requestId !== 'string'
+    || value.requestId.length === 0 || value.requestId.length > 100 || !isEditingPreferencesChange(value.change)) return null;
+  const { platform } = value;
+  if (platform !== undefined && platform !== 'windows' && platform !== 'mac' && platform !== 'other') return null;
+  return { type: value.type, requestId: value.requestId, change: value.change, ...(platform ? { platform } : {}) };
 }
 
 export function decodeUpdatedEditingPreferencesResponse(value: unknown): UpdatedEditingPreferencesResponse | null {

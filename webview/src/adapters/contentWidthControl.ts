@@ -60,7 +60,9 @@ export function createContentWidthControl(options: {
     input.setAttribute('aria-label', strings.contentMaxWidthLabel);
     decrease.setAttribute('aria-label', language === 'zh-CN' ? '宽度减少100像素' : 'Decrease width by 100 pixels');
     increase.setAttribute('aria-label', language === 'zh-CN' ? '宽度增加100像素' : 'Increase width by 100 pixels');
-    reset?.setAttribute('aria-label', language === 'zh-CN' ? '恢复默认宽度800像素' : 'Reset width to 800 pixels');
+    reset?.setAttribute('aria-label', language === 'zh-CN'
+      ? `恢复默认宽度${DEFAULT_EDITOR_CONTENT_WIDTH}像素`
+      : `Reset width to ${DEFAULT_EDITOR_CONTENT_WIDTH} pixels`);
     error.textContent = strings.contentMaxWidthRange;
     errorTooltip?.setContent({ text: strings.contentMaxWidthRange, kind: 'description' });
     if (!error.hidden) input.setAttribute('aria-description', strings.contentMaxWidthRange);

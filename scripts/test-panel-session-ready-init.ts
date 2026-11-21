@@ -19,8 +19,12 @@ let emitSaveStateChange: () => void = () => undefined;
 let emitSave: () => void = () => undefined;
 let latexSetting = false, failLatexWrite = false, folderLatexOverride = false;
 const latexWrites: unknown[] = [];
+const workbenchCommands: string[] = [];
 mock.module('vscode', () => {
 const mocked = createPanelSessionVscodeMock(document, {
+  async executeCommand(command) {
+    workbenchCommands.push(command);
+  },
   onDidChangeTextDocument(listener) {
     emitSaveStateChange = () => listener({ document, contentChanges: [] } as never);
     return panelSessionDisposable();
@@ -122,6 +126,14 @@ assert.equal(messages.some(message => message.type === 'sidebarReadiness' && mes
   'outline subscription remains gated while the real init is waiting on disk');
 releaseDiskRead?.();
 await Promise.all(readyMessages);
+await controller.handleMessage({ type: 'openFileTree' });
+await controller.handleMessage({ type: 'resetWindowZoom' });
+assert.deepEqual(workbenchCommands.filter(command => command.startsWith('workbench.')), ['workbench.view.explorer', 'workbench.action.zoomReset']);
+panel.active = false;
+await controller.handleMessage({ type: 'openFileTree' });
+await controller.handleMessage({ type: 'resetWindowZoom' });
+assert.equal(workbenchCommands.filter(command => command.startsWith('workbench.')).length, 2, 'An inactive panel cannot change the workbench');
+panel.active = true;
 assert.ok(messages.findIndex(message => message.type === 'sidebarReadiness' && message.ready)
   > messages.findIndex(message => message.type === 'init'), 'Panel Session enables the outline only after init delivery');
 assert.equal(messages.filter((message) => message.type === 'init').length, 1,

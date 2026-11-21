@@ -2,11 +2,15 @@ import { sourceTablePaste, sourceTableAt } from './sourceTableCommands';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import type MarkdownIt from 'markdown-it';
+import type { InputAssistance } from '../../../src/foundation/editingPreferences';
 import { getIndentedCodeLinePrefix, indentedCodeBlockAt } from './codeBlockSource';
 import { inputAssistanceFacet } from './typingAssistance';
 import { markdownTableFromCells, parseMarkdownTable } from '../application/delimitedTable';
 import { parseMeoTableClipboard, parseHtmlTableElement, parseTsvTableClipboard, meoTableClipboardMime, maxClipboardCells } from './tableClipboard';
 import { clipboardHtmlToMarkdown, clipboardHtmlBlockEdges, parseClipboardHtml, safeClipboardUrl } from './htmlPaste';
+import { clipboardHtmlText, clipboardMarkdownText, clipboardTableText } from './clipboardPlainText';
+import { pasteOptionsMenu } from './pasteOptionsMenu';
 
 // The editor owner supplies formula context; paste dispatch keeps its own
 // history/input rules without depending on rendered widgets.
@@ -49,7 +53,12 @@ export function insertPlainClipboardText(view: EditorView, text: string, mathPas
   return true;
 }
 
-export const pasteAssistance = (mathPasteText: MathPasteText) => EditorView.domEventHandlers({
+// Choosing another representation is optional. Keep its additional parsing
+// bounded independently of the limits on regular clipboard conversion.
+const maxPasteOptionsCharacters = 128 * 1024;
+type PasteDefaults = Pick<InputAssistance, 'convertTables' | 'pasteHtml' | 'pasteUrl'>;
+
+export const pasteAssistance = (mathPasteText: MathPasteText, markdown: MarkdownIt) => [pasteOptionsMenu, EditorView.domEventHandlers({
   paste(event, view) {
     // Multiple selections use CodeMirror's literal paste distribution.
     if (!event.clipboardData || event.target instanceof HTMLTextAreaElement || view.compositionStarted || view.state.selection.ranges.length !== 1) return false;
@@ -71,66 +80,99 @@ export const pasteAssistance = (mathPasteText: MathPasteText) => EditorView.domE
     if ([selection.from, selection.to].some(position => isCodeInput(view, position)
       || hasInputSyntax(view, position, /^(?:HTMLBlock|HTMLTag)$/))) return false;
     const text = clipboard.getData('text/plain');
-    const meoMatrix = parseMeoTableClipboard(clipboard.getData(meoTableClipboardMime));
+    const meoText = clipboard.getData(meoTableClipboardMime);
+    const meoMatrix = parseMeoTableClipboard(meoText);
     const htmlText = clipboard.getData('text/html');
     const html = meoMatrix ? null : parseClipboardHtml(htmlText);
     const tables = html ? Array.from(html.querySelectorAll('table')) : [];
     const tableTarget = sourceTableAt(view.state);
     // Markdown cannot represent nested tables without flattening their contents.
-    if (!tableTarget && tables.some(table => table.parentElement?.closest('table'))) return false;
+    const nestedTable = !tableTarget && tables.some(table => table.parentElement?.closest('table'));
     // Prose owns the complete fragment; cell paste still extracts the first matrix.
-    const singleTable = !tableTarget && tables.length === 1
+    const singleTable = !tableTarget && !nestedTable && tables.length === 1
       && !Array.from(tables[0].children).some(child => child.tagName === 'CAPTION' && clipboardHtmlToMarkdown(child))
       && !clipboardHtmlToMarkdown(html!, () => '');
-    const matrix = meoMatrix
-      ?? (tables.length && (tableTarget || singleTable) ? parseHtmlTableElement(tables[0], preferences.pasteHtml) : null)
-      ?? (!htmlText || (html && !tables.length) || tableTarget ? parseTsvTableClipboard(text) : null);
-    const markdown = tableTarget ? parseMarkdownTable(text) : null;
-    const cellMatrix = matrix ?? (markdown ? { cells: markdown.cells, source: 'meo' as const } : null);
-    if (cellMatrix && tableTarget) {
-      const transaction = sourceTablePaste(view.state, cellMatrix);
-      if (transaction) { event.preventDefault(); view.dispatch(transaction); return true; }
-      event.preventDefault(); return true;
-    }
-    if (!preferences.convertTables && (matrix || tables.length)) return false;
-    if (!meoMatrix && tables.length && (!preferences.pasteHtml && !singleTable)) return false;
-    let insert: string | null = null;
-    let htmlConverted = false;
-    if (preferences.pasteUrl && !selection.empty && safeClipboardUrl(text)) {
-      const label = view.state.sliceDoc(selection.from, selection.to).replace(/[\\\[\]]/g, '\\$&');
-      insert = '[' + label + '](' + text.trim().replaceAll('(', '%28').replaceAll(')', '%29') + ')';
-    } else if (preferences.convertTables) {
-      if (matrix) insert = markdownTableFromCells(matrix.cells, matrix.source === 'meo');
-      else if (html && tables.length && preferences.pasteHtml) {
-        let cells = 0, invalid = false;
-        insert = clipboardHtmlToMarkdown(html, table => {
-          if (invalid) return '';
-          const matrix = parseHtmlTableElement(table, true);
-          if (!matrix || (cells += matrix.cells.length * matrix.cells[0].length) > maxClipboardCells) {
-            invalid = true;
-            return '';
-          }
-          return markdownTableFromCells(matrix.cells, true);
-        });
-        // Reject the whole conversion, so neither valid siblings nor prose are lost.
-        if (invalid) return false;
-        htmlConverted = true;
+    let tsvMatrix: ReturnType<typeof parseTsvTableClipboard> | undefined;
+    const readTsv = () => {
+      if (tsvMatrix === undefined) {
+        tsvMatrix = !htmlText || (html && !tables.length) || tableTarget ? parseTsvTableClipboard(text) : null;
+      }
+      return tsvMatrix;
+    };
+    const readMatrix = (keepFormatting: boolean) => meoMatrix
+      ?? (tables.length && (tableTarget || singleTable) ? parseHtmlTableElement(tables[0], keepFormatting) : null)
+      ?? readTsv();
+    const matrix = readMatrix(preferences.pasteHtml);
+    if (tableTarget) {
+      const markdown = !matrix ? parseMarkdownTable(text) : null;
+      const cellMatrix = matrix ?? (markdown ? { cells: markdown.cells, source: 'meo' as const } : null);
+      if (cellMatrix) {
+        const transaction = sourceTablePaste(view.state, cellMatrix);
+        if (transaction) view.dispatch(transaction);
+        event.preventDefault();
+        return true;
       }
     }
-    if (insert === null && preferences.pasteHtml && html) {
-      insert = clipboardHtmlToMarkdown(html);
-      htmlConverted = true;
+
+    const convertedText = (defaults: PasteDefaults, matrix: ReturnType<typeof readMatrix>): string | null => {
+      if (nestedTable || (!defaults.convertTables && (matrix || tables.length))
+        || (!meoMatrix && tables.length && !defaults.pasteHtml && !singleTable)) return null;
+      let insert: string | null = null;
+      let htmlConverted = false;
+      if (defaults.pasteUrl && !selection.empty && safeClipboardUrl(text)) {
+        const label = view.state.sliceDoc(selection.from, selection.to).replace(/[\\\[\]]/g, '\\$&');
+        insert = '[' + label + '](' + text.trim().replaceAll('(', '%28').replaceAll(')', '%29') + ')';
+      } else if (defaults.convertTables) {
+        if (matrix) insert = markdownTableFromCells(matrix.cells, matrix.source === 'meo');
+        else if (html && tables.length && defaults.pasteHtml) {
+          let cells = 0, invalid = false;
+          insert = clipboardHtmlToMarkdown(html, table => {
+            if (invalid) return '';
+            const matrix = parseHtmlTableElement(table, true);
+            if (!matrix || (cells += matrix.cells.length * matrix.cells[0].length) > maxClipboardCells) {
+              invalid = true;
+              return '';
+            }
+            return markdownTableFromCells(matrix.cells, true);
+          });
+          // Reject the whole conversion, so valid siblings and prose are retained.
+          if (invalid) return null;
+          htmlConverted = true;
+        }
+      }
+      if (insert === null && defaults.pasteHtml && html) {
+        insert = clipboardHtmlToMarkdown(html);
+        htmlConverted = true;
+      }
+      if (insert === null) return null;
+      const edges = htmlConverted ? clipboardHtmlBlockEdges(html!)
+        : { start: insert.startsWith('| '), end: insert.startsWith('| ') };
+      const fromLine = view.state.doc.lineAt(selection.from);
+      const toLine = view.state.doc.lineAt(selection.to);
+      if (edges.start && selection.from > fromLine.from) insert = '\n\n' + insert;
+      if (edges.end && selection.to < toLine.to) insert += '\n\n';
+      return insert;
+    };
+
+    const insert = convertedText(preferences, matrix);
+    if (!tableTarget && preferences.showPasteOptions && !clipboard.files.length
+      && text.length + htmlText.length + meoText.length + selection.to - selection.from <= maxPasteOptionsCharacters) {
+      const literal = view.state.toText(text).toString();
+      const formatted = (preferences.pasteHtml && preferences.convertTables ? insert
+        : convertedText({ ...preferences, pasteHtml: true, convertTables: true },
+          preferences.pasteHtml ? matrix : readMatrix(true))) ?? literal;
+      const plain = meoMatrix ? clipboardTableText(meoMatrix.cells, cell => clipboardMarkdownText(markdown, cell, true))
+        : readTsv() ? literal
+        : html ? clipboardHtmlText(html) || literal
+        : clipboardMarkdownText(markdown, literal);
+      if (formatted !== literal || plain !== literal) {
+        view.plugin(pasteOptionsMenu)?.offer({ formatted: view.state.toText(formatted).toString(), plain });
+      }
     }
     if (insert === null) return false;
-    const edges = htmlConverted ? clipboardHtmlBlockEdges(html!)
-      : { start: insert.startsWith('| '), end: insert.startsWith('| ') };
-    const fromLine = view.state.doc.lineAt(selection.from);
-    const toLine = view.state.doc.lineAt(selection.to);
-    if (edges.start && selection.from > fromLine.from) insert = '\n\n' + insert;
-    if (edges.end && selection.to < toLine.to) insert += '\n\n';
     event.preventDefault();
     view.dispatch({ changes: { from: selection.from, to: selection.to, insert },
       selection: EditorSelection.cursor(selection.from + insert.length), annotations: Transaction.userEvent.of('input.paste') });
     return true;
   }
-});
+})];

@@ -2,7 +2,28 @@ import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import puppeteer, { type Browser } from 'puppeteer-core';
+import puppeteer, { type Browser, type Page } from 'puppeteer-core';
+
+declare global {
+  interface Window {
+    readEditorCaretColor(element: Element): string;
+  }
+}
+
+/** Read the presented caret's color regardless of its paint layer or blink phase. */
+export async function installEditorCaretProbe(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.readEditorCaretColor = element => {
+      const cursor = element.closest('.cm-content')?.parentElement
+        ?.querySelector(':scope > .cm-cursorLayer > .cm-cursor-primary');
+      if (cursor) {
+        const style = getComputedStyle(cursor);
+        if (style.display !== 'none' && style.visibility === 'visible') return style.backgroundColor;
+      }
+      return getComputedStyle(element).caretColor;
+    };
+  });
+}
 
 export type TestBrowserLaunchOptions = {
   readonly userDataDir: string;

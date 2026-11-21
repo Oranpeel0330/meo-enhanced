@@ -1331,7 +1331,7 @@ indented markers, immediate task layout without overshoot, conversion, cancellat
 forward/backward multiline selection and one-click undo/redo. It runs in the list,
 high-risk browser and release browser gates.
 
-`scripts/test-ui-colors.ts` checks the eight base inputs, configuration ownership,
+`scripts/test-ui-colors.ts` checks the ten base inputs, configuration ownership,
 strict Protocol decoding and correlated saves. `scripts/test-ui-colors-production.ts`
 uses the production Settings window and the same configuration owner to verify
 preview/cancel, save failure/retry, reload, separate light/dark profiles, external
@@ -1345,6 +1345,11 @@ writes to the native input. Apply and discard are also checked before that frame
 Both are regression and targeted appearance checks; ordinary UI edits must preserve
 Source content. Document background edits change only its carrier, retaining
 native Source ink and keeping the toolbar surface independent.
+The production appearance test samples a single body caret three device pixels
+wide in Live and Source across zoom changes, both stationary and after movement.
+It checks theme inheritance, settings overrides, reload, light/dark profiles,
+high contrast and per-color reset. It also checks that a caret color update
+preserves editor state and viewport in ordinary and optimized documents.
 `scripts/test-editor-background-theme.ts` additionally checks Live/Source/Default
 Preview backgrounds, CSS-only Preview color updates without Markdown rendering,
 and independent Preview presets retaining their paired backgrounds.

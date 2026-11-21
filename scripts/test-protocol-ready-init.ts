@@ -84,7 +84,7 @@ assert.equal(decodeReadyMessage(null), null);
 assert.deepEqual(decodeReadyMessage({ type: 'ready', pageId, version: 1 }), { type: 'ready', pageId });
 assert.equal(decodeReadyMessage({ type: 'ready' }), null);
 assert.equal(decodeInitMessage({ ...completeInit, pageId: undefined }), null);
-assert.equal(decodeInitMessage({ ...completeInit, contentMaxWidth: undefined })?.contentMaxWidth, 800);
+assert.equal(decodeInitMessage({ ...completeInit, contentMaxWidth: undefined })?.contentMaxWidth, 1200);
 for (const width of [400, 850, 2400]) {
   assert.equal(decodeInitMessage({ ...completeInit, contentMaxWidth: width })?.contentMaxWidth, width);
   assert.deepEqual(decodeEditorCommand({ type: 'setContentMaxWidth', enabled: true, width }), { type: 'setContentMaxWidth', enabled: true, width });
