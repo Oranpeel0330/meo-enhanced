@@ -9,22 +9,37 @@ export function createVscodeDocumentStatistics(panel: vscode.WebviewPanel, langu
     if (!panel.active || !statistics) { item.hide(); return; }
     const s = statistics, zh = language() === 'zh-CN';
     const n = (value: number) => value.toLocaleString(zh ? 'zh-CN' : 'en-US');
-    const position = s.line === null ? `${n(s.lines)} ${zh ? '行' : 'lines'}` : `${zh ? '行' : 'Ln'} ${n(s.line)}/${n(s.lines)}`;
+    const lines = n(s.lines);
+    const line = s.line === null ? '—' : n(s.line);
+    const lineUnit = zh ? '行' : s.lines === 1 ? ' line' : ' lines';
+    const lineDetails = s.line === null
+      ? (zh ? `预览模式，共 ${lines} 行` : `Preview mode, ${lines}${lineUnit} total`)
+      : (zh ? `当前第 ${line} 行，共 ${lines} 行` : `Current line ${line}, ${lines}${lineUnit} total`);
+    let count: string;
+    let wordDetails: string;
+    let explanation: string;
     if ('wordCountStatus' in s) {
-      item.text = `${position} · ${zh ? '字数暂不可用' : 'Word count unavailable'}`;
-      item.tooltip = zh
+      count = zh ? '—/—字' : '—/— words';
+      wordDetails = zh ? '字数暂不可用' : 'Word count unavailable';
+      explanation = zh
         ? '字数统计已暂停，以保持编辑响应。'
         : 'Word counting is paused to keep editing responsive.';
     } else {
-      const count = s.hasSelection
-        ? zh ? `选中 ${n(s.selectedWords)} / 共 ${n(s.words)} 字` : `${n(s.selectedWords)} selected / ${n(s.words)} words`
-        : `${zh ? '字数' : 'Words'} ${n(s.words)}`;
-      item.text = `${position} · ${count}`;
-      item.tooltip = zh
-        ? `MEO Enhanced\n${s.line === null ? '预览模式' : `当前第 ${n(s.line)} 行`}，共 ${n(s.lines)} 行\n源码字符数：${n(s.characters)}（含空白和标记）\n中文逐字、英文逐词；包含代码文字，排除 Markdown 标记、链接地址、HTML 标签和 frontmatter。行数按源码换行计算。`
-        : `MEO Enhanced\n${s.line === null ? 'Preview' : `Line ${n(s.line)}`} / ${n(s.lines)} lines\nSource characters: ${n(s.characters)} (including whitespace and markup)\nCJK characters and other-language words, including code text. Excludes Markdown markup, link destinations, HTML tags and frontmatter. Lines follow source line breaks.`;
+      const words = n(s.words);
+      const selected = s.line === null ? '—' : n(s.selectedWords);
+      const wordUnit = zh ? '字' : s.words === 1 ? ' word' : ' words';
+      count = `${selected}/${words}${wordUnit}`;
+      wordDetails = s.line === null
+        ? (zh ? `选中字数不可用，共 ${words} 字` : `Selection count unavailable, ${words}${wordUnit} total`)
+        : (zh ? `当前选中 ${selected} 字，共 ${words} 字`
+          : `${selected} ${s.selectedWords === 1 ? 'word' : 'words'} selected, ${words}${wordUnit} total`);
+      explanation = zh
+        ? '行数按源码换行计算。中日韩逐字，其他语言逐词。计入代码文字，忽略 Markdown 标记、链接地址、HTML 标签和文档属性。'
+        : 'Lines follow source line breaks. Counts CJK characters and other words, including code. Skips Markdown markup, link destinations, HTML tags and frontmatter.';
     }
-    item.accessibilityInformation = { label: `MEO Enhanced: ${item.text}` };
+    item.text = `${line}/${lines}${lineUnit}${zh ? '，' : ', '}${count}`;
+    item.tooltip = new vscode.MarkdownString(`${lineDetails}  \n${wordDetails}\n***\n${explanation}`);
+    item.accessibilityInformation = { label: `${lineDetails}${zh ? '。' : '. '}${wordDetails}` };
     item.show();
   };
   const subscription = panel.onDidChangeViewState(refresh);
