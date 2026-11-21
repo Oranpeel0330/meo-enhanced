@@ -46,10 +46,11 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
       return [...document.querySelectorAll('.statusbar-item')].find(e => e.getBoundingClientRect().width && re.test(e.textContent));
     }, {}, pattern.source);
     const status = async pattern => { await (await findStatus(pattern)).dispose(); };
-    const hoverStatus = async (pattern, description, theme, themeClass, screenshot) => {
+    const hoverStatus = async (pattern, description, theme, themeClass, screenshot, prepare) => {
       themeChanged = true;
       await workbench.update('colorTheme', theme, vscode.ConfigurationTarget.Global);
       await page.waitForSelector(`.monaco-workbench.${themeClass}`);
+      await prepare?.();
       const target = await findStatus(pattern);
       try {
         await target.asElement().hover();
@@ -72,9 +73,34 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
     await status(/, 0\/11 words$/); result.cases.push('initial total');
     await frame.$eval('[data-mode="source"]', e => e.click());
     await ready(frame, 'source');
-    await frame.$eval('.cm-content', e => e.focus());
-    await page.keyboard.down('Control'); await page.keyboard.press('Home'); await page.keyboard.up('Control');
-    await page.keyboard.down('Shift'); await page.keyboard.press('End'); await page.keyboard.up('Shift');
+    await page.bringToFront();
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    await frame.$eval('.cm-content', e => e.focus({ preventScroll: true }));
+    await frame.waitForFunction(() => document.hasFocus() && document.activeElement?.matches('.cm-content'));
+    await frame.$eval('.cm-content', content => {
+      window.__meoStatisticsKeys = [];
+      const listener = event => {
+        if (event.key === 'Home' || event.key === 'End') {
+          window.__meoStatisticsKeys.push({ key: event.key, trusted: event.isTrusted,
+            ctrl: event.ctrlKey, shift: event.shiftKey });
+          if (event.key === 'End') content.removeEventListener('keyup', listener, true);
+        }
+      };
+      content.addEventListener('keyup', listener, true);
+    });
+    try {
+      await page.keyboard.down('Control'); await page.keyboard.press('Home'); await page.keyboard.up('Control');
+      await frame.waitForFunction(() => window.__meoStatisticsKeys?.some(entry => entry.key === 'Home' && entry.trusted && entry.ctrl));
+      await page.keyboard.down('Shift'); await page.keyboard.press('End'); await page.keyboard.up('Shift');
+      await frame.waitForFunction(() => {
+        const selection = window.getSelection();
+        return window.__meoStatisticsKeys?.some(entry => entry.key === 'End' && entry.trusted && entry.shift)
+          && selection?.toString() === '# MEOStatisticsSmall 世界';
+      });
+    } finally {
+      result.sourceSelectionWitness = await frame.evaluate(() => ({ text: document.getSelection()?.toString(),
+        hasFocus: document.hasFocus(), target: document.activeElement?.className, keys: window.__meoStatisticsKeys }));
+    }
     await status(/^1\/8 lines, 3\/11 words$/); result.cases.push('source selection');
     await page.keyboard.press('ArrowRight'); await page.keyboard.type(' Extra');
     await status(/, 0\/12 words$/); result.cases.push('typing');
@@ -101,9 +127,28 @@ exports.run = async ({ browser: sharedBrowser } = {}) => {
       'Dark 2026', 'vs-dark', 'status-en.png');
     result.cases.push('native table selection and English hover');
     await vscode.workspace.getConfiguration('meoEnhanced').update('language', 'zh-CN', vscode.ConfigurationTarget.Global);
-    await frame.evaluate(() => { const input = document.activeElement; input.setSelectionRange(input.value.length, input.value.length); });
     await hoverStatus(/^\d+\/8行，0\/12字$/, /^当前第 \d+ 行，共 8 行\n当前选中 0 字，共 12 字\n行数按源码换行计算。/,
-      'Light 2026', 'vs', 'status-zh.png');
+      'Light 2026', 'vs', 'status-zh.png', async () => {
+        await status(/^\d+\/8行，2\/12字$/);
+        await frame.evaluate(() => {
+          const input = document.activeElement;
+          if (!(input instanceof HTMLTextAreaElement) || input.selectionStart === input.selectionEnd) {
+            throw new Error('The selected table cell must still own the caret');
+          }
+          input.focus({ preventScroll: true });
+          window.__meoStatisticsCollapse = null;
+          input.addEventListener('keyup', event => {
+            window.__meoStatisticsCollapse = { key: event.key, trusted: event.isTrusted,
+              start: input.selectionStart, end: input.selectionEnd, value: input.value };
+          }, { once: true });
+        });
+        await page.keyboard.press('End');
+        const observed = await frame.waitForFunction(() => window.__meoStatisticsCollapse);
+        let collapsed;
+        try { collapsed = await observed.jsonValue(); } finally { await observed.dispose(); }
+        assert.deepEqual(collapsed, { key: 'End', trusted: true, value: '中文', start: 2, end: 2 });
+        result.chineseSelectionCollapse = collapsed;
+      });
     result.cases.push('Chinese hover without a selection');
     await frame.evaluate(() => {
       const table = document.querySelector('.meo-md-html-table');
