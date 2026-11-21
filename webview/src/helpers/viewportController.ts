@@ -3337,20 +3337,19 @@ export class ViewportController {
     anchor: ViewportDocumentAnchor
   ): void {
     const roundTrip = record.modeRoundTripSnapshot;
-    if (roundTrip && this.canRestoreModeRoundTripSnapshot(record, owner)) {
+    const returningToCapture = this.canRestoreModeRoundTripSnapshot(record, owner);
+    // Keep the document's leading space visible when switching edit modes at the top.
+    const switchingAtTop = owner === 'editor' && roundTrip?.owner === 'editor'
+      && roundTrip.scrollTop === 0 && roundTrip.editorMode !== this.getMode();
+    if (roundTrip && (returningToCapture || switchingAtTop)) {
       if (owner === 'editor') {
-        this.writeScrollPosition({
-          top: roundTrip.scrollTop,
-          left: this.view.scrollDOM.scrollLeft
-        });
-        this.stabilizeScrollPosition({
-          top: roundTrip.scrollTop,
-          left: this.view.scrollDOM.scrollLeft
-        });
+        const target = { top: roundTrip.scrollTop, left: this.view.scrollDOM.scrollLeft };
+        this.writeScrollPosition(target);
+        this.stabilizeScrollPosition(target);
       } else {
         this.stabilizePreviewScrollTop(roundTrip.scrollTop, record);
       }
-      roundTrip.returned = true;
+      if (returningToCapture) roundTrip.returned = true;
       record.projectedOwners.add(owner);
       return;
     }

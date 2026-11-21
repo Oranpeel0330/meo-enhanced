@@ -2546,7 +2546,7 @@ html[data-editor-appearance='dark'] .cm-editor.meo-mode-live {
 }
 
 .editor-host > .cm-editor > .cm-scroller {
-  padding-top: var(--meo-native-input-scroll-offset, 0px);
+  padding-top: calc(16px + var(--meo-native-input-scroll-offset, 0px));
 }
 
 :is(.cm-editor .cm-scroller, .mm-view-canvas, .mm-view-canvas *)::-webkit-scrollbar {
