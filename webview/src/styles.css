@@ -2551,7 +2551,13 @@ html[data-editor-appearance='dark'] .cm-editor.meo-mode-live {
 }
 
 .editor-host > .cm-editor > .cm-scroller {
-  padding-top: calc(16px + var(--meo-native-input-scroll-offset, 0px));
+  padding-top: var(--meo-native-input-scroll-offset, 0px);
+}
+
+.editor-host > .cm-editor > .cm-scroller > .cm-content {
+  /* CodeMirror aligns the gutter with document padding. The scrollport still
+     starts at the top edge for sticky controls and native reveals. */
+  padding-top: 16px;
 }
 
 :is(.cm-editor .cm-scroller, .mm-view-canvas, .mm-view-canvas *)::-webkit-scrollbar {

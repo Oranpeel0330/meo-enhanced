@@ -5,6 +5,8 @@ import { ViewportController } from '../webview/src/helpers/viewportController';
 // used to accept a newly mounted viewport; unavailable DOM coordinates are null.
 function createTestViewportController(view: ConstructorParameters<typeof ViewportController>[0], options?: ConstructorParameters<typeof ViewportController>[1]) {
   view.coordsAtPos ??= () => null;
+  if (!('scaleY' in view)) Object.defineProperty(view, 'scaleY', { value: 1 });
+  if (!('documentPadding' in view)) Object.defineProperty(view, 'documentPadding', { value: { top: 0, bottom: 0 } });
   return new ViewportController(view, options);
 }
 

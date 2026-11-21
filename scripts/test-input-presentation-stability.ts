@@ -337,21 +337,27 @@ try {
       await page.waitForFunction(() => document.querySelector('.editor-host > .cm-editor.meo-mode-live')
         && !document.querySelector('.mode-group [aria-busy="true"]'));
       if (kind === 'table') await page.waitForSelector('tbody textarea[data-table-row="18"][data-table-col="2"]');
-      await page.evaluate(kind => {
+      const scroll = await page.evaluate(kind => {
         const scope = window as any;
         const view = (document.querySelector('.editor-host > .cm-editor .cm-content') as any).cmTile.root.view;
+        let activeTop: number;
         if (kind === 'table') {
           const input = document.querySelector<HTMLTextAreaElement>('tbody textarea[data-table-row="18"][data-table-col="2"]')!;
           input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length);
-          view.scrollDOM.scrollTop += input.getBoundingClientRect().top - 400;
+          activeTop = input.getBoundingClientRect().top;
           scope.__readActiveTop = () => input.getBoundingClientRect().top;
         } else {
           const position = view.state.doc.toString().indexOf('const item20') + 6;
           view.dispatch({ selection: { anchor: position }, scrollIntoView: true }); view.focus();
-          view.scrollDOM.scrollTop += view.coordsAtPos(position).top - 400;
+          activeTop = view.coordsAtPos(position).top;
           scope.__readActiveTop = () => view.contentDOM.querySelector('.cm-activeLine')?.getBoundingClientRect().top;
         }
+        const viewport = view.scrollDOM.getBoundingClientRect();
+        return { x: viewport.left + viewport.width / 2, y: viewport.top + viewport.height / 2, deltaY: activeTop - 400 };
       }, kind);
+      // A real wheel gesture takes ownership from any still-settling mode transition.
+      await page.mouse.move(scroll.x, scroll.y);
+      await page.mouse.wheel({ deltaY: scroll.deltaY });
       const selector = kind === 'table' ? '.meo-md-html-table-sticky-chrome.is-visible .meo-md-html-table-sticky-header' : '.meo-block-sticky-header:not([hidden])';
       await page.waitForSelector(selector, { visible: true });
       await frames(page, 12);

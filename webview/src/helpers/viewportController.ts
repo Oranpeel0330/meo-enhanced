@@ -1542,7 +1542,7 @@ export class ViewportController {
       const block = this.view.lineBlockAt(line.from);
       offset = (block.bottom - block.top) * (progress >= 1 ? 1 : position - index);
     }
-    return this.view.lineBlockAt(line.from).top + offset;
+    return this.scrollTopAtDocumentHeight(this.view.lineBlockAt(line.from).top + offset);
   }
 
   consumeHistoryShortcutViewport(): ViewportHistorySnapshot | null {
@@ -1587,10 +1587,11 @@ export class ViewportController {
         };
       }
     }
-    const lineBlock = this.view.lineBlockAtHeight(scrollTop);
+    const height = Math.max(0, (scrollTop - this.scrollTopAtDocumentHeight(0)) * this.view.scaleY);
+    const lineBlock = this.view.lineBlockAtHeight(height);
     return {
       position: lineBlock.from,
-      lineOffset: Math.max(0, scrollTop - lineBlock.top)
+      lineOffset: Math.max(0, height - lineBlock.top)
     };
   }
 
@@ -1663,7 +1664,8 @@ export class ViewportController {
             : Math.max(0, Math.min(1, rangeOffset - lineIndex));
           const block = this.view.lineBlockAt(this.view.state.doc.line(lineNumber).from);
           return {
-            top: Math.max(0, block.top + block.height * lineProgress - viewportOffset)
+            top: Math.max(0, this.scrollTopAtDocumentHeight(block.top + block.height * lineProgress)
+              - viewportOffset / this.view.scaleY)
           };
         }
       }
@@ -1732,12 +1734,14 @@ export class ViewportController {
       // reading band using the height map until the line is rendered.
       if (anchor.preciseTextPosition && viewportOffset !== null) {
         const block = this.view.lineBlockAt(position), line = this.view.state.doc.lineAt(position);
-        return { top: Math.max(0, block.top + block.height * (position - line.from) / Math.max(1, line.length) - viewportOffset) };
+        const height = block.top + block.height * (position - line.from) / Math.max(1, line.length);
+        return { top: Math.max(0, this.scrollTopAtDocumentHeight(height) - viewportOffset / this.view.scaleY) };
       }
+      const height = this.view.lineBlockAt(position).top;
       return {
-        top: Math.max(0, this.view.lineBlockAt(position).top + (
-          viewportOffset === null ? lineOffset : -viewportOffset
-        ))
+        top: height === 0 && lineOffset === 0 && viewportOffset === null
+          ? 0
+          : Math.max(0, this.scrollTopAtDocumentHeight(height + (viewportOffset === null ? lineOffset : -viewportOffset)))
       };
     }, { onSettled, requiredStableFrames });
   }
@@ -1921,7 +1925,7 @@ export class ViewportController {
         const line = resolveTrackedAnchorLine();
         if (line) return scroller.scrollTop + line.getBoundingClientRect().top - anchorLineTop;
         return this.getMode() === 'live'
-          ? this.view.lineBlockAt(fontAnchorPosition).top - (anchorLineTop - scrollerRect!.top)
+          ? this.scrollTopAtDocumentHeight(this.view.lineBlockAt(fontAnchorPosition).top - (anchorLineTop - scrollerRect!.top))
           : null;
       };
       const correctAnchorLine = () => {
@@ -2012,10 +2016,10 @@ export class ViewportController {
     const left = this.view.scrollDOM.scrollLeft;
     mutate();
     if (this.isUserScrolling()) return;
-    this.stabilize(() => ({
-      left,
-      top: Math.max(0, this.view.lineBlockAt(anchor.position).top + anchor.lineOffset)
-    }), {
+    this.stabilize(() => {
+      const height = this.view.lineBlockAt(anchor.position).top + anchor.lineOffset;
+      return { left, top: height === 0 ? 0 : Math.max(0, this.scrollTopAtDocumentHeight(height)) };
+    }, {
       schedule: 'next-frame'
     });
   }
@@ -2990,17 +2994,19 @@ export class ViewportController {
           };
         }
         const block = this.view.lineBlockAt(targetPosition);
+        const top = this.scrollTopAtDocumentHeight(block.top);
+        const height = block.height / this.view.scaleY;
         if (
           y === 'center-if-outside'
-          && block.top >= current.top
-          && block.bottom <= current.top + this.view.scrollDOM.clientHeight
+          && top >= current.top
+          && top + height <= current.top + this.view.scrollDOM.clientHeight
         ) {
           return { kind: 'stable' };
         }
         return {
           kind: 'target',
           target: {
-            top: block.top - Math.max(0, (this.view.scrollDOM.clientHeight - block.height) / 2)
+            top: top - Math.max(0, (this.view.scrollDOM.clientHeight - height) / 2)
           }
         };
       }
@@ -3008,7 +3014,7 @@ export class ViewportController {
         const block = this.view.lineBlockAt(targetPosition);
         return {
           kind: 'target',
-          target: { top: block.top - Math.max(0, yMargin) }
+          target: { top: block.top === 0 ? 0 : this.scrollTopAtDocumentHeight(block.top) - Math.max(0, yMargin) }
         };
       }
       if (coords) {
@@ -3041,17 +3047,20 @@ export class ViewportController {
         };
       }
       const block = this.view.lineBlockAt(targetPosition);
+      const blockTop = this.scrollTopAtDocumentHeight(block.top);
+      const blockHeight = block.height / this.view.scaleY;
+      const blockBottom = blockTop + blockHeight;
       const viewportHeight = this.view.scrollDOM.clientHeight;
       const margin = Math.min(
         Math.max(0, yMargin),
-        Math.max(0, (viewportHeight - block.height) / 2)
+        Math.max(0, (viewportHeight - blockHeight) / 2)
       );
       const appliedMargin = marginMode === 'comfort-band' ? margin : 0;
-      if (block.top < evaluationTop + appliedMargin) {
-        return { kind: 'target', target: { top: block.top - margin } };
+      if (blockTop < evaluationTop + appliedMargin) {
+        return { kind: 'target', target: { top: blockTop - margin } };
       }
-      if (block.bottom > evaluationTop + viewportHeight - appliedMargin) {
-        return { kind: 'target', target: { top: block.bottom - viewportHeight + margin } };
+      if (blockBottom > evaluationTop + viewportHeight - appliedMargin) {
+        return { kind: 'target', target: { top: blockBottom - viewportHeight + margin } };
       }
       return Math.abs(current.top - evaluationTop) <= POSITION_EPSILON
         ? { kind: 'stable' }
@@ -3693,6 +3702,11 @@ export class ViewportController {
       top: this.view.scrollDOM.scrollTop,
       left: this.view.scrollDOM.scrollLeft
     };
+  }
+
+  /** Convert height-map pixels with CodeMirror's measured padding, without a DOM read. */
+  private scrollTopAtDocumentHeight(height: number): number {
+    return (this.view.documentPadding.top + height) / this.view.scaleY;
   }
 
   private captureLayoutAnchor(region: ViewportLayoutRegion): LayoutAnchor | null {

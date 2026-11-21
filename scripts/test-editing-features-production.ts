@@ -475,15 +475,18 @@ try {
     await page.evaluate(() => { (window as any).editor.view.dispatch({ scrollIntoView: true }); });
     await settleSuggestions();
     const placeCaret = async (top: number) => {
-      await page.evaluate(top => {
-        const editor = (window as any).editor, view = editor.view;
-        // This fixture owns a new reading position, just like a user scroll.
-        // Retire the preceding input's deferred caret reveal before placing it.
-        editor.markViewportInteraction();
-        view.dispatch({ effects: (window as any).EditingFeaturesHarness.EditorView.scrollIntoView(view.state.selection.main.head, {
-          y: 'start', yMargin: top - view.scrollDOM.getBoundingClientRect().top
-        }) });
+      const gesture = await page.evaluate(top => {
+        const view = (window as any).editor.view;
+        const caret = view.coordsAtPos(view.state.selection.main.head);
+        if (!caret) throw new Error('The candidate input caret must be mounted before scrolling');
+        const viewport = view.scrollDOM.getBoundingClientRect();
+        return { x: viewport.right - 30, y: viewport.top + viewport.height / 2, deltaY: caret.top - top };
       }, top);
+      // Scroll the document surface away from the open candidate list.
+      if (Math.abs(gesture.deltaY) > 1) {
+        await page.mouse.move(gesture.x, gesture.y);
+        await page.mouse.wheel({ deltaY: gesture.deltaY });
+      }
       await settleSuggestions();
       await page.waitForFunction(top => {
         const view = (window as any).editor.view, coords = view.coordsAtPos(view.state.selection.main.head);
