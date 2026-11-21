@@ -133,14 +133,16 @@ await firstPanel.controller.handleMessage({ type: 'ready', pageId: 'settings-iso
 const firstInit = firstPanel.messages.find((message) => message.type === 'init');
 assert.ok(firstInit, 'the first panel must receive its frozen Init settings');
 const firstMessageCount = firstPanel.messages.length;
-assert.equal(firstInit.contentMaxWidth, 800, 'existing sessions default to 800px');
+assert.equal(firstInit.contentMaxWidthEnabled, true, 'unconfigured sessions limit document width by default');
+assert.equal(firstInit.contentMaxWidth, 1200, 'unconfigured sessions default to 1200px');
+assert.equal(persistedConfiguration.size, 0, 'opening an unconfigured session does not write defaults');
 await Promise.all([
   firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: true, width: 950 }),
   firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: false, width: 1250 })
 ]);
 assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1250);
 assert.equal(persistedConfiguration.get('contentMaxWidth.visible'), false);
-assert.equal(firstInit.contentMaxWidth, 800, 'saving a default must not change the open session snapshot');
+assert.equal(firstInit.contentMaxWidth, 1200, 'saving a default must not change the open session snapshot');
 await firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: true });
 assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1250, 'toggling retains the custom width');
 
@@ -220,7 +222,13 @@ beforeConfigurationWrite = async () => {};
 await firstPanel.controller.handleMessage({ type: 'setContentMaxWidth', enabled: false, width: 1900 });
 assert.equal(persistedConfiguration.get('contentMaxWidth.value'), 1900);
 assert.equal(persistedConfiguration.get('contentMaxWidth.visible'), false);
+const disabledWidthPanel = createPanel();
+await disabledWidthPanel.controller.handleMessage({ type: 'ready', pageId: 'settings-isolation-page-3' });
+const disabledWidthInit = disabledWidthPanel.messages.find((message) => message.type === 'init');
+assert.equal(disabledWidthInit?.contentMaxWidthEnabled, false, 'an explicit opt-out takes precedence over the default');
+assert.equal(disabledWidthInit?.contentMaxWidth, 1900, 'an explicit width takes precedence over the default');
 firstPanel.controller.dispose();
 secondPanel.controller.dispose();
+disabledWidthPanel.controller.dispose();
 
 console.log('session setting isolation checks passed');

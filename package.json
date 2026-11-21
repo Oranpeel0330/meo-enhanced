@@ -642,13 +642,13 @@
         },
         "meoEnhanced.contentMaxWidth.visible": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "order": 3,
           "description": "%config.contentMaxWidth%"
         },
         "meoEnhanced.contentMaxWidth.value": {
           "type": "integer",
-          "default": 800,
+          "default": 1200,
           "minimum": 400,
           "maximum": 2400,
           "order": 3.1,

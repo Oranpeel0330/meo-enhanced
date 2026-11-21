@@ -1,4 +1,5 @@
 import { insertCurrentTimeExampleId, insertCurrentTimeExampleName, type CustomShortcut, type CustomShortcutAction, type EditorCommandId, type InputAssistance } from '../../../src/foundation/editingPreferences';
+import { DEFAULT_EDITOR_CONTENT_WIDTH } from '../../../src/foundation/editorContentWidth';
 import type { UiLanguage } from '../../../src/foundation/uiLanguage';
 export type SettingsTab = 'general' | 'appearance' | 'typing' | 'presets' | 'shortcuts' | 'extensions' | 'about';
 
@@ -141,7 +142,7 @@ export const generalSearchKeywords = {
   lineNumbers: ['行号 行数 行编号 边栏', 'line numbers numbering gutter'],
   foldCode: ['代码折叠 收起代码 展开代码 长代码', 'code folding collapse expand long code'],
   width: ['内容宽度 文档宽度 限制文档宽度 最大文档宽度 页面宽度 最大宽度 限宽 版心 阅读宽度', 'content width limit document width page width max width reading width wrap'],
-  widthValue: ['最大内容宽度 限制文档宽度 最大文档宽度 像素 自定义宽度 版心 阅读宽度 限宽 400 800 2400', 'maximum document width maximum content width limit document width max document width pixels px custom reading column 400 800 2400'],
+  widthValue: [`最大内容宽度 限制文档宽度 最大文档宽度 像素 自定义宽度 版心 阅读宽度 限宽 400 ${DEFAULT_EDITOR_CONTENT_WIDTH} 2400`, `maximum document width maximum content width limit document width max document width pixels px custom reading column 400 ${DEFAULT_EDITOR_CONTENT_WIDTH} 2400`],
   boldHeadings: ['标题加粗 标题字重 标题粗细', 'heading bold weight title thickness'],
   stickyHeader: ['表头固定 冻结表头 表头吸顶 表格滚动', 'sticky header freeze pin table header scrolling'],
   restorePosition: ['恢复位置 记住位置 继续阅读 阅读进度 上次位置', 'restore remember position resume reading progress last location'],

@@ -78,7 +78,7 @@ export function getOutlineWidth(context: vscode.ExtensionContext): number {
 }
 
 export function getContentMaxWidthEnabled(context: vscode.ExtensionContext): boolean {
-  return getToggleSettingValue(context, CONTENT_MAX_WIDTH_SETTING_KEY, CONTENT_MAX_WIDTH_ENABLED_KEY, [], false);
+  return getToggleSettingValue(context, CONTENT_MAX_WIDTH_SETTING_KEY, CONTENT_MAX_WIDTH_ENABLED_KEY);
 }
 
 export function getContentMaxWidth(): number {

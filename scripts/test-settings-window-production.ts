@@ -1220,9 +1220,9 @@ try {
         return row.previousElementSibling === toggle && label.right <= stepper.left && label.top >= switchBox.bottom
           && Math.abs(label.left - parentLabel.left) < 1;
       }), 'the numeric row sits below the switch row and aligns with its text');
-      assert.equal(await width(), '800px');
+      assert.equal(await width(), '1200px');
       await fill(field, '850');
-      assert.equal(await width(), '800px', 'typing a draft does not reflow the document');
+      assert.equal(await width(), '1200px', 'typing a draft does not reflow the document');
       const count = await messageCount();
       await page.click(`${quick} [data-width-action="increase"]`);
       assert.equal(await width(), '950px');
@@ -1267,7 +1267,7 @@ try {
       await page.click('.settings-title');
       assert.equal(await width(), '1100px', 'valid blur commits the input');
       await page.click(`${full} [data-width-action="reset"]`);
-      assert.equal(await width(), '800px');
+      assert.equal(await width(), '1200px');
       const fullLayout = await layout(`${full} .content-width-input`);
       await fill(`${full} .content-width-input`, '7000'); await page.keyboard.press('Enter');
       assert.deepEqual(await layout(`${full} .content-width-input`), fullLayout, 'validation does not shift the full settings window');

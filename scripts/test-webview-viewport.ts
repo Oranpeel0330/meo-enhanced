@@ -994,7 +994,7 @@ async function main() {
     );
     await page.mouse.move(0, 0);
     await page.evaluate(() => {
-      window.dispatchEvent(new MessageEvent('message', { data: { type: 'contentMaxWidthChanged', enabled: true } }));
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'contentMaxWidthChanged', enabled: true, width: 800 } }));
     });
     await waitForFrames(page);
     const toggledToolbarStart = await measureToolbarStart();
