@@ -10,6 +10,7 @@ type PasteAlternatives = { readonly formatted: string; readonly plain: string };
 type PasteOffer = PasteAlternatives & {
   readonly from: number;
   readonly to: number;
+  readonly isScrollCurrent: () => boolean;
 };
 type AcceptedPaste = PasteOffer & {
   readonly transaction: Transaction;
@@ -28,9 +29,9 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
 
   constructor(private readonly view: EditorView) {}
 
-  offer(alternatives: PasteAlternatives) {
+  offer(alternatives: PasteAlternatives, isScrollCurrent: () => boolean) {
     const { from, to } = this.view.state.selection.main;
-    const offer = { ...alternatives, from, to };
+    const offer = { ...alternatives, from, to, isScrollCurrent };
     this.pending = offer;
     // Native CodeMirror paste dispatches synchronously when ClipboardData is
     // available. An unhandled event must not arm a future unrelated paste.
@@ -164,10 +165,12 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
     }
   };
 
-  private onOutsideInteraction = (event: Event) => {
+  private onOutsideInteraction = (event: PointerEvent | FocusEvent) => {
     const target = event.target;
     if (!(target instanceof Node) || this.popup?.contains(target)) return;
     if (event.type === 'focusin' && target === this.view.contentDOM) return;
+    if (event instanceof PointerEvent && (target === this.view.scrollDOM
+      || event.pointerType === 'touch' && this.view.scrollDOM.contains(target))) return;
     this.close();
   };
 
@@ -185,27 +188,39 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
         const coords = view.coordsAtPos(head);
         const bounds = editorViewportBounds(view);
         const viewport = view.dom.ownerDocument.documentElement;
+        if (!coords || coords.right < bounds.left || coords.left > bounds.right
+          || coords.bottom <= bounds.top || coords.top >= bounds.bottom) return 'offscreen' as const;
         const left = Math.max(8, bounds.left + 4);
         const right = Math.min(viewport.clientWidth - 8, bounds.right - 4);
         const top = Math.max(8, bounds.top + 4);
         const bottom = Math.min(viewport.clientHeight - 8, bounds.bottom - 4);
         const { width, height } = popup.getBoundingClientRect();
-        if (!coords || coords.right < bounds.left || coords.left > bounds.right
-          || coords.bottom <= top || coords.top >= bottom || right - left < width) return null;
+        if (right - left < width || bottom - top < height) return null;
         const block = view.lineBlockAt(head);
         const rendered = block.type === BlockType.WidgetRange;
         // A rendered block's caret can resolve to the far edge of a full-width
         // widget. Its visible start is the closer anchor for the paste action.
         const anchorLeft = rendered ? view.coordsAtPos(block.from)?.left ?? coords.left : coords.left;
-        const above = coords.top - 4 - height;
-        const y = coords.bottom + 4 + height <= bottom ? coords.bottom + 4
-          : rendered && above < top ? bottom - height : above;
-        if (y < top) return null;
-        return { x: Math.max(left, Math.min(anchorLeft, right - width)), y };
+        const below = coords.bottom + 4;
+        const preferredTop = below + height <= bottom ? below : coords.top - 4 - height;
+        return {
+          x: Math.max(left, Math.min(anchorLeft, right - width)),
+          y: Math.max(top, Math.min(preferredTop, bottom - height))
+        };
       },
       write: position => {
         if (this.popup !== popup) return;
-        if (!position) { this.close(true); return; }
+        if (!position || position === 'offscreen') {
+          if ((position === 'offscreen' && !paste.isScrollCurrent())
+            || popup.contains(popup.ownerDocument.activeElement)) {
+            this.close(true);
+            return;
+          }
+          // The paste or its derived layout can still be revealing the caret.
+          // Geometry and scroll updates retry placement for this same paste.
+          popup.style.visibility = 'hidden';
+          return;
+        }
         popup.style.left = position.x + 'px';
         popup.style.top = position.y + 'px';
         popup.style.visibility = '';

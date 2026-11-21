@@ -58,7 +58,9 @@ export function insertPlainClipboardText(view: EditorView, text: string, mathPas
 const maxPasteOptionsCharacters = 128 * 1024;
 type PasteDefaults = Pick<InputAssistance, 'convertTables' | 'pasteHtml' | 'pasteUrl'>;
 
-export const pasteAssistance = (mathPasteText: MathPasteText, markdown: MarkdownIt) => [pasteOptionsMenu, EditorView.domEventHandlers({
+export const pasteAssistance = (
+  mathPasteText: MathPasteText, markdown: MarkdownIt, captureScrollCurrentness: () => () => boolean
+) => [pasteOptionsMenu, EditorView.domEventHandlers({
   paste(event, view) {
     // Multiple selections use CodeMirror's literal paste distribution.
     if (!event.clipboardData || event.target instanceof HTMLTextAreaElement || view.compositionStarted || view.state.selection.ranges.length !== 1) return false;
@@ -166,13 +168,17 @@ export const pasteAssistance = (mathPasteText: MathPasteText, markdown: Markdown
         : html ? clipboardHtmlText(html) || literal
         : clipboardMarkdownText(markdown, literal);
       if (formatted !== literal || plain !== literal) {
-        view.plugin(pasteOptionsMenu)?.offer({ formatted: view.state.toText(formatted).toString(), plain });
+        view.plugin(pasteOptionsMenu)?.offer(
+          { formatted: view.state.toText(formatted).toString(), plain },
+          captureScrollCurrentness()
+        );
       }
     }
     if (insert === null) return false;
     event.preventDefault();
     view.dispatch({ changes: { from: selection.from, to: selection.to, insert },
-      selection: EditorSelection.cursor(selection.from + insert.length), annotations: Transaction.userEvent.of('input.paste') });
+      selection: EditorSelection.cursor(selection.from + insert.length), annotations: Transaction.userEvent.of('input.paste'),
+      scrollIntoView: true });
     return true;
   }
 })];

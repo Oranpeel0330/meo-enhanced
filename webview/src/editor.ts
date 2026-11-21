@@ -2348,7 +2348,8 @@ export function createEditor({
       Prec.highest(typingAssistance),
       Prec.highest(pasteAssistance(
         (view, text) => mermaidPasteText(view, text) ?? displayMathPasteText(view, text),
-        createMarkdownContentParser().set({ linkify: false })
+        createMarkdownContentParser().set({ linkify: false }),
+        () => viewportController.captureUserScrollCurrentness()
       )),
       Prec.highest(createInputSuggestions({ inputContext, mathContext: getMathCompletionBody, requestLinks: requestLinkCandidates, currentHeadings: () => currentHeadingSuggestions(readDocumentTextProjection(view.state.doc)),
         openSettings: openInputSuggestionSettings,

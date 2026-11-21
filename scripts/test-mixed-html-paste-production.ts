@@ -253,5 +253,55 @@ try {
   const largePlain = 'Before\n' + 'a\tb\n'.repeat(3000) + 'Between\n' + 'a\tb\n'.repeat(3000) + 'After';
   await prepare('source', '', 0, 0, { pasteHtml: true });
   assert.equal(await paste(largePlain, '<p>Before</p>' + largeTable + '<p>Between</p>' + largeTable + '<p>After</p>'), largePlain, 'all tables share the clipboard capacity');
-  console.log('Production paste: both modes, paste options, HTML/Markdown/table text, switches, block edges, dual MIME, capacity, literal code and undo/redo passed');
+  await page.setViewport({ width: 1000, height: 180 });
+  await page.addStyleTag({ content: 'html,body,#app{height:100%;margin:0} #app{display:flex;flex-direction:column} #app>.cm-editor{height:100%;min-height:0}' });
+  const edgeMarkdown = '## Modes\n\n' + markdown + '\n\nAfter the table.';
+  const edgePlain = 'Modes\n\nA\tB\n1\t2\n\nAfter the table.';
+  const edgeHtml = '<h2>Modes</h2>' + table + '<p>After the table.</p>';
+  for (const mode of ['source', 'live']) for (const large of [false, true]) {
+    const prefix = 'Earlier paragraph.\n\n'.repeat(large ? 4200 : 45);
+    for (const [text, html] of [[edgePlain, edgeHtml], [edgeMarkdown, '']]) {
+      await prepare(mode, prefix);
+      await page.evaluate(() => (window as any).editor.view.dispatch({ scrollIntoView: true }));
+      await page.waitForFunction(() => {
+        const { view } = (window as any).editor;
+        const caret = view.coordsAtPos(view.state.selection.main.head);
+        const bottom = view.scrollDOM.getBoundingClientRect().bottom;
+        return caret && bottom - caret.bottom >= 0 && bottom - caret.bottom <= 40;
+      });
+      assert.equal(await page.evaluate(() => {
+        const scope = window as any;
+        return scope.EditingFeaturesHarness.usesLargeDocumentDerivedWorkBudget(scope.editor.view.state);
+      }), large, `${mode}: paste test exercises the expected document-scale policy`);
+      assert.equal(await paste(text, html), prefix + edgeMarkdown);
+      await page.waitForSelector(trigger, { visible: true });
+      const scrollAfterPaste = await page.evaluate(trigger => {
+        const { view } = (window as any).editor;
+        const caret = view.coordsAtPos(view.state.selection.main.head);
+        const bounds = view.scrollDOM.getBoundingClientRect();
+        const button = document.querySelector(trigger)!.getBoundingClientRect();
+        if (!caret || caret.top < bounds.top || caret.bottom > bounds.bottom
+          || button.left < bounds.left || button.right > bounds.right
+          || button.top < bounds.top || button.bottom > bounds.bottom) return null;
+        return view.scrollDOM.scrollTop;
+      }, trigger);
+      assert.ok(scrollAfterPaste !== null, `${mode}/${large}: the paste caret and button fit the viewport`);
+      if (html) {
+        await page.mouse.move(760, 90);
+        await page.mouse.wheel({ deltaY: -300 });
+        await page.waitForFunction(({ trigger, scrollAfterPaste }) => {
+          return (window as any).editor.view.scrollDOM.scrollTop < scrollAfterPaste - 150 && !document.querySelector(trigger);
+        }, {}, { trigger, scrollAfterPaste });
+        await page.mouse.wheel({ deltaY: 320 });
+        await page.waitForFunction(scrollAfterPaste =>
+          (window as any).editor.view.scrollDOM.scrollTop >= scrollAfterPaste - 10, {}, scrollAfterPaste);
+        assert.equal(await page.$(trigger), null, `${mode}/${large}: a user scroll away retires the paste options`);
+        await undoRedo(prefix, prefix + edgeMarkdown);
+      } else {
+        assert.equal(await choose('plain'), prefix + edgePlain);
+        await undoRedo(prefix, prefix + edgePlain);
+      }
+    }
+  }
+  console.log('Production paste: both modes, paste options, HTML/Markdown/table text, short viewports, switches, block edges, dual MIME, capacity, literal code and undo/redo passed');
 } finally { await closeTestBrowser(browser); }

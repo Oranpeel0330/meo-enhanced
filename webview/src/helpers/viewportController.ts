@@ -402,6 +402,7 @@ export class ViewportController {
   private lastWheelAt = Number.NEGATIVE_INFINITY;
   private lastTouchMoveAt = Number.NEGATIVE_INFINITY;
   private lastNativeScrollAt = Number.NEGATIVE_INFINITY;
+  private userScrollGeneration = 0;
   private readonly scrollIdleCallbacks = new Set<() => void>();
   private scrollIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private lastScrollDirection: -1 | 0 | 1 = 0;
@@ -2670,6 +2671,7 @@ export class ViewportController {
 
   private handleWheel(event: WheelEvent): void {
     if (event.ctrlKey || (!event.deltaX && !event.deltaY)) return;
+    this.userScrollGeneration += 1;
     this.releaseLinkedPreviewAttention(true, 'editor');
     if (this.getMode() !== 'live') {
       this.markInteraction();
@@ -2729,6 +2731,7 @@ export class ViewportController {
     if (this.getMode() === 'source' && event.button === 0 && typeof Node !== 'undefined' && event.target instanceof Node
       && this.view.contentDOM.contains(event.target)) this.holdLinkedPreviewAttention();
     if (event.button === 0 && event.target === this.view.scrollDOM) {
+      this.userScrollGeneration += 1;
       this.scrollbarDragActive = true;
       const scroll = this.view.scrollDOM, rect = scroll.getBoundingClientRect();
       this.scrollbarDragStartY = event.clientX >= rect.left + scroll.clientLeft + scroll.clientWidth
@@ -2807,6 +2810,7 @@ export class ViewportController {
 
   private handleTouchMove(event: TouchEvent): void {
     const touch = event.touches[0];
+    if (touch) this.userScrollGeneration += 1;
     if (this.getMode() !== 'live' || !touch) {
       this.markInteraction();
       return;
@@ -3932,6 +3936,12 @@ export class ViewportController {
 
   isScrollbarDragging(): boolean {
     return this.scrollbarDragActive;
+  }
+
+  /** Distinguishes user scrolling from scroll writes that settle an edit or layout. */
+  captureUserScrollCurrentness(): () => boolean {
+    const generation = this.userScrollGeneration;
+    return () => !this.destroyed && generation === this.userScrollGeneration;
   }
 
   /** Shares the native gesture deadline instead of giving resources polling loops. */
