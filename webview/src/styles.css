@@ -8840,7 +8840,7 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   align-items: center;
   gap: 6px;
   padding: 3px 7px;
-  border: 0;
+  border: 1px solid var(--meo-ui-border-control);
   border-radius: 6px;
   background: var(--meo-ui-surface-hover);
 }

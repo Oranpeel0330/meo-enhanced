@@ -68,7 +68,7 @@ export type EditingPreferencesChange =
 
 export const defaultInputAssistance: InputAssistance = {
   selectionToolbar: true, wrapSelection: true, pairMode: 'smart', skipMode: 'smart', deleteMode: 'smart', lists: true,
-  showPasteOptions: true, convertTables: true, pasteUrl: true, pasteHtml: false,
+  showPasteOptions: true, convertTables: true, pasteUrl: true, pasteHtml: true,
   documentSuggestions: true, slash: true, slashPreferAbove: false, emoji: false, math: true, html: true
 };
 

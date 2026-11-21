@@ -1893,12 +1893,13 @@ try {
   const pasteOptionsSwitch = '[data-setting="showPasteOptions"] [role="switch"]';
   assert.equal(await page.$eval(pasteOptionsSwitch, e => e.getAttribute('aria-label')), '显示粘贴选项');
   assert.equal(await page.$eval(pasteOptionsSwitch, e => e.getAttribute('aria-checked')), 'true');
+  assert.equal(await page.$eval('[data-setting="pasteHtml"] [role="switch"]', e => e.getAttribute('aria-checked')), 'true');
   await page.click(pasteOptionsSwitch);
   await page.waitForFunction(() => (window as any).__preferences.input.showPasteOptions === false);
   assert.deepEqual(await page.evaluate(() => {
     const input = (window as any).__preferences.input;
     return [input.pasteHtml, input.convertTables, input.pasteUrl];
-  }), [false, true, true], 'the menu switch does not change the default conversion choices');
+  }), [true, true, true], 'the menu switch does not change the default conversion choices');
   await page.click(pasteOptionsSwitch);
   await page.waitForFunction(() => (window as any).__preferences.input.showPasteOptions === true);
   const slashSwitch = '[data-setting="slash"] [role="switch"]';

@@ -77,7 +77,7 @@ try {
       icons: element.querySelectorAll('svg').length,
       border: getComputedStyle(element).borderTopWidth,
       monochrome: [...element.querySelectorAll('svg')].every(icon => getComputedStyle(icon).color === getComputedStyle(element).color)
-    })), { text: 'Ctrl', icons: 2, border: '0px', monochrome: true }, mode + ': the compact button uses plain shortcut text and neutral icons');
+    })), { text: 'Ctrl', icons: 2, border: '1px', monochrome: true }, mode + ': the compact button has a border and neutral icons');
     await page.mouse.move(0, 0);
     await page.keyboard.press('Control');
     await page.waitForSelector(option('plain'), { visible: true });
@@ -133,10 +133,10 @@ try {
     assert.equal(await choose('plain'), 'https://example.com', mode + ': text choice replaces the auto-generated link');
     await undoRedo('label', 'https://example.com');
 
-    await prepare(mode, '', 0, 0, { pasteHtml: true });
+    await prepare(mode);
     const formatted = '# Heading\n\n**Word**\n\n| A | B |\n| --- | --- |\n| **1** | 2 |';
     assert.equal(await paste('Heading\nWord\nA\tB\n1\t2',
-      '<h1>Heading</h1><p><b>Word</b></p>' + table.replace('<td>1', '<td><b>1</b>')), formatted);
+      '<h1>Heading</h1><p><b>Word</b></p>' + table.replace('<td>1', '<td><b>1</b>')), formatted, mode + ': regular paste keeps supported formatting by default');
     assert.equal(await choose('plain'), 'Heading\n\nWord\n\nA\tB\n1\t2', mode + ': rich clipboard table and prose become text');
 
     await prepare(mode);
@@ -146,7 +146,7 @@ try {
     await prepare(mode, '', 0, 0, { showPasteOptions: false, pasteHtml: true });
     assert.equal(await paste('bold', '<b>bold</b>'), '**bold**');
     assert.equal(await page.$(trigger), null, mode + ': disabling the menu leaves ordinary formatting enabled');
-    await prepare(mode);
+    await prepare(mode, '', 0, 0, { pasteHtml: false });
     assert.equal(await paste('C# and a * b', ''), 'C# and a * b');
     assert.equal(await page.$(trigger), null, mode + ': ordinary symbols have no alternative paste result');
     assert.equal(await paste('bold', '<b>bold</b>'), 'C# and a * bbold');

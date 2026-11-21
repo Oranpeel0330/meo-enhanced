@@ -156,14 +156,13 @@ try {
     await prepare(mode, 'replace me', 0, 10, { pasteHtml: true }); await paste(mixedPlain, mixedHtml);
     assert.equal(await text(), mixedMarkdown, mode + ': mixed paste replaces exactly the selected text');
     await page.evaluate(() => (window as any).editor.undo()); await waitText('replace me');
-    await prepare(mode, '', 0, 0, { pasteHtml: true }); await paste('word\tv', '<table><tr><td><strong>word</strong></td><td>v</td></tr></table>'); assert.equal(await text(), '| **word** | v |\n| --- | --- |');
-    await prepare(mode); await paste('word\tv', '<table><tr><td><strong>word</strong></td><td>v</td></tr></table>'); assert.equal(await text(), '| word | v |\n| --- | --- |', 'default paste drops HTML formatting while retaining table conversion');
+    await prepare(mode); await paste('word\tv', '<table><tr><td><strong>word</strong></td><td>v</td></tr></table>'); assert.equal(await text(), '| **word** | v |\n| --- | --- |', 'default paste preserves HTML formatting within spreadsheet cells');
     await prepare(mode, '', 0, 0, { pasteHtml: false }); await paste('word\tv', '<table><tr><td><strong>word</strong></td><td>v</td></tr></table>'); assert.equal(await text(), '| word | v |\n| --- | --- |');
     await prepare(mode, '```\n\n```', 4); await paste('A\tB', '<b>bold</b>'); assert.equal(await text(), '```\nA\tB\n```');
     await prepare(mode, 'word', 0, 4); assert.equal(await paste('https://example.test/a(b)'), true); assert.equal(await text(), '[word](https://example.test/a%28b%29)');
     await prepare(mode, 'word', 0, 4, { pasteUrl: false }); await paste('https://example.test'); assert.equal(await text(), 'https://example.test');
-    await prepare(mode); await paste('bold and italic', '<p><strong>bold</strong> and <em>italic</em></p>'); assert.equal(await text(), 'bold and italic', 'HTML formatting is disabled by default');
-    await prepare(mode, '', 0, 0, { pasteHtml: true }); assert.equal(await paste('bold', '<p><strong>bold</strong> and <em>italic</em></p>'), true); assert.equal(await text(), '**bold** and *italic*');
+    await prepare(mode); await paste('bold and italic', '<p><strong>bold</strong> and <em>italic</em></p>'); assert.equal(await text(), '**bold** and *italic*', 'HTML formatting is enabled by default');
+    await prepare(mode, '', 0, 0, { pasteHtml: false }); await paste('bold and italic', '<p><strong>bold</strong> and <em>italic</em></p>'); assert.equal(await text(), 'bold and italic', 'turning off rich paste uses the clipboard text');
     await prepare(mode); await page.evaluate(() => (window as any).editor.pastePlainText('A\tB\r\n1\t2')); assert.equal(await text(), 'A\tB\n1\t2');
     await prepare(mode, table, table.indexOf('x'), table.indexOf('x'), { convertTables: false });
     if (mode === 'source') { assert.equal(await paste('u\tv\ny\tz'), true); assert.equal(await text(), '| A | B |  |\n| --- | --- | --- |\n|  | u | v |\n|  | y | z |'); }

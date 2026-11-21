@@ -228,7 +228,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Docume
   await migrateLargeDocumentOpening(context);
   const editingPreferences = await createVscodeEditingPreferences(resolveUiLanguage(
     vscode.workspace.getConfiguration(EXTENSION_CONFIG_SECTION).get('language', 'auto'), vscode.env.language
-  ), context);
+  ));
   const customPreviewPresets = await createVscodePreviewPresets(context);
   const documentViews = createDocumentViewsRegistry();
   const extensionFeatures = createExtensionFeatures();
