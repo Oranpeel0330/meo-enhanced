@@ -1873,13 +1873,26 @@ async function main() {
     }
     await waitForTable(page);
 
+    const appendOnLastTab = await page.evaluate(() => /^win/i.test(navigator.platform));
     await page.click(last);
     await page.keyboard.press('Tab');
+    if (appendOnLastTab) await page.waitForFunction(() => {
+      const active = document.activeElement as HTMLElement | null;
+      return active?.dataset.tableRow === '3' && active.dataset.tableCol === '0';
+    });
     const lastTabState = await page.evaluate(() => ({
       rows: document.querySelectorAll('.meo-md-html-table-shell tbody tr').length,
       text: (window as any).__tableCellEditor.getText()
     }));
-    if (lastTabState.rows !== 2 || lastTabState.text !== source) throw new Error(`Last-cell Tab changed Markdown: ${JSON.stringify(lastTabState)}`);
+    if (lastTabState.rows !== (appendOnLastTab ? 3 : 2)
+      || lastTabState.text !== (appendOnLastTab ? source + '\n|  |  |' : source)) {
+      throw new Error(`Last-cell Tab produced unexpected Markdown: ${JSON.stringify(lastTabState)}`);
+    }
+    if (appendOnLastTab) {
+      await page.evaluate(() => (window as any).__tableCellEditor.undo());
+      assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.getText()), source);
+      await waitForTable(page);
+    }
 
     await page.click(last);
     await page.keyboard.press('Enter');

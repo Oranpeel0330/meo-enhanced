@@ -345,7 +345,8 @@ async function main(): Promise<void> {
       input.setSelectionRange(0, 0);
     });
     const beforeFinalTab = await page.evaluate(() => ({
-      scrollTop: (window as any).__selectionViewportEditor.view.scrollDOM.scrollTop
+      scrollTop: (window as any).__selectionViewportEditor.view.scrollDOM.scrollTop,
+      appendRow: /^win/i.test(navigator.platform)
     }));
     await page.keyboard.press('Tab');
     await waitForFrames(page, 4);
@@ -354,16 +355,21 @@ async function main(): Promise<void> {
       const active = document.activeElement;
       return {
         scrollTop: editor.view.scrollDOM.scrollTop,
-        stayedInFinalCell: active instanceof HTMLTextAreaElement
-          && active.dataset.tableRow === '2'
-          && active.dataset.tableCol === '1'
+        text: editor.getText(),
+        rows: document.querySelectorAll('.meo-md-html-table:not(.meo-md-html-table-sticky-table) tbody tr').length,
+        cell: active instanceof HTMLTextAreaElement ? [active.dataset.tableRow, active.dataset.tableCol].join(':') : null
       };
     });
+    const expectedText = beforeFinalTab.appendRow
+      ? beforeEnterText.replace('| three | four |\n', '| three | four |\n|  |  |\n')
+      : beforeEnterText;
     if (
-      !afterFinalTab.stayedInFinalCell ||
+      afterFinalTab.cell !== (beforeFinalTab.appendRow ? '3:0' : '2:1') ||
+      afterFinalTab.rows !== (beforeFinalTab.appendRow ? 3 : 2) ||
+      afterFinalTab.text !== expectedText ||
       Math.abs(afterFinalTab.scrollTop - beforeFinalTab.scrollTop) > 1
     ) {
-      throw new Error(`Tab escaped the final table cell: ${JSON.stringify({ beforeFinalTab, afterFinalTab })}`);
+      throw new Error(`Last-cell Tab changed the wrong text, focus, or viewport: ${JSON.stringify({ beforeFinalTab, afterFinalTab })}`);
     }
     console.log('table selection viewport checks passed');
   } catch (error) {

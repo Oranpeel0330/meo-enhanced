@@ -235,7 +235,8 @@ try {
   await page.click(trigger);
   assert.equal((await show(menuButton)).shortcut, 'Ctrl + Alt + R', 'the displayed shortcut still executes the table action');
   await setShortcuts({});
-  assert.equal(await tableHintKey(), null, 'reset restores the unbound table default');
+  const defaultRowBelow = await page.evaluate(() => /^win/i.test(navigator.platform) ? 'Ctrl + Enter' : null);
+  assert.equal(await tableHintKey(), defaultRowBelow, 'reset restores the platform table default');
   assert.equal(await page.$eval('[data-action="save"]', element => (element as HTMLElement).dataset.tooltipShortcut), 'Ctrl + S', 'reset restores the platform default');
   phase = 'collapsed table delete hint';
   const deleteTable = menu + ' [data-command="delete-table"]';

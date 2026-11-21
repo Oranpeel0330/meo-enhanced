@@ -706,6 +706,7 @@ async function main() {
       };
       whitespaceEditor.destroy();
 
+      const cellBreakModifier = /^win/i.test(navigator.platform) ? { shiftKey: true } : { ctrlKey: true };
       const shortcutEditor = await create('| Items |\n| --- |\n| - first |');
       const shortcutInput = document.querySelector<HTMLTextAreaElement>('tbody textarea')!;
       shortcutInput.focus();
@@ -734,7 +735,7 @@ async function main() {
       }));
       shortcutInput.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
-        ctrlKey: true,
+        ...cellBreakModifier,
         bubbles: true,
         cancelable: true
       }));
@@ -1099,14 +1100,14 @@ async function main() {
       orderedShortcutInput.setSelectionRange(orderedShortcutInput.value.length, orderedShortcutInput.value.length);
       orderedShortcutInput.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
-        ctrlKey: true,
+        ...cellBreakModifier,
         bubbles: true,
         cancelable: true
       }));
       const continuedOrderedValue = orderedShortcutInput.value;
       orderedShortcutInput.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Enter',
-        ctrlKey: true,
+        ...cellBreakModifier,
         bubbles: true,
         cancelable: true
       }));
