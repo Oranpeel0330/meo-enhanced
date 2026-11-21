@@ -86,15 +86,16 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
     menu.hidden = true;
     menu.setAttribute('role', 'menu');
     menu.setAttribute('aria-label', labels.pasteOptions);
-    const paste = this.accepted!;
     for (const [mode, label] of [['formatted', labels.pasteKeepFormatting], ['plain', labels.pasteKeepText]] as const) {
       const option = doc.createElement('button');
       option.type = 'button';
       option.tabIndex = -1;
       option.textContent = label;
       option.dataset.pasteMode = mode;
-      option.setAttribute('role', 'menuitemradio');
-      option.setAttribute('aria-checked', String(paste[mode] === paste.inserted));
+      option.setAttribute('role', 'menuitem');
+      option.addEventListener('pointermove', event => {
+        if (event.pointerType === 'mouse' && doc.activeElement !== option) option.focus({ preventScroll: true });
+      });
       option.addEventListener('click', () => this.apply(mode));
       menu.append(option);
     }
@@ -125,8 +126,9 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
   };
 
   private focusOption() {
-    (this.menu?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ??
-      this.menu?.querySelector('button'))?.focus({ preventScroll: true });
+    const paste = this.accepted;
+    const mode = paste && paste.inserted === paste.plain && paste.inserted !== paste.formatted ? 'plain' : 'formatted';
+    this.menu?.querySelector<HTMLButtonElement>('[data-paste-mode="' + mode + '"]')?.focus({ preventScroll: true });
   }
 
   private onKeyDown = (event: KeyboardEvent) => {

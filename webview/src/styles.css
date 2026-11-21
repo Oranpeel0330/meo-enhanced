@@ -8868,18 +8868,13 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   text-align: start;
   background: transparent;
 }
-.meo-paste-options-menu button:hover { background: var(--meo-ui-surface-hover); }
-.meo-paste-options-menu button[aria-checked="true"] {
+.meo-paste-options-menu button:focus {
+  outline: none;
   background: var(--meo-ui-surface-selected);
 }
 .meo-paste-options-trigger:focus-visible {
   outline: 1px solid currentColor;
   outline-offset: -2px;
-}
-.meo-paste-options-menu button:focus-visible {
-  outline: none;
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .meo-input-suggestions {

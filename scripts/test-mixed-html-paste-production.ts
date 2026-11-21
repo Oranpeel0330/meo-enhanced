@@ -45,6 +45,10 @@ try {
     await page.waitForSelector(trigger, { visible: true });
     await page.click(trigger);
     await page.waitForSelector(option(mode), { visible: true });
+    const pasted = await page.evaluate(() => (window as any).editor.getText());
+    await page.hover(option(mode));
+    assert.equal(await page.$eval(option(mode), element => element === document.activeElement), true, 'hover moves the menu highlight');
+    assert.equal(await page.evaluate(() => (window as any).editor.getText()), pasted, 'hover does not apply a paste option');
     await page.click(option(mode));
     return page.evaluate(() => (window as any).editor.getText());
   };
@@ -97,7 +101,10 @@ try {
       await page.screenshot({ path: '.local/input-presentation/paste-options-' + appearance + '.png' });
     }
     assert.equal(await page.$eval(option('formatted'), element => element === document.activeElement), true);
+    await page.hover(option('formatted'));
     await page.keyboard.press('ArrowDown');
+    assert.equal(await page.$eval(option('plain'), element => element === document.activeElement), true);
+    assert.equal(await page.evaluate(() => (window as any).editor.getText()), originalMarkdown, mode + ': moving the highlight does not apply the option');
     const rows = await page.$eval('.meo-paste-options-menu', menu => {
       let rowTop = menu.getBoundingClientRect().top + menu.clientTop;
       return [...menu.querySelectorAll('button')].map(element => {
@@ -107,14 +114,16 @@ try {
         return {
           background: getComputedStyle(element).backgroundColor,
           before: getComputedStyle(element, '::before').content,
+          decoration: getComputedStyle(element).textDecorationLine,
           fillsRow
         };
       });
     });
-    assert.notEqual(rows[0].background, 'rgba(0, 0, 0, 0)', mode + ': the current choice has a background');
+    assert.equal(rows[0].background, 'rgba(0, 0, 0, 0)', mode + ': the previous option is clear even with the pointer still over it');
     assert.deepEqual(rows.map(row => row.before), ['none', 'none'], mode + ': choices have no checkmarks');
+    assert.deepEqual(rows.map(row => row.decoration), ['none', 'none'], mode + ': focusing an option does not underline the label');
     assert.ok(rows.every(row => row.fillsRow), mode + ': both choices fill the panel edge to edge');
-    assert.equal(rows[1].background, 'rgba(0, 0, 0, 0)', mode + ': keyboard focus keeps the current choice distinguishable');
+    assert.notEqual(rows[1].background, 'rgba(0, 0, 0, 0)', mode + ': only the focused option is highlighted');
     await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(() => (window as any).editor.getText()), textOnly, mode + ': Markdown syntax and table structure are removed');
     await undoRedo('', textOnly);
