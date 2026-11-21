@@ -239,7 +239,8 @@ async function assertColdSourceScroll(page: import('puppeteer-core').Page, windo
   const delta = await page.evaluate(line => {
     const scroller = document.querySelector<HTMLElement>('.cm-scroller')!;
     const view = (document.querySelector('.cm-content') as any).cmTile.root.view;
-    return view.lineBlockAt(view.state.doc.line(line).from).top - scroller.scrollTop;
+    const heading = view.lineBlockAt(view.state.doc.line(line).from);
+    return (view.documentTop + heading.top - scroller.getBoundingClientRect().top) / view.scaleY;
   }, headingLine);
   await page.mouse.move(bounds.x, bounds.y);
   await page.mouse.wheel({ deltaY: delta });
@@ -252,7 +253,9 @@ async function assertColdSourceScroll(page: import('puppeteer-core').Page, windo
       const view = (document.querySelector('.cm-content') as any).cmTile.root.view;
       const heading = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!
         .querySelector<HTMLElement>(`h2[data-source-line="${line}"]`);
-      return { source: view.scrollDOM.scrollTop, target: view.lineBlockAt(view.state.doc.line(line).from).top,
+      const block = view.lineBlockAt(view.state.doc.line(line).from);
+      const headingTop = view.documentTop + block.top;
+      return { source: view.scrollDOM.scrollTop, targetOffset: headingTop - view.scrollDOM.getBoundingClientRect().top,
         preview: heading?.getBoundingClientRect().top, line };
     }, headingLine));
     throw error;
@@ -463,7 +466,8 @@ async function assertCollapsedSourceScroll(page: import('puppeteer-core').Page, 
   for (let attempt = 0; attempt < 4; attempt++) {
     const delta = await page.evaluate(line => {
       const view = (document.querySelector('.cm-content') as any).cmTile.root.view;
-      return view.lineBlockAt(view.state.doc.line(line).from).top - view.scrollDOM.scrollTop;
+      const block = view.lineBlockAt(view.state.doc.line(line).from);
+      return (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
     }, targetLine);
     if (attempt === 0) await page.$eval('.cm-scroller', (element, delta) => { element.scrollTop += delta; }, delta);
     else if (Math.abs(delta) > 2) await page.mouse.wheel({ deltaY: delta });
@@ -640,7 +644,8 @@ async function assertFootnoteLinkedScroll(page: import('puppeteer-core').Page, b
     await page.evaluate(async () => { for (let frame = 0; frame < 14; frame++) await new Promise(requestAnimationFrame); });
     const setup = await page.evaluate(line => {
       const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-      view.scrollDOM.scrollTop = view.lineBlockAt(view.state.doc.line(line - 5).from).top;
+      const block = view.lineBlockAt(view.state.doc.line(line - 5).from);
+      view.scrollDOM.scrollTop += (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
       return { selection: view.state.selection.toJSON() };
     }, definitionLine);
     const bounds = await page.$eval('.editor-host .cm-scroller', element => {
@@ -651,17 +656,20 @@ async function assertFootnoteLinkedScroll(page: import('puppeteer-core').Page, b
     await page.evaluate(async () => { for (let frame = 0; frame < 4; frame++) await new Promise(requestAnimationFrame); });
     const correction = await page.evaluate(line => {
       const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-      return view.lineBlockAt(view.state.doc.line(line - 5).from).top - view.scrollDOM.scrollTop;
+      const block = view.lineBlockAt(view.state.doc.line(line - 5).from);
+      return (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
     }, definitionLine);
     if (Math.abs(correction) > 1) await page.mouse.wheel({ deltaY: correction });
     await page.waitForFunction(line => {
       const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-      const topLine = view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number;
+      const height = Math.max(0, view.scrollDOM.getBoundingClientRect().top - view.documentTop);
+      const topLine = view.state.doc.lineAt(view.lineBlockAtHeight(height).from).number;
       return topLine >= line - 8 && topLine < line;
     }, { timeout: 2000 }, definitionLine).catch(async error => {
       const position = await page.evaluate(() => {
         const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-        return { top: view.scrollDOM.scrollTop, line: view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number,
+        const height = Math.max(0, view.scrollDOM.getBoundingClientRect().top - view.documentTop);
+        return { top: view.scrollDOM.scrollTop, line: view.state.doc.lineAt(view.lineBlockAtHeight(height).from).number,
           sync: document.querySelector('.source-preview-scroll-sync-button')?.getAttribute('aria-pressed') };
       });
       throw new Error(`${label}: setup before definition ${definitionLine}: ${JSON.stringify(position)}`, { cause: error });
@@ -717,7 +725,8 @@ async function assertFootnoteLinkedScroll(page: import('puppeteer-core').Page, b
       await page.mouse.move(bounds.x, bounds.y);
       const delta = await page.evaluate(line => {
         const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-        return view.lineBlockAt(view.state.doc.line(line).from).top - view.scrollDOM.scrollTop - view.scrollDOM.clientHeight / 3;
+        const block = view.lineBlockAt(view.state.doc.line(line).from);
+        return (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY - view.scrollDOM.clientHeight / 3;
       }, line);
       if (Math.abs(delta) > 1) await page.mouse.wheel({ deltaY: delta });
       await page.waitForFunction(line => {
@@ -853,7 +862,9 @@ async function assertFootnoteLinkedScroll(page: import('puppeteer-core').Page, b
       await page.click(`button[data-mode="${mode}"]`); await waitMode(mode);
       const readingLine = await page.$eval('.editor-host .cm-content', element => {
         const view = (element as any).cmTile.root.view;
-        return view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop + view.scrollDOM.clientHeight / 3).from).number;
+        const box = view.scrollDOM.getBoundingClientRect();
+        const height = Math.max(0, box.top + box.height / 3 - view.documentTop);
+        return view.state.doc.lineAt(view.lineBlockAtHeight(height).from).number;
       });
       assert.ok(readingLine >= definitionLine && readingLine <= definitionLine + 13,
         `${label}: return to ${mode} keeps the same definition: ${readingLine}`);
@@ -864,12 +875,14 @@ async function assertFootnoteLinkedScroll(page: import('puppeteer-core').Page, b
     await clickSource(definitionLine);
     await page.evaluate(line => {
       const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-      view.scrollDOM.scrollTop = view.lineBlockAt(view.state.doc.line(line).from).top;
+      const block = view.lineBlockAt(view.state.doc.line(line).from);
+      view.scrollDOM.scrollTop += (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
     }, definitionLine + 70);
     await page.mouse.move(bounds.x, bounds.y); await page.mouse.wheel({ deltaY: 1 });
     await page.waitForFunction(line => {
       const view = (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view;
-      return view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number >= line;
+      const height = Math.max(0, view.scrollDOM.getBoundingClientRect().top - view.documentTop);
+      return view.state.doc.lineAt(view.lineBlockAtHeight(height).from).number >= line;
     }, {}, definitionLine + 60);
     await page.click('button[data-mode="preview"]'); await waitMode('preview');
     assert.ok(await page.$eval('.preview-frame', frame => {

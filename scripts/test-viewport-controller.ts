@@ -3005,9 +3005,9 @@ for (const settledShift of [0, 40]) {
 // Cold Source height estimates can change while reverse scrolling. The same
 // source character must project to the same Preview point even when its pixel
 // position or its wrapped line height changes, without a full-map measurement.
-{
+for (const padding of [0, 16]) {
   const doc = Text.of(Array.from({ length: 100 }, () => 'wrapped source line'));
-  const scroll = { scrollTop: 1210, scrollLeft: 17, scrollHeight: 2000, clientHeight: 400 };
+  const scroll = { scrollTop: 1210 + padding, scrollLeft: 17, scrollHeight: 2000 + padding, clientHeight: 400 };
   const selection = { anchor: 3, head: 8 };
   let prefix = 0, wrap = 0, previewTop = 0, measurements = 0, lineReads = 0;
   const block = (number: number) => {
@@ -3016,6 +3016,7 @@ for (const settledShift of [0, 40]) {
     return { from: line.from, to: line.to, top, bottom: top + 20 + (number === 61 ? wrap : 0) };
   };
   const controller = createTestViewportController({ dom: {}, state: { doc, selection }, scrollDOM: scroll,
+    documentPadding: { top: padding, bottom: 0 },
     lineBlockAt: (position: number) => { lineReads++; return block(doc.lineAt(position).number); },
     lineBlockAtHeight: (height: number) => {
       lineReads++;
@@ -3032,15 +3033,18 @@ for (const settledShift of [0, 40]) {
   try {
     controller.setLinkedPreviewEnabled(true);
     if (previewTop !== 2420) throw new Error(`Initial Source line progress was lost: ${previewTop}`);
-    prefix = 90; wrap = 20; scroll.scrollHeight += 110; scroll.scrollTop = 1310;
+    prefix = 90; wrap = 20; scroll.scrollHeight += 110; scroll.scrollTop = 1310 + padding;
     controller.editorViewportChanged();
     if (previewTop !== 2420) throw new Error(`Cold Source measurement became a Preview scroll: ${previewTop}`);
     scroll.scrollTop -= 10; controller.editorViewportChanged();
     if (previewTop !== 2410) throw new Error(`Reverse Source scrolling lost fractional wrapped progress: ${previewTop}`);
     controller.markPreviewInteraction(); previewTop = 2420; controller.previewViewportChanged();
-    if (scroll.scrollTop !== 1310) throw new Error(`Preview follower reused estimated Source pixels: ${scroll.scrollTop}`);
+    if (scroll.scrollTop !== 1310 + padding) throw new Error(`Preview follower reused estimated Source pixels: ${scroll.scrollTop}`);
     if (measurements !== 1 || lineReads > 8) throw new Error(`Linked scrolling must use bounded local geometry: ${measurements}/${lineReads}`);
     if (scroll.scrollLeft !== 17 || selection.anchor !== 3 || selection.head !== 8) throw new Error('Linked scrolling changed selection or horizontal position');
+    previewTop = 0;
+    controller.previewViewportChanged();
+    if (scroll.scrollTop !== 0) throw new Error(`Preview top must preserve the Source top margin: ${scroll.scrollTop}`);
   } finally { controller.destroy(); }
 }
 

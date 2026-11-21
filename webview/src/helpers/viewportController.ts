@@ -1391,8 +1391,9 @@ export class ViewportController {
     };
   }
 
-  private captureLinkedSourcePosition(height: number, viewportOffset: number) {
-    const block = this.view.lineBlockAtHeight(Math.max(0, height));
+  private captureLinkedSourcePosition(scrollTop: number, viewportOffset: number) {
+    const height = this.documentHeightAtScrollTop(scrollTop);
+    const block = this.view.lineBlockAtHeight(height);
     const start = this.view.state.doc.lineAt(block.from).number;
     const end = this.view.state.doc.lineAt(block.to).number;
     return { line: start, lineOffset: 0, viewportOffset,
@@ -1542,7 +1543,8 @@ export class ViewportController {
       const block = this.view.lineBlockAt(line.from);
       offset = (block.bottom - block.top) * (progress >= 1 ? 1 : position - index);
     }
-    return this.scrollTopAtDocumentHeight(this.view.lineBlockAt(line.from).top + offset);
+    const height = this.view.lineBlockAt(line.from).top + offset;
+    return height === 0 ? 0 : this.scrollTopAtDocumentHeight(height);
   }
 
   consumeHistoryShortcutViewport(): ViewportHistorySnapshot | null {
@@ -1587,7 +1589,7 @@ export class ViewportController {
         };
       }
     }
-    const height = Math.max(0, (scrollTop - this.scrollTopAtDocumentHeight(0)) * this.view.scaleY);
+    const height = this.documentHeightAtScrollTop(scrollTop);
     const lineBlock = this.view.lineBlockAtHeight(height);
     return {
       position: lineBlock.from,
@@ -3707,6 +3709,10 @@ export class ViewportController {
   /** Convert height-map pixels with CodeMirror's measured padding, without a DOM read. */
   private scrollTopAtDocumentHeight(height: number): number {
     return (this.view.documentPadding.top + height) / this.view.scaleY;
+  }
+
+  private documentHeightAtScrollTop(scrollTop: number): number {
+    return Math.max(0, (scrollTop - this.scrollTopAtDocumentHeight(0)) * this.view.scaleY);
   }
 
   private captureLayoutAnchor(region: ViewportLayoutRegion): LayoutAnchor | null {

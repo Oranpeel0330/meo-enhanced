@@ -464,7 +464,8 @@ try {
     const target = [...doc.querySelectorAll<HTMLElement>('h2[data-source-line]')].find(element => element.textContent === 'Section 45')!;
     view.dispatch({ selection: { anchor: view.state.doc.line(5).from, head: view.state.doc.line(5).to } });
     view.focus();
-    view.scrollDOM.scrollTop = view.lineBlockAt(view.state.doc.line(Number(target.dataset.sourceLine)).from).top;
+    const block = view.lineBlockAt(view.state.doc.line(Number(target.dataset.sourceLine)).from);
+    view.scrollDOM.scrollTop += (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
     return target.getBoundingClientRect().top + doc.scrollingElement!.scrollTop;
   });
   await settle();
@@ -474,7 +475,8 @@ try {
     const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
     const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
     const target = [...doc.querySelectorAll<HTMLElement>('h2[data-source-line]')].find(element => element.textContent === 'Section 45')!;
-    view.scrollDOM.scrollTop = view.lineBlockAt(view.state.doc.line(Number(target.dataset.sourceLine)).from).top;
+    const block = view.lineBlockAt(view.state.doc.line(Number(target.dataset.sourceLine)).from);
+    view.scrollDOM.scrollTop += (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
   });
   await settle();
   const sourceBefore = await snapshot();
@@ -498,7 +500,8 @@ try {
     const target = [...doc.querySelectorAll<HTMLElement>('h2[data-source-line]')].find(element => element.textContent === 'Section 15')!;
     scroll.scrollTop += target.getBoundingClientRect().top;
     doc.body.focus({ preventScroll: true });
-    return view.lineBlockAt(view.state.doc.line(Number(target.dataset.sourceLine)).from).top;
+    const block = view.lineBlockAt(view.state.doc.line(Number(target.dataset.sourceLine)).from);
+    return view.scrollDOM.scrollTop + (view.documentTop + block.top - view.scrollDOM.getBoundingClientRect().top) / view.scaleY;
   });
   await settle();
   const previewBefore = await snapshot();
