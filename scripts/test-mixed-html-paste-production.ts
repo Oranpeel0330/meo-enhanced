@@ -54,6 +54,7 @@ try {
   const mixedPlain = '前文标记：这段文字应保留。\nA\tB\n1\t2\n后文标记：这段文字也应保留。';
   const mixedMarkdown = '前文标记：这段文字应保留。\n\n' + markdown + '\n\n后文标记：这段文字也应保留。';
   for (const mode of ['source', 'live']) {
+    await page.setViewport({ width: mode === 'source' ? 480 : 1000, height: 700 });
     await prepare(mode, '', 0, 0, { convertTables: false, pasteHtml: false });
     assert.equal(await paste(mixedPlain, mixedHtml), mixedPlain);
     assert.equal(await choose('formatted'), mixedMarkdown, mode + ': one paste overrides both defaults');
@@ -67,6 +68,11 @@ try {
     await page.keyboard.up('Control');
     await page.waitForSelector(trigger, { visible: true });
     assert.equal(await page.$eval(trigger, element => element.getAttribute('aria-expanded')), 'false', mode + ': releasing the paste modifier does not open the menu');
+    assert.deepEqual(await page.$eval(trigger, element => ({
+      text: element.textContent,
+      icons: element.querySelectorAll('svg').length
+    })), { text: 'Ctrl', icons: 2 }, mode + ': the compact button shows the shortcut between two icons');
+    await page.mouse.move(0, 0);
     await page.keyboard.press('Control');
     await page.waitForSelector(option('plain'), { visible: true });
     assert.equal(await page.$eval(option('plain'), element => element.textContent), mode === 'live' ? '仅保留文字' : 'Keep text only');
@@ -83,12 +89,20 @@ try {
       assert.ok(geometry.button >= geometry.left - 8 && geometry.button < geometry.right,
         'a rendered table anchors the menu near its visible content: ' + JSON.stringify(geometry));
     }
-    if (mode === 'live' && process.argv.includes('--capture')) {
+    if (process.argv.includes('--capture')) {
       mkdirSync('.local/input-presentation', { recursive: true });
-      await page.screenshot({ path: '.local/input-presentation/paste-options-light-zh.png' });
+      const appearance = mode === 'live' ? 'light-zh' : 'dark-en';
+      await page.screenshot({ path: '.local/input-presentation/paste-options-' + appearance + '.png' });
     }
     assert.equal(await page.$eval(option('formatted'), element => element === document.activeElement), true);
     await page.keyboard.press('ArrowDown');
+    const rows = await page.$$eval('.meo-paste-options-menu button', elements => elements.map(element => ({
+      background: getComputedStyle(element).backgroundColor,
+      before: getComputedStyle(element, '::before').content
+    })));
+    assert.notEqual(rows[0].background, 'rgba(0, 0, 0, 0)', mode + ': the current choice has a background');
+    assert.deepEqual(rows.map(row => row.before), ['none', 'none'], mode + ': choices have no checkmarks');
+    assert.equal(rows[1].background, 'rgba(0, 0, 0, 0)', mode + ': keyboard focus keeps the current choice distinguishable');
     await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(() => (window as any).editor.getText()), textOnly, mode + ': Markdown syntax and table structure are removed');
     await undoRedo('', textOnly);
