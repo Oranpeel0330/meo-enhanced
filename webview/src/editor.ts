@@ -2280,13 +2280,14 @@ export function createEditor({
     tableCommandEffectAdapter,
     (error) => console.error('Table command Runtime failed', error)
   );
-  const requestSourceTableCommand = (view: EditorView, table: SourceTable, command: TableCommand, focusInsertedRow = false) => {
+  const requestSourceTableCommand = (view: EditorView, table: SourceTable, command: TableCommand, focusFirstCell = false) => {
     const registration = tableCommandTargetRegistry.register(createSourceTableCommandTarget(
       view, table, run => viewportController.preserveDocumentAnchorWhileMutation(run, true)
     ));
     return tableCommandRuntime.dispatch({
       type: 'request', command, target: {
-        tableId: registration.id, row: table.row, column: table.column, selection: null, ...(focusInsertedRow ? { focusInsertedRow } : {})
+        tableId: registration.id, row: table.row, column: table.column, selection: null,
+        insertedRowFocus: focusFirstCell ? 'first-cell' : undefined
       }, enabled: true
     }).finally(() => registration.dispose());
   };

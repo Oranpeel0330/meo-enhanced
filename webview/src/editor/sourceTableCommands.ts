@@ -58,7 +58,7 @@ export function createSourceTableCommandTarget(view: EditorView, initial: Source
         if (command === 'insert-row-above' && row === 0 || (cells.length + 1) * width > 10_000) return { transaction: null, outcome: 'no-op' };
         if (command === 'insert-row-below') row++;
         cells.splice(row, 0, Array<string>(width).fill(''));
-        if (target.focusInsertedRow) column = 0;
+        if (target.insertedRowFocus === 'first-cell') column = 0;
       } else if (command === 'delete-row') {
         if (row === 0 || cells.length <= 2) return { transaction: null, outcome: 'no-op' };
         cells.splice(row, 1); row = Math.min(row, cells.length - 1);

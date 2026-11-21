@@ -258,11 +258,27 @@ try {
       await press('ArrowUp', 'Alt');
       rows = await tableRows();
       assert.match(rows[2], /alpha/, `${mode}: move the current row back up`);
-      await enterCell(1, 0, 'alpha');
+      await enterCell(1, 1, 'one');
       await press('Enter', 'Control');
       rows = await tableRows();
       assert.equal(rows.length, 6, `${mode}: Ctrl+Enter inserts a row`);
       assert.match(rows[3], /^\|\s+\|\s+\|$/);
+      const waitForInsertedCell = () => page.waitForFunction(mode => {
+        const view = (window as any).EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+        const { head } = view.state.selection.main;
+        if (mode === 'source') {
+          const row = view.state.doc.lineAt(head);
+          return row.text === '|  |  |' && head - row.from === 5 && view.state.doc.line(row.number - 1).text === '| alpha | one |';
+        }
+        const active = document.activeElement as HTMLTextAreaElement | null;
+        return active?.dataset.tableRow === '2' && active.dataset.tableCol === '1'
+          && active.value === '' && active.selectionStart === 0 && active.selectionEnd === 0;
+      }, { timeout: 4000 }, mode);
+      await waitForInsertedCell();
+      await press('z', 'Control');
+      await waitForRows(5);
+      await press('y', 'Control');
+      await waitForInsertedCell();
       await enterCell(1, 0, 'alpha');
       await press('Enter', 'Shift');
       if (mode === 'live') {

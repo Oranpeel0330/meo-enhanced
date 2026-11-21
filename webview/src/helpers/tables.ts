@@ -5032,7 +5032,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
       case 'insert-row-below': {
         const lastRow = selectedRows.length ? Math.max(...selectedRows) : bodyRow;
-        return this.buildAddRowAfter(dom, lastRow ?? -1, column ?? 0, target.focusInsertedRow);
+        return this.buildAddRowAfter(dom, lastRow ?? -1, column ?? 0, target.insertedRowFocus);
       }
       case 'move-row-up':
         return this.buildMoveRows(dom, selectedRows, 'up', column ?? 0, target.row ?? 1);
@@ -5563,11 +5563,15 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     };
   }
 
-  buildAddRowAfter(dom: HTMLElement, rowIndex: number, focusColumn: number, focusInsertedRow = false): TableCommandTransactionPlan {
+  buildAddRowAfter(
+    dom: HTMLElement, rowIndex: number, focusColumn: number, insertedRowFocus?: TableCommandTarget['insertedRowFocus']
+  ): TableCommandTransactionPlan {
     const matrix = this.readCellMatrix();
     if (!matrix.headerCells.length) return { transaction: null, outcome: 'no-op' };
     const insertAt = Math.min(Math.max(rowIndex + 1, 0), matrix.rows.length);
-    const focusTarget = focusInsertedRow ? { row: insertAt + 1, col: 0, caret: 0 } : this.focusTargetAfterRowInsertion(insertAt, focusColumn);
+    const focusTarget = insertedRowFocus
+      ? { row: insertAt + 1, col: insertedRowFocus === 'first-cell' ? 0 : focusColumn, caret: 0 }
+      : this.focusTargetAfterRowInsertion(insertAt, focusColumn);
     const sourcePlan = this.buildInsertSourceRowTransaction(dom, insertAt, matrix.headerCells.length, focusTarget);
     if (sourcePlan) return sourcePlan;
     matrix.rows.splice(insertAt, 0, new Array(matrix.headerCells.length).fill(''));
@@ -6131,7 +6135,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         event.preventDefault();
         event.stopPropagation();
         void this.requestTableCommand('insert-row-below', true, {
-          tableId: this.tableCommandTargetId, row: rowIndex, column: colIndex, selection: null, focusInsertedRow: true
+          tableId: this.tableCommandTargetId, row: rowIndex, column: colIndex, selection: null, insertedRowFocus: 'first-cell'
         });
         return;
       }
@@ -8238,7 +8242,11 @@ export function requestMountedTableShortcut(view: EditorView, command: EditorCom
   const control = shell.querySelector<HTMLButtonElement>(`[data-command='${mapped}']`);
   const enabled = !!control && !control.disabled;
   if (skipIfDisabled && !enabled) return false;
-  return owner.requestTableCommand(mapped, enabled);
+  const target = owner.currentCommandTarget();
+  if (command === 'rowBelow' && active instanceof HTMLTextAreaElement) {
+    return owner.requestTableCommand(mapped, enabled, { ...target, insertedRowFocus: 'current-column' });
+  }
+  return owner.requestTableCommand(mapped, enabled, target);
 }
 export function mountedTableClipboardText(view: EditorView, format: 'markdown' | 'csv'): string | null {
   const active = view.dom.ownerDocument.activeElement;

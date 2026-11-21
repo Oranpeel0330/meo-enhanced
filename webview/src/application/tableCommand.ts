@@ -41,7 +41,7 @@ export type TableCommandTarget = {
   readonly row: number | null;
   readonly column: number | null;
   readonly selection: TableCommandSelection | null;
-  readonly focusInsertedRow?: boolean;
+  readonly insertedRowFocus?: 'first-cell' | 'current-column';
 };
 
 export type TableCommandState = {

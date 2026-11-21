@@ -99,7 +99,7 @@ Tab / Shift+Tab 在参数间跳转；分子中插入根式后，填完根式再�
 
 默认粗体、斜体使用 Ctrl+B / Ctrl+I，macOS 使用 Cmd+B / Cmd+I；撤销、保存、查找等跟随平台习惯。表格专用命令只在表格内执行，块和行命令在文档编辑区执行。Preview 和设置/查找输入框不会触发正文格式修改。操作系统或 VS Code 先处理的组合键可能无法传到 Webview，应选择其他组合。
 
-Windows 默认使用 `Ctrl+Shift+K` 插入代码块，`Alt+Shift+5` 切换删除线。表格内用 `Ctrl+Enter` 在下方插入行，用 `Shift+Enter` 在单元格内换行，用 `Alt+↑/↓` 移动表格行。末格按 `Tab` 添加一行并进入新行首格。`Ctrl+Shift+3` 打开 VS Code 资源管理器，`Ctrl+Shift+0` 恢复 VS Code 窗口实际大小。用户已改绑或清除的快捷键优先于新增默认键。
+Windows 默认使用 `Ctrl+Shift+K` 插入代码块，`Alt+Shift+5` 切换删除线。表格单元格内用 `Ctrl+Enter` 在下方插入行并进入新行同列，用 `Shift+Enter` 在单元格内换行，用 `Alt+↑/↓` 移动表格行。末格按 `Tab` 添加一行并进入新行首格。`Ctrl+Shift+3` 打开 VS Code 资源管理器，`Ctrl+Shift+0` 恢复 VS Code 窗口实际大小。用户已改绑或清除的快捷键优先于新增默认键。
 
 Windows 上在 Live / Source 文档编辑区单按左 Alt 会保持光标，不进入 VS Code 菜单栏；菜单仍可用鼠标打开。Alt 组合快捷键、右 Alt / AltGr、输入法和设置输入框保留原有处理，不新增配置。
 
