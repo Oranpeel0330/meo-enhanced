@@ -2497,6 +2497,11 @@ html[data-meo-ui-contrast='high'] :is(.format-button, .preview-toolbar-action, .
   --meo-live-table-header-background: var(--meo-document-table);
 }
 
+html[data-editor-appearance='light'] .cm-editor.meo-mode-live {
+  /* Live document comments use the light baseline independently of the Source palette. */
+  --meo-token-comment-color: var(--meo-live-comment-color);
+}
+
 html[data-editor-appearance='dark'] .cm-editor.meo-mode-live {
   --meo-foreground: #d2d8df;
   --meo-semantic-blockquoteForeground: #b6bcc3;
@@ -4526,6 +4531,12 @@ html[data-editor-appearance='light'] .cm-tooltip.meo-hex-color-adjustment {
   font-weight: normal;
   white-space: pre-wrap;
   cursor: text;
+}
+
+.cm-editor.meo-mode-live .cm-content .cm-line :is(.meo-md-html-break-source, .meo-md-html-break-source *),
+.cm-editor.meo-mode-live .meo-md-table-source-break:not(.is-cell-composing *) {
+  color: var(--meo-token-comment-color, #676f7d) !important;
+  -webkit-text-fill-color: currentColor !important;
 }
 
 .cm-editor .meo-md-html-comment[data-display='block'] {

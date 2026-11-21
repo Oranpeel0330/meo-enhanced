@@ -162,6 +162,7 @@ export const applyBuiltInVisualBaseline = (appearance: Exclude<EditorAppearance,
     const tokenColor = resolvedTheme.syntaxTokens[spec.id];
     rootStyle.setProperty(`--meo-token-${spec.id}-color`, contentColor(tokenColor));
   }
+  rootStyle.setProperty('--meo-live-comment-color', resolvedTheme.syntaxTokens.comment);
 
   const typography = resolvedTheme.typography;
   const liveFont = sanitizeThemeFontStyle(typography.liveFont);

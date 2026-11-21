@@ -484,6 +484,7 @@ const listIndentWidgetCache = new Map<number, ListIndentWidget>();
 const blockIndentLineDecoCache = new Map<string, ReturnType<typeof Decoration.line>>();
 const frontmatterArrayPillWidgetCache = new Map<string, FrontmatterArrayPillsWidget>();
 const htmlBreakTagRegex = /^<br\s*\/?>$/i;
+const htmlBreakSourceDeco = Decoration.mark({ class: 'meo-md-html-break-source' });
 
 class HtmlBreakWidget extends WidgetType {
   [mapLiveWidgetPositions](): WidgetType { return this; }
@@ -523,6 +524,7 @@ function addHtmlBreakDecoration(
   const line = state.doc.lineAt(node.from);
   const needsVisualBreak = state.doc.sliceString(node.to, line.to).trim().length > 0;
   if (activeLines.has(line.number)) {
+    addRange(builder, node.from, node.to, htmlBreakSourceDeco);
     if (needsVisualBreak) {
       builder.push(
         Decoration.widget({ widget: htmlBreakWidget, side: 1 }).range(node.to)

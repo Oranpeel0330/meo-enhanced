@@ -32,7 +32,7 @@ async function main() {
     await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}</style><div id="app"></div>');
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addStyleTag({
-      content: ':root { --meo-background:#24292e; --meo-foreground:#e6edf3; --meo-font-live:Arial; --meo-font-live-weight:400; --meo-font-live-size:16px; --meo-font-source:"Courier New"; --meo-font-source-weight:500; --meo-font-source-size:14px; --vscode-editor-font-family:monospace; --vscode-editor-font-size:14px; --vscode-editor-line-height:20px; }'
+      content: ':root { --meo-background:#24292e; --meo-foreground:#e6edf3; --meo-token-comment-color:#a3b4c5; --meo-font-live:Arial; --meo-font-live-weight:400; --meo-font-live-size:16px; --meo-font-source:"Courier New"; --meo-font-source-weight:500; --meo-font-source-size:14px; --vscode-editor-font-family:monospace; --vscode-editor-font-size:14px; --vscode-editor-line-height:20px; }'
     });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
 
@@ -78,6 +78,10 @@ async function main() {
       return {
         firstLineText: firstLine.textContent ?? '',
         breakCount: firstLine.querySelectorAll('.meo-md-html-break').length,
+        sourceBreaks: Array.from(firstLine.querySelectorAll('.meo-md-html-break-source'), element => ({
+          tag: element.textContent,
+          colors: [element, ...element.querySelectorAll('*')].map(part => getComputedStyle(part).webkitTextFillColor)
+        })),
         tops: ['alpha', 'beta', 'gamma', 'delta'].map(textTop),
         documentText: (window as any).__htmlBreakEditor.view.state.doc.toString(),
         documentLines: (window as any).__htmlBreakEditor.view.state.doc.lines,
@@ -116,6 +120,10 @@ async function main() {
     ) {
       throw new Error(`Active HTML break line did not keep tags and visual breaks: ${JSON.stringify(active)}`);
     }
+    if (active.sourceBreaks.map(breakTag => breakTag.tag).join('') !== '<br><br/><br />' ||
+        active.sourceBreaks.some(breakTag => breakTag.colors.some(color => color !== 'rgb(163, 180, 197)'))) {
+      throw new Error(`HTML break source tags did not use the comment color: ${JSON.stringify(active.sourceBreaks)}`);
+    }
     if (
       active.tops.some((top) => top === null) ||
       !active.tops.every((top, index, tops) => index === 0 || Number(top) > Number(tops[index - 1]))
@@ -124,6 +132,18 @@ async function main() {
     }
     if (active.documentText !== source || active.documentLines !== source.split('\n').length) {
       throw new Error('Interacting with HTML breaks changed the Markdown source');
+    }
+
+    for (const [appearance, expectedColor] of [['light', 'rgb(116, 125, 135)'], ['dark', 'rgb(163, 180, 197)']] as const) {
+      await page.evaluate(appearance => {
+        (window as any).HtmlBreakRenderingHarness.applyBuiltInVisualBaseline(appearance);
+        // The host syntax palette is applied after the appearance baseline.
+        document.documentElement.style.setProperty('--meo-token-comment-color', '#a3b4c5');
+      }, appearance);
+      const { sourceBreaks } = await collectState();
+      if (sourceBreaks.length !== 3 || sourceBreaks.some(tag => tag.colors.some(color => color !== expectedColor))) {
+        throw new Error(`${appearance} Live break color differs from the expected comment color: ${JSON.stringify(sourceBreaks)}`);
+      }
     }
 
     console.log('HTML break rendering browser tests passed');
