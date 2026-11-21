@@ -57,11 +57,11 @@ function boundedHeight(value: number): number {
   return Math.max(MIN_ESTIMATE, Math.min(MAX_ESTIMATE, value));
 }
 
-function readLayoutMetrics(contentWidth?: number): BlockWidgetLayoutMetrics {
-  const editor = typeof document === 'undefined'
+function readLayoutMetrics(contentWidth?: number, editorContent?: HTMLElement): BlockWidgetLayoutMetrics {
+  const editor = editorContent || typeof document === 'undefined'
     ? null
     : document.getElementsByClassName('cm-editor meo-mode-live').item(0) as HTMLElement | null;
-  const content = editor?.querySelector<HTMLElement>('.cm-content');
+  const content = editorContent ?? editor?.querySelector<HTMLElement>('.cm-content');
   const style = (content ?? editor) && typeof getComputedStyle === 'function'
     ? getComputedStyle(content ?? editor!)
     : null;
@@ -171,8 +171,8 @@ function estimateTableHeight(
 
 /** Whole-source column preferences keep a row window independent of which
  * cells happen to be mounted. Rendering later corrects its row-height estimates. */
-export function estimateTableLayout(request: Extract<BlockWidgetHeightRequest, { kind: 'table' }>) {
-  return projectTableLayout(request, readLayoutMetrics(request.contentWidth));
+export function estimateTableLayout(request: Extract<BlockWidgetHeightRequest, { kind: 'table' }>, editorContent?: HTMLElement) {
+  return projectTableLayout(request, readLayoutMetrics(request.contentWidth, editorContent));
 }
 
 function projectTableLayout(

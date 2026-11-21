@@ -290,7 +290,111 @@ try {
       page = await browser.newPage();
       page.on('pageerror', error => errors.push(String(error)));
     }
-    console.log('Windows shortcuts changed real Live/Source documents, appended and moved table rows, kept cell breaks, and dispatched workbench actions');
+    for (const mode of ['source', 'live'] as const) for (const large of [false, true]) {
+      for (const shortcut of ['Ctrl+Enter', 'Tab', 'Alt+Down'] as const) {
+        const label = `${mode}/${large ? 'optimized' : 'ordinary'}/${shortcut}`;
+        const windowed = mode === 'live' && large;
+        const rowCount = windowed ? 544 : 80;
+        const table = ['| A | B |', '| --- | --- |',
+          ...Array.from({ length: rowCount }, (_, index) => windowed && shortcut === 'Tab' && index < rowCount - 1
+            ? '|  |  |' : `| row-${index} | cell-${index} |`)].join('\n');
+        const movingRow = shortcut === 'Alt+Down';
+        const sourceRow = movingRow ? rowCount - 1 : rowCount;
+        const sourceCell = `cell-${sourceRow - 1}`;
+        const fixture = 'Intro\n\n' + table + '\n\n' + 'After the table.\n\n'.repeat(large ? 4300 : 50);
+        await page.evaluate(() => Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' }));
+        await openFixture(fixture, mode, false, 'hidden', false, large);
+        await page.setViewport({ width: 1080, height: 340 });
+        await page.waitForFunction(() => document.querySelector('.cm-content') && document.querySelector('.editor-loading')?.hasAttribute('hidden')
+          && !document.querySelector('.editor-host')?.hasAttribute('inert'));
+        await select(sourceCell);
+        await page.evaluate(() => {
+          const scope = window as any;
+          const view = scope.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          view.scrollDOM.scrollTop = view.lineBlockAt(view.state.selection.main.head).bottom - view.scrollDOM.clientHeight + 50;
+        });
+        if (mode === 'live') await page.locator(
+          `.meo-md-html-table:not(.meo-md-html-table-sticky-table) textarea[data-table-row="${sourceRow}"][data-table-col="1"]`
+        ).click();
+        const caretGap = () => page.evaluate(async mode => {
+          const scope = window as any, harness = scope.EditingSettingsHarness;
+          const view = harness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          for (let frame = 0; frame < 8; frame++) await new Promise(requestAnimationFrame);
+          const caret = mode === 'live'
+            ? document.activeElement!.getBoundingClientRect()
+            : view.coordsAtPos(view.state.selection.main.head);
+          return view.scrollDOM.getBoundingClientRect().bottom - caret!.bottom;
+        }, mode);
+        await page.mouse.move(850, 230);
+        let gap = await caretGap();
+        for (let adjustment = 0; adjustment < 3 && Math.abs(3 - gap) > 1; adjustment++) {
+          await page.mouse.wheel({ deltaY: 3 - gap });
+          gap = await caretGap();
+        }
+        assert.ok(gap >= 0 && gap <= 6, label + ': the old caret is at the bottom edge (' + gap + 'px)');
+        const before = await page.evaluate(() => {
+          const scope = window as any, harness = scope.EditingSettingsHarness;
+          const view = harness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          scope.__insertRowScrollFrames = [] as number[];
+          const sample = () => {
+            scope.__insertRowScrollFrames.push(view.scrollDOM.scrollTop);
+            scope.__insertRowFrame = requestAnimationFrame(sample);
+          };
+          sample();
+          return { scroll: view.scrollDOM.scrollTop,
+            windowed: !!view.dom.querySelector('[data-meo-table-windowed="true"]'),
+            optimized: harness.usesLargeDocumentDerivedWorkBudget(view.state) };
+        });
+        assert.equal(before.optimized, large, label + ': active document work budget');
+        assert.equal(before.windowed, windowed, label + ': active table row virtualization');
+        if (shortcut === 'Ctrl+Enter') await press('Enter', 'Control');
+        else if (shortcut === 'Tab') await press('Tab');
+        else await press('ArrowDown', 'Alt');
+        const after = await page.evaluate(async mode => {
+          const scope = window as any;
+          const view = scope.EditingSettingsHarness.EditorView.findFromDOM(document.querySelector('.editor-host > .cm-editor'));
+          for (let frame = 0; frame < 28; frame++) await new Promise(requestAnimationFrame);
+          cancelAnimationFrame(scope.__insertRowFrame);
+          const head = view.state.selection.main.head, line = view.state.doc.lineAt(head);
+          const active = document.activeElement as HTMLElement;
+          const target = mode === 'live' ? active.getBoundingClientRect() : view.coordsAtPos(head);
+          const bounds = view.scrollDOM.getBoundingClientRect();
+          return { visible: target && target.top >= bounds.top && target.bottom <= bounds.bottom,
+            line: line.text, lineNumber: line.number, offset: head - line.from, isTextarea: active instanceof HTMLTextAreaElement,
+            focusRow: active?.dataset.tableRow, focusCol: active?.dataset.tableCol,
+            scroll: view.scrollDOM.scrollTop, frames: scope.__insertRowScrollFrames as number[] };
+        }, mode);
+        const column = shortcut === 'Tab' ? 0 : 1;
+        assert.equal(after.line, movingRow ? `| row-${sourceRow - 1} | ${sourceCell} |` : '|  |  |', label + ': caret follows the affected row');
+        assert.equal(after.lineNumber, rowCount + (movingRow ? 4 : 5), label + ': caret is on the last row');
+        if (mode === 'live') {
+          assert.equal(after.isTextarea, true, label + ': native cell owns the input');
+          assert.equal(after.focusRow, String(rowCount + (movingRow ? 0 : 1)));
+          assert.equal(after.focusCol, String(column));
+        } else assert.equal(after.offset, movingRow ? after.line.indexOf(sourceCell) : 2 + 3 * column);
+        assert.equal(after.visible, true, label + ': new caret is visible without another key');
+        assert.ok(after.scroll > before.scroll + 5 && after.scroll - before.scroll < 90, label + ': reveal only the nearby row');
+        assert.ok(after.frames.every((frame, index) => !index || frame >= after.frames[index - 1] - 1),
+          label + ': the viewport does not move backward during the command: ' + JSON.stringify(after.frames));
+        if (mode === 'live' && shortcut === 'Tab') {
+          await press('Tab');
+          await page.waitForFunction(row => {
+            const active = document.activeElement as HTMLElement;
+            return active.dataset.tableRow === String(row) && active.dataset.tableCol === '1';
+          }, {}, rowCount + 1);
+          const scroll = await page.evaluate(async () => {
+            for (let frame = 0; frame < 10; frame++) await new Promise(requestAnimationFrame);
+            return document.querySelector('.editor-host .cm-scroller')!.scrollTop;
+          });
+          assert.ok(Math.abs(scroll - after.scroll) <= 1, label + ': tabbing across the new row needs no catch-up scroll');
+        }
+        assert.deepEqual(errors, []);
+        await page.close();
+        page = await browser.newPage();
+        page.on('pageerror', error => errors.push(String(error)));
+      }
+    }
+    console.log('Windows shortcuts changed real Live/Source documents, appended and moved table rows, revealed the inserted cell at the viewport edge, kept cell breaks, and dispatched workbench actions');
     if (process.argv.includes('--windows-shortcuts-only')) {
       await closeTestBrowser(browser);
       process.exit(0);

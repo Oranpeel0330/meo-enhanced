@@ -46,7 +46,9 @@ export function sourceTablePaste(state: EditorState, payload: TableClipboardMatr
   payload.cells.forEach((row, r) => row.forEach((value, c) => { cells[table.row + r][table.column + c] = payload.source === 'meo' ? value : externalTableCellToMarkdown(value); }));
   return sourceTableTransaction(table, { cells, alignments });
 }
-export function createSourceTableCommandTarget(view: EditorView, initial: SourceTable, preserveViewport: (run: () => void) => void): TableCommandEditorTarget {
+export function createSourceTableCommandTarget(
+  view: EditorView, initial: SourceTable, preserveViewport: (run: () => void) => void, revealCaret: () => void
+): TableCommandEditorTarget {
   return {
     view, identityKey: 'source-table', from: initial.from, isConnected: () => view.dom.isConnected && sourceTableAt(view.state)?.from === initial.from, preserveViewport,
     buildAtomicCommandTransaction({ command, target }) {
@@ -79,7 +81,13 @@ export function createSourceTableCommandTarget(view: EditorView, initial: Source
         cells.forEach(row => { [row[column], row[next]] = [row[next], row[column]]; });
         [alignments[column], alignments[next]] = [alignments[next], alignments[column]]; column = next;
       } else alignments[column] = command === 'align-left' ? 'left' : command === 'align-center' ? 'center' : 'right';
-      return { transaction: sourceTableTransaction(table, { cells, alignments }, row, column), outcome: 'changed', preserveViewport: true };
+      const movedToAnotherCell = row !== table.row || column !== table.column;
+      return {
+        transaction: sourceTableTransaction(table, { cells, alignments }, row, column),
+        outcome: 'changed',
+        preserveViewport: !movedToAnotherCell,
+        restoreInteraction: movedToAnotherCell ? revealCaret : undefined
+      };
     }
   };
 }

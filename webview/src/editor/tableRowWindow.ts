@@ -5,6 +5,7 @@ export type TableRowWindow = {
   invalidate(): void;
   ensure(index: number): HTMLTableRowElement | undefined;
   bounds(index: number): RowBounds | undefined;
+  readHeights(): readonly number[];
   dispose(): void;
 };
 
@@ -24,6 +25,7 @@ class RowHeights {
     for (let i = Math.min(index, this.count); i > 0; i -= i & -i) sum += this.sums[i]!;
     return sum;
   }
+  snapshot(): readonly number[] { return Array.from(this.values); }
   measure(index: number, height: number): void {
     if (!(height > 0) || !Number.isFinite(height)) return;
     const delta = height - this.values[index]!;
@@ -49,6 +51,7 @@ export function createTableRowWindow(options: {
   columnCount: number;
   estimateHeight: number;
   estimatedHeights?: readonly number[];
+  refreshEstimatedHeights?(): readonly number[] | undefined;
   render(index: number): HTMLTableRowElement;
   release(index: number, row: HTMLTableRowElement): void;
   retain(): Iterable<number>;
@@ -59,6 +62,7 @@ export function createTableRowWindow(options: {
   const { body, viewport, rowCount, columnCount } = options;
   const rowHeights = new RowHeights(rowCount, options.estimateHeight);
   options.estimatedHeights?.forEach((height, index) => { if (index < rowCount) rowHeights.measure(index, height); });
+  let refreshEstimates = true;
   const rows = new Map<number, HTMLTableRowElement>();
   let gaps: Array<{ element: HTMLTableRowElement; from: number; to: number }> = [];
   let extra: number | undefined, disposed = false, updating = false, previousKey = '', sized = false;
@@ -128,11 +132,22 @@ export function createTableRowWindow(options: {
         dragMeasurements.clear(); dragHeight = undefined;
       }
       const localTop = Math.max(0, viewportRect.top - bodyTop);
+      const anchorIndex = beforeAnchor?.index ?? rowHeights.indexAt(localTop);
+      const oldOffset = rowHeights.offset(anchorIndex);
+      let estimatedTop = localTop;
+      if (!dragging && body.isConnected && refreshEstimates) {
+        refreshEstimates = false;
+        const estimates = options.refreshEstimatedHeights?.();
+        if (estimates) {
+          estimates.forEach((height, index) => rowHeights.measure(index, height));
+          if (localTop > 0) estimatedTop += rowHeights.offset(anchorIndex) - oldOffset;
+        }
+      }
       // A thumb jumps across pages; rebuilding several invisible screens on
       // each jump cannot prefetch its destination. Keep a small reading buffer
       // while held, then restore the ordinary wheel/keyboard overscan on release.
       const margin = dragging ? Math.min(240, viewportRect.height / 4) : Math.max(240, viewportRect.height);
-      const first = rowHeights.indexAt(localTop - margin), last = rowHeights.indexAt(localTop + viewportRect.height + margin);
+      const first = rowHeights.indexAt(estimatedTop - margin), last = rowHeights.indexAt(estimatedTop + viewportRect.height + margin);
       const keep = new Set<number>();
       if (endingDrag) for (const index of rows.keys()) keep.add(index);
       else for (let i = first; i <= last; i++) keep.add(i);
@@ -140,8 +155,6 @@ export function createTableRowWindow(options: {
       if (extra !== undefined) keep.add(extra);
       if (endingDrag && beforeAnchor) keep.add(beforeAnchor.index);
       const wanted = [...keep].sort((a, b) => a - b);
-      const anchorIndex = beforeAnchor?.index ?? rowHeights.indexAt(localTop);
-      const oldOffset = rowHeights.offset(anchorIndex);
       // Pure window movement does not change retained cells' natural sizing.
       // Clearing every mounted row's minimum forces another whole-table layout
       // on each scroll. Width/font/content invalidation still sizes every row.
@@ -192,9 +205,10 @@ export function createTableRowWindow(options: {
   if (typeof ResizeObserver !== 'undefined') observer = new ResizeObserver(() => { if (body.isConnected) update(); });
   const window: TableRowWindow = {
     update,
-    invalidate() { sized = false; },
+    invalidate() { sized = false; refreshEstimates = true; },
     ensure(index) { if (!valid(index) || disposed) return; extra = index; update(); extra = undefined; return rows.get(index); },
     bounds(index) { return valid(index) ? { top: rowHeights.offset(index), bottom: rowHeights.offset(index + 1) } : undefined; },
+    readHeights() { return rowHeights.snapshot(); },
     dispose() {
       disposed = true; observer?.disconnect(); windows.delete(body);
       body.ownerDocument.removeEventListener('pointerup', finishDrag, true);

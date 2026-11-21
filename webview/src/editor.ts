@@ -15,7 +15,7 @@ import { createInputSuggestions, refreshInputSuggestions } from './editor/inputS
 import { insertShortcutSnippet, insertSourceCellSnippet } from './editor/shortcutSnippet';
 import type { LinkCandidate } from '../../src/protocol/editorServices';
 import { sourceTableAt, createSourceTableCommandTarget, tableShortcutCommands, type SourceTable } from './editor/sourceTableCommands';
-import type { TableCommand } from './application/tableCommand';
+import type { TableCommand, TableCommandTarget } from './application/tableCommand';
 import { webviewShortcutPlatform } from './helpers/shortcuts';
 import { parseMarkdownTable, serializeDelimitedTable } from './application/delimitedTable';
 import { requestMountedTableShortcut, mountedTableClipboardText } from './helpers/tables';
@@ -2280,14 +2280,18 @@ export function createEditor({
     tableCommandEffectAdapter,
     (error) => console.error('Table command Runtime failed', error)
   );
-  const requestSourceTableCommand = (view: EditorView, table: SourceTable, command: TableCommand, focusFirstCell = false) => {
+  const requestSourceTableCommand = (
+    view: EditorView, table: SourceTable, command: TableCommand, insertedRowFocus?: TableCommandTarget['insertedRowFocus']
+  ) => {
     const registration = tableCommandTargetRegistry.register(createSourceTableCommandTarget(
-      view, table, run => viewportController.preserveDocumentAnchorWhileMutation(run, true)
+      view, table, run => viewportController.preserveDocumentAnchorWhileMutation(run, true),
+      () => viewportController.revealPositionUntilStable(view.state.selection.main.head, {
+        yMargin: visualLineContextMargin(view, 1), retainOnLayout: true
+      }, viewportController.beginNavigationReveal())
     ));
     return tableCommandRuntime.dispatch({
       type: 'request', command, target: {
-        tableId: registration.id, row: table.row, column: table.column, selection: null,
-        insertedRowFocus: focusFirstCell ? 'first-cell' : undefined
+        tableId: registration.id, row: table.row, column: table.column, selection: null, insertedRowFocus
       }, enabled: true
     }).finally(() => registration.dispose());
   };
@@ -2298,7 +2302,7 @@ export function createEditor({
       || !isInsideTableCell(state, state.selection.main.head)) return false;
     const table = sourceTableAt(state);
     if (!table || table.row !== table.matrix.cells.length - 1 || table.column !== table.matrix.cells[0].length - 1) return false;
-    void requestSourceTableCommand(view, table, 'insert-row-below', true);
+    void requestSourceTableCommand(view, table, 'insert-row-below', 'first-cell');
     return true;
   };
   const tableCommandEnvironment: TableCommandEnvironment = {

@@ -3006,6 +3006,7 @@ function tablePreviewHeight(data: WidgetTableData): RenderedBlockPreviewHeight {
 class HtmlTableWidget extends UiLanguageSensitiveWidget {
   private measuredHeightCache: RenderedBlockPreviewHeight;
   private mountedController: WeakRef<HtmlTableController> | undefined;
+  private replacedRowWindow: WeakRef<HtmlTableController> | undefined;
 
   constructor(
     readonly tableData: WidgetTableData,
@@ -3073,12 +3074,18 @@ class HtmlTableWidget extends UiLanguageSensitiveWidget {
     const owner = new HtmlTableController(this.tableData, this.stickyHeaderAdapterFactory,
       this.tableCommandEnvironment, this.measuredHeightCache);
     this.mountedController = new WeakRef(owner);
-    return owner.toDOM(view);
+    const previous = this.replacedRowWindow?.deref();
+    this.replacedRowWindow = undefined;
+    return owner.toDOM(view, previous);
   }
 
   updateDOM(dom: HTMLElement, view: EditorView, _previous: WidgetType): boolean {
     const owner = tableDomOwners.get(dom);
-    if (!owner || owner.destroyed || owner.view !== view || !owner.canReuseTableDom(this)) return false;
+    if (!owner || owner.destroyed || owner.view !== view) return false;
+    if (!owner.canReuseTableDom(this)) {
+      if (owner.rowWindow && owner.tableData.from === this.tableData.from) this.replacedRowWindow = new WeakRef(owner);
+      return false;
+    }
     owner.adoptPresentation(this.tableData, this.measuredHeightCache, view.state.doc);
     this.mountedController = new WeakRef(owner);
     return true;
@@ -3126,6 +3133,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   tableCaretRevealGeneration: number;
   destroyed: boolean;
   rowWindow: TableRowWindow | undefined;
+  rowWindowLayoutKey: string | undefined;
 
   constructor(
     tableData: WidgetTableData,
@@ -4997,9 +5005,9 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
             effects: [...previous, getTableHistoryFocus(view.state).effect(afterFocus, beforeFocus)] } };
         }
       }
-      // Removing the anchor transfers ownership to the document caret. Keeping
-      // the old table's absolute viewport would leave that caret off-screen.
-      const preserveViewport = command !== 'delete-table';
+      // A different caret owns the viewport after deletion or keyboard insertion.
+      const movedToInsertedRow = command === 'insert-row-below' && target.insertedRowFocus !== undefined;
+      const preserveViewport = command !== 'delete-table' && !movedToInsertedRow;
       if (!confirmation) return plan.transaction ? { ...plan, preserveViewport } : plan;
       if (!plan.transaction) {
         confirmation.settle('failed');
@@ -5355,6 +5363,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       if (!(input instanceof HTMLTextAreaElement)) return false;
       const shell = input.closest<HTMLElement>('.meo-md-html-table-shell');
       if (replacedShell && shell === replacedShell) return false;
+      const owner = shell ? tableDomOwners.get(shell) : undefined;
       // Value-only commits reuse the mounted table DOM, so the original input
       // is already the durable target. Structural commits still replace it and
       // reach this method again through the observer below.
@@ -5372,20 +5381,20 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
       input.setSelectionRange(caret, caret);
       if (restoreContextMenu) {
-        const owner = shell ? tableDomOwners.get(shell) : null;
         owner?.setContextPage(this.contextPage);
         owner?.setContextMenuOpen(true);
         this.pendingContextMenuRestore = false;
       }
       dispose();
-      if (revealCaret && !restoreContextMenu) this.revealTableCellCaretIfNeeded(input, isRevealCurrent);
+      // A structural commit can destroy this controller before the new cell is mounted.
+      if (revealCaret && !restoreContextMenu) owner?.revealTableCellCaretIfNeeded(input, isRevealCurrent);
       else if (revealCaret) {
         // Most contextual commands stay in place. Sorting/moving can relocate
         // the focused cell outside the viewport; only that case transfers
         // ownership from the old table anchor to a minimal caret reveal.
         const caret = tableCellCaretViewportBounds(input), bounds = tableUsableViewportBounds(view, input);
         if (caret.top < bounds.top || caret.bottom > bounds.bottom) {
-          this.revealTableCellCaretIfNeeded(input, viewport?.beginNavigationReveal() ?? isRevealCurrent);
+          owner?.revealTableCellCaretIfNeeded(input, viewport?.beginNavigationReveal() ?? isRevealCurrent);
         }
       }
       return true;
@@ -7550,7 +7559,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     };
   }
 
-  toDOM(view: EditorView) {
+  toDOM(view: EditorView, previous?: HtmlTableController) {
     const acceptedDiff = view.state.facet(gitDiffLineFlagsFacet);
     if (acceptedDiff?.doc === view.state.doc) {
       const diffFlagsByLine = collectTableDiffFlags(buildTableData(view.state, this.tableData), acceptedDiff.lines);
@@ -7763,14 +7772,55 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       table.dataset.meoTableWindowed = 'true';
       table.setAttribute('aria-rowcount', String(this.tableData.rows.length + 1));
       table.setAttribute('aria-colcount', String(this.tableData.colCount));
-      const layout = estimateTableLayout({ kind: 'table', headerCells: this.tableData.headerCells,
-        rows: this.tableData.rows, contentWidth: Math.max(352, view.scrollDOM.clientWidth - 24) });
+      const estimateLayout = () => estimateTableLayout({ kind: 'table', headerCells: this.tableData.headerCells,
+        rows: this.tableData.rows, contentWidth: Math.max(352, view.scrollDOM.clientWidth - 24) }, view.contentDOM);
+      const layoutKey = () => {
+        const style = getComputedStyle(view.contentDOM);
+        return [view.scrollDOM.clientWidth, style.fontSize, style.fontFamily, style.fontWeight, style.lineHeight].join('|');
+      };
+      let estimatedLayoutKey = layoutKey();
+      const layout = estimateLayout();
+      this.rowWindowLayoutKey = estimatedLayoutKey;
+      let estimatedHeights = layout.rowHeights.slice(1);
+      const previousColumns = previous?.domRefs?.table.querySelectorAll<HTMLTableColElement>(':scope > colgroup > col');
+      if (previous && previous.rowWindow && previous.rowWindowLayoutKey === estimatedLayoutKey
+        && previousColumns?.length === layout.columnWidths.length
+        && layout.columnWidths.every((width, index) => Math.abs(parseFloat(previousColumns[index]!.style.width) - width) < 0.1)) {
+        // Replacing the table does not invalidate offscreen rows with the same
+        // content and layout. Seed their accepted heights before the new DOM
+        // can expose a different viewport or mount a different row band.
+        const heights = previous.rowWindow.readHeights();
+        const active = view.dom.ownerDocument.activeElement;
+        const editingRow = active instanceof HTMLTextAreaElement && previous.domRefs?.shell.contains(active)
+          ? Number(active.dataset.tableRow) - 1 : -1;
+        const byContent = new Map<string, { heights: (number | undefined)[]; next: number }>();
+        previous.tableData.rows.forEach((row, index) => {
+          const key = JSON.stringify(row);
+          let group = byContent.get(key);
+          if (!group) {
+            group = { heights: [], next: 0 };
+            byContent.set(key, group);
+          }
+          group.heights.push(index === editingRow ? undefined : heights[index]);
+        });
+        estimatedHeights = this.tableData.rows.map((row, index) => {
+          const group = byContent.get(JSON.stringify(row));
+          return group?.heights[group.next++] ?? estimatedHeights[index]!;
+        });
+      }
       table.style.tableLayout = 'fixed';
       table.style.width = `${layout.columnWidths.reduce((sum, width) => sum + width, 0)}px`;
       colgroup.forEach((col, index) => { col.style.width = `${layout.columnWidths[index]}px`; });
       this.rowWindow = createTableRowWindow({ body: tbody, viewport: view.scrollDOM,
         rowCount: this.tableData.rows.length, columnCount: this.tableData.colCount,
-        estimateHeight: 32, estimatedHeights: layout.rowHeights.slice(1),
+        estimateHeight: 32, estimatedHeights,
+        refreshEstimatedHeights: () => {
+          const key = layoutKey();
+          if (key === estimatedLayoutKey) return undefined;
+          estimatedLayoutKey = key;
+          this.rowWindowLayoutKey = key;
+          return estimateLayout().rowHeights.slice(1);
+        },
         render: renderBodyRow,
         scrollbarDragging: () => getViewportController(view)?.isScrollbarDragging() ?? false,
         release: (index, row) => {
