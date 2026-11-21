@@ -1,7 +1,7 @@
 import { isolateHistory } from '@codemirror/commands';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import { BlockType, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
-import { ClipboardPaste, ChevronDown, createElement as createIcon } from 'lucide';
+import { ClipboardList, ChevronDown, createElement as createIcon } from 'lucide';
 import { getUiStrings } from '../application/uiLanguage';
 import { editorViewportBounds } from './editorViewportBounds';
 import { uiLanguageFacet } from './uiLanguage';
@@ -71,11 +71,9 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
     const trigger = doc.createElement('button');
     trigger.type = 'button';
     trigger.className = 'meo-paste-options-trigger';
-    const shortcut = doc.createElement('kbd');
-    shortcut.textContent = 'Ctrl';
     trigger.append(
-      createIcon(ClipboardPaste, { width: 14, height: 14, 'aria-hidden': 'true' }),
-      shortcut,
+      createIcon(ClipboardList, { width: 16, height: 16, 'aria-hidden': 'true' }),
+      'Ctrl',
       createIcon(ChevronDown, { width: 10, height: 10, 'aria-hidden': 'true' })
     );
     trigger.setAttribute('aria-label', labels.pasteOptions);

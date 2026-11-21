@@ -8825,30 +8825,34 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: 5px;
   width: max-content;
   max-width: calc(100vw - 16px);
   color: var(--meo-ui-text);
-  font: 12px/18px var(--meo-ui-font-family, system-ui, sans-serif);
+  font: 13px/18px var(--meo-ui-font-family, system-ui, sans-serif);
 }
 .meo-paste-options-trigger, .meo-paste-options-menu {
   box-sizing: border-box;
-  border: 1px solid var(--meo-ui-border-float);
-  border-radius: 6px;
   box-shadow: var(--meo-ui-shadow);
 }
 .meo-paste-options-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  background: var(--meo-ui-surface);
+  gap: 6px;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--meo-ui-surface-hover);
 }
-.meo-paste-options-trigger kbd { font: inherit; }
+.meo-paste-options-trigger:hover, .meo-paste-options-trigger[aria-expanded="true"] {
+  background: var(--meo-ui-surface-pressed);
+}
 .meo-paste-options-menu {
-  padding: 3px;
-  min-width: min(156px, 100%);
-  background: var(--meo-ui-surface-raised);
+  min-width: min(164px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--meo-ui-border-control);
+  border-radius: 10px;
+  background: var(--meo-ui-surface);
 }
 .meo-paste-options-menu[hidden] { display: none; }
 .meo-paste-options button {
@@ -8859,19 +8863,23 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
 .meo-paste-options-menu button {
   display: block;
   width: 100%;
-  padding: 4px 8px;
+  padding: 5px 12px;
   border: 0;
-  border-radius: 3px;
   text-align: start;
   background: transparent;
 }
-.meo-paste-options button:hover { background: var(--meo-ui-surface-hover); }
+.meo-paste-options-menu button:hover { background: var(--meo-ui-surface-hover); }
 .meo-paste-options-menu button[aria-checked="true"] {
   background: var(--meo-ui-surface-selected);
 }
-.meo-paste-options button:focus-visible {
-  outline: 1px solid var(--meo-ui-focus);
-  outline-offset: -1px;
+.meo-paste-options-trigger:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: -2px;
+}
+.meo-paste-options-menu button:focus-visible {
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .meo-input-suggestions {

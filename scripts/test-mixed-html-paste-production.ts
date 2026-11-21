@@ -69,9 +69,11 @@ try {
     await page.waitForSelector(trigger, { visible: true });
     assert.equal(await page.$eval(trigger, element => element.getAttribute('aria-expanded')), 'false', mode + ': releasing the paste modifier does not open the menu');
     assert.deepEqual(await page.$eval(trigger, element => ({
-      text: element.textContent,
-      icons: element.querySelectorAll('svg').length
-    })), { text: 'Ctrl', icons: 2 }, mode + ': the compact button shows the shortcut between two icons');
+      text: Array.from(element.childNodes).filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join(''),
+      icons: element.querySelectorAll('svg').length,
+      border: getComputedStyle(element).borderTopWidth,
+      monochrome: [...element.querySelectorAll('svg')].every(icon => getComputedStyle(icon).color === getComputedStyle(element).color)
+    })), { text: 'Ctrl', icons: 2, border: '0px', monochrome: true }, mode + ': the compact button uses plain shortcut text and neutral icons');
     await page.mouse.move(0, 0);
     await page.keyboard.press('Control');
     await page.waitForSelector(option('plain'), { visible: true });
@@ -96,12 +98,22 @@ try {
     }
     assert.equal(await page.$eval(option('formatted'), element => element === document.activeElement), true);
     await page.keyboard.press('ArrowDown');
-    const rows = await page.$$eval('.meo-paste-options-menu button', elements => elements.map(element => ({
-      background: getComputedStyle(element).backgroundColor,
-      before: getComputedStyle(element, '::before').content
-    })));
+    const rows = await page.$eval('.meo-paste-options-menu', menu => {
+      let rowTop = menu.getBoundingClientRect().top + menu.clientTop;
+      return [...menu.querySelectorAll('button')].map(element => {
+        const bounds = element.getBoundingClientRect();
+        const fillsRow = Math.abs(bounds.top - rowTop) < 1 && Math.abs(bounds.width - menu.clientWidth) < 1;
+        rowTop = bounds.bottom;
+        return {
+          background: getComputedStyle(element).backgroundColor,
+          before: getComputedStyle(element, '::before').content,
+          fillsRow
+        };
+      });
+    });
     assert.notEqual(rows[0].background, 'rgba(0, 0, 0, 0)', mode + ': the current choice has a background');
     assert.deepEqual(rows.map(row => row.before), ['none', 'none'], mode + ': choices have no checkmarks');
+    assert.ok(rows.every(row => row.fillsRow), mode + ': both choices fill the panel edge to edge');
     assert.equal(rows[1].background, 'rgba(0, 0, 0, 0)', mode + ': keyboard focus keeps the current choice distinguishable');
     await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(() => (window as any).editor.getText()), textOnly, mode + ': Markdown syntax and table structure are removed');
