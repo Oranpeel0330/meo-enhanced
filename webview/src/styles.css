@@ -70,7 +70,7 @@
   --meo-foreground: var(--meo-semantic-foreground, var(--meo-color-base01, var(--meo-content-editor-foreground)));
   --meo-segmented-control-background: color-mix(in srgb, var(--meo-content-sideBar-background) 88%, var(--meo-foreground) 12%);
   --meo-muted-foreground: var(--meo-semantic-mutedForeground, var(--meo-color-base02, var(--meo-content-descriptionForeground)));
-  --meo-caret-color: #fff;
+  --meo-caret-color: var(--meo-foreground);
   --meo-line-height-live: 1.5;
   --meo-line-height-source: 1.5;
   --meo-active-editor-line-height: 1.5;
@@ -96,10 +96,6 @@
   --git-added: #4a9e82;
   --git-changed: #317ae7;
   --git-deleted: #e05252;
-}
-
-html[data-editor-appearance='light'] {
-  --meo-caret-color: #000;
 }
 
 html[data-editor-appearance='dark'] {
@@ -8035,8 +8031,8 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 .cm-editor > .cm-scroller > .cm-cursorLayer > .cm-cursor-primary {
   margin-left: 0;
   border: 0;
-  width: 1px;
   background-color: var(--meo-caret-color);
+  transform-origin: left;
 }
 
 .cm-editor .cm-fat-cursor {

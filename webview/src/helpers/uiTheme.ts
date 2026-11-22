@@ -78,6 +78,7 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
   document.documentElement.dataset.meoUiContrast = highContrast ? 'high' : 'normal';
   document.documentElement.dataset.meoUiColorSource = matchesHost ? 'vscode' : 'default';
   const custom = highContrast ? {} : overrides;
+  const caret = custom.caret ?? color('editorCursor.foreground', color('editor.foreground', defaults.caret));
   const { sample, mix, minimumContrast, endpoint, fit, dispose } = createColorTools(appearance);
   const read = (id: string, legacy: string, underlay?: Rgb): Rgb => sample(color(id, legacy), underlay);
 
@@ -86,6 +87,9 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
     // Document and UI carriers are independent. Color previews update CSS only,
     // leaving native Source tokens and document parsing untouched.
     style.setProperty('--meo-background', rgb(documentSurface));
+    style.setProperty('--meo-caret-color', caret);
+    // Keep the theme's alpha in the editor and give the HEX picker an opaque swatch.
+    style.setProperty('--meo-ui-caret', rgb(sample(caret, documentSurface)));
     const nativeSurface = custom.surface ? sample(custom.surface) : read('editorWidget.background', defaults.surface, documentSurface);
     // Large UI areas share the toolbar's low-chroma family. Native menu fills
     // can have an unrelated, strong tint and are not another default input.

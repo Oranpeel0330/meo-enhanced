@@ -20,11 +20,11 @@ for (const invalid of [null, [], { surface: '#123' }, { dark: [] }, { light: { u
   assert.equal(decodeWebviewToHostMessage({ type: 'updateUiColors', requestId: 'test', colors: invalid }), null);
   assert.equal(decodeHostToWebviewMessage({ type: 'uiColorsChanged', colors: invalid }), null);
 }
-const colors = { light: { accent: '#226644', documentBackground: '#FFFAEE', link: '#0055AA' }, dark: { textEmphasis: '#99CCAA', link: '#66CCFF', documentBackground: '#182C38' } };
-const legacyColors = { light: { ...colors.light, caret: '#9B3000' }, dark: { ...colors.dark, caret: '#FFAA44' } };
+const colors = { light: { accent: '#226644', documentBackground: '#FFFAEE', link: '#0055AA', caret: '#9B3000' }, dark: { textEmphasis: '#99CCAA', link: '#66CCFF', documentBackground: '#182C38', caret: '#FFAA44' } };
 assert.deepEqual(decodeUiColors({ dark: { textEmphasis: '#99CCAA' } }), { light: {}, dark: { textEmphasis: '#99CCAA' } }, 'existing heading overrides survive without forcing a link override');
-assert.deepEqual(decodeUiColors(legacyColors), colors, 'retired caret values do not discard saved appearance colors');
-assert.deepEqual(decodeWebviewToHostMessage({ type: 'updateUiColors', requestId: 'save', colors: legacyColors }), { type: 'updateUiColors', requestId: 'save', colors });
+assert.deepEqual(decodeUiColors({ dark: { caret: '#fa4' } }), { light: {}, dark: { caret: '#FFAA44' } });
+assert.equal(decodeUiColors({ dark: { caret: '#FFAA4480' } }), null, 'caret overrides use the same HEX format as other settings');
+assert.deepEqual(decodeWebviewToHostMessage({ type: 'updateUiColors', requestId: 'save', colors }), { type: 'updateUiColors', requestId: 'save', colors });
 assert.equal(decodeWebviewToHostMessage({ type: 'updateUiColors', requestId: '', colors }), null);
 assert.equal(decodeHostToWebviewMessage({ type: 'uiColorsResult', requestId: 'save', result: { ok: true, value: { dark: { text: 'red' } } } }), null);
 
@@ -37,8 +37,6 @@ const store: AppearanceSettingsStore = {
 };
 let owner = await createAppearanceSettingsOwner(store);
 assert.deepEqual(owner.getUiColors(), { light: {}, dark: {} });
-configuration.set(UI_COLORS_SETTING_KEY, legacyColors);
-assert.deepEqual(owner.getUiColors(), colors, 'an existing profile keeps its other overrides');
 assert.deepEqual(await owner.setUiColors(colors), colors);
 owner = await createAppearanceSettingsOwner(store);
 assert.deepEqual(owner.getUiColors(), colors, 'a fresh owner reads the persisted profiles');
