@@ -11,6 +11,10 @@ export type HexColorScanRange = {
 
 const HEX_COLOR_REGEX = /#[0-9a-f]{6}(?:[0-9a-f]{2})?/gi;
 const HEX_COLOR_LIKE_LITERAL_REGEX = /^#[0-9a-f]{3,8}$/i;
+const hashWordCharacters = String.raw`\p{L}\p{M}\p{N}_/\-`;
+export const MARKDOWN_TAG_PATTERN = String.raw`(?<![${hashWordCharacters}])#[\p{L}\p{N}_][${hashWordCharacters}]*`;
+const colorStartBoundary = new RegExp(String.raw`(?<![${hashWordCharacters}#\\])#`, 'uy');
+const colorEndBoundary = new RegExp(`(?![${hashWordCharacters}#])`, 'uy');
 const excludedFunctionNames = new Set([
   'linear-gradient',
   'radial-gradient',
@@ -26,7 +30,7 @@ interface ExcludedRange {
   to: number;
 }
 
-/** Keeps unsupported HEX-like literals from being reclassified as Markdown tags. */
+/** Reserves complete HEX words for color rendering or plain text. */
 export function isHexColorLikeLiteral(value: string): boolean {
   return HEX_COLOR_LIKE_LITERAL_REGEX.test(value);
 }
@@ -248,13 +252,11 @@ function collectExcludedRanges(text: string, scanFrom: number, scanTo: number): 
 }
 
 function isColorBoundary(text: string, index: number, value: string): boolean {
-  const previous = index > 0 ? text[index - 1] : '';
-  const next = text[index + value.length] ?? '';
-
-  if (/[\w#\\/-]/.test(previous) || /[\w#/-]/.test(next)) {
-    return false;
-  }
-  if (previous === '(') {
+  // Check the full text even when scanning a bounded Markdown range.
+  colorStartBoundary.lastIndex = index;
+  colorEndBoundary.lastIndex = index + value.length;
+  if (!colorStartBoundary.test(text) || !colorEndBoundary.test(text)) return false;
+  if (text[index - 1] === '(') {
     let cursor = index - 2;
     while (cursor >= 0 && /\s/.test(text[cursor])) cursor -= 1;
     if (text[cursor] === ']') return false;

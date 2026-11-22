@@ -54,7 +54,7 @@ import { nativeInputViewportReference } from '../editor/nativeInputViewport';
 import { preserveTableColumnResizeLayout } from './tableColumnResizeViewport';
 import { changedDocumentRange, runEditorHistoryCommand } from './historyCommands';
 import { createOpenLinkButton } from './linkOpenButton';
-import { collectHexColorRangesFromText, isHexColorLikeLiteral } from '../../../src/shared/hexColorSwatches';
+import { MARKDOWN_TAG_PATTERN, collectHexColorRangesFromText, isHexColorLikeLiteral } from '../../../src/shared/hexColorSwatches';
 import { createColorSwatchElement, createInteractiveColorSwatchElement } from './colorSwatches';
 import {
   createMissingLocalLinkIndicator,
@@ -868,8 +868,7 @@ function isRedoShortcut(event: KeyboardEvent): boolean {
 // live here to keep all HTML-table behavior in one helper module.
 const tableInlineSchemeRe = /^[a-z][a-z0-9+.-]*:/i;
 const tableInlineRawUrlRe = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|file:|www\.)[^\s<]+/i;
-const tableInlineTagRe = /^#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)/u;
-const tableInlineTagPrefixRe = /[\p{L}\p{N}_/-]/u;
+const tableInlineTagRe = new RegExp(MARKDOWN_TAG_PATTERN, 'uy');
 const tableCellBreakAtRe = /^<br\s*\/?>/i;
 const tableCellQuotePrefixRe = /^([ \t]*)>[ \t]?/;
 const tableInlineEscapableChars = new Set(['\\', '*', '_', '~', '`', '[', ']', '(', ')', '!', '|', '<', '>']);
@@ -2155,10 +2154,8 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       continue;
     }
 
-    const tagMatch = disableLinkParsers ? null : tableInlineTagRe.exec(text.slice(i));
-    const tag = tagMatch && (i === 0 || !tableInlineTagPrefixRe.test(text[i - 1])) ? tagMatch : null;
     const color = colorRangesByStart.get(i);
-    if (color && (!tag || tag[0].length === color.value.length)) {
+    if (color) {
       flushBuffer();
       const from = sourceRange ? sourceRange.from + baseOffset + i : -1;
       const to = from + color.value.length;
@@ -2178,21 +2175,23 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       continue;
     }
 
-    if (tag && isHexColorLikeLiteral(tag[0])) {
-      appendToBuffer(tag[0], i);
-      i += tag[0].length;
-      continue;
-    }
-
     if (!disableLinkParsers) {
-      if (tag) {
-        flushBuffer();
-        const el = document.createElement('span');
-        el.className = 'meo-md-tag';
-        appendTablePlainText(el, tag[0], baseOffset + i, diagnostics, searchState, sourceRange);
-        parent.appendChild(el);
-        i += tag[0].length;
-        continue;
+      if (text[i] === '#') {
+        tableInlineTagRe.lastIndex = i;
+        const tag = tableInlineTagRe.exec(text)?.[0];
+        if (tag) {
+          if (isHexColorLikeLiteral(tag)) {
+            appendToBuffer(tag, i);
+          } else {
+            flushBuffer();
+            const el = document.createElement('span');
+            el.className = 'meo-md-tag';
+            appendTablePlainText(el, tag, baseOffset + i, diagnostics, searchState, sourceRange);
+            parent.appendChild(el);
+          }
+          i += tag.length;
+          continue;
+        }
       }
 
       const rawUrl = parseTableInlineRawUrl(text, i);

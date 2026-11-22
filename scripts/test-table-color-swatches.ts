@@ -8,6 +8,60 @@ import { launchTestBrowser } from './browser-test-helpers';
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-table-colors-'));
 
+async function checkHashTokenClassification(page: Page): Promise<void> {
+  const line = '颜色：#122321，#33669988。 #AABBCC项目 #33669988𐐀 #AABBCC\u0301 #AABBCC/任务 #工作 #635 #875';
+  const expected = {
+    colors: ['#122321', '#33669988'],
+    tags: ['#AABBCC项目', '#33669988𐐀', '#AABBCC\u0301', '#AABBCC/任务', '#工作']
+  };
+  for (const large of [false, true]) {
+    const text = [line, '', '| Color |', '| --- |', `| ${line} |`, '', 'After.'].join('\n')
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+    await page.evaluate(text => {
+      const harness = (window as any).TableStabilityHarness;
+      const editor = (window as any).hashTokenEditor = harness.createEditor({
+        parent: document.getElementById('app')!, initialMode: 'live', text, onApplyChanges() {}
+      });
+      editor.view.dispatch({ selection: { anchor: text.indexOf('After.') } });
+    }, text);
+    await page.waitForFunction(large => {
+      const { TableStabilityHarness, hashTokenEditor } = window as any;
+      return TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(hashTokenEditor.view.state) === large
+        && !!document.querySelector('tbody .meo-md-html-table-cell-preview [data-color-value="#122321"]');
+    }, {}, large);
+    const rendered = await page.evaluate(() => {
+      const read = (root: Element) => ({
+        colors: Array.from(root.querySelectorAll<HTMLElement>('[data-color-value]'), swatch => swatch.dataset.colorValue),
+        tags: Array.from(root.querySelectorAll('.meo-md-tag'), tag => tag.textContent)
+      });
+      const prose = document.querySelector('.cm-line:has([data-color-value="#122321"])')!;
+      const table = document.querySelector('tbody .meo-md-html-table-cell-preview')!;
+      return { prose: read(prose), table: read(table) };
+    });
+    assert.deepEqual(rendered, { prose: expected, table: expected },
+      `${large ? 'optimized' : 'ordinary'} Live rendering agrees on complete HEX and tag tokens`);
+    await page.evaluate(() => {
+      const { hashTokenEditor: editor } = window as any;
+      editor.view.dispatch({ selection: { anchor: '颜色：#122321'.length } });
+      editor.view.focus();
+    });
+    await page.keyboard.type('项目');
+    await page.waitForFunction(() => {
+      const prose = document.querySelector('.cm-line:has([data-color-value="#33669988"])');
+      return !!prose && !prose.querySelector('[data-color-value="#122321"]')
+        && Array.from(prose.querySelectorAll('.meo-md-tag')).some(tag => tag.textContent === '#122321项目');
+    });
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+    await page.waitForFunction(() => {
+      const prose = document.querySelector('.cm-line:has([data-color-value="#33669988"])');
+      return !!prose?.querySelector('[data-color-value="#122321"]')
+        && !Array.from(prose.querySelectorAll('.meo-md-tag')).some(tag => tag.textContent?.startsWith('#122321'));
+    });
+    await page.evaluate(() => (window as any).hashTokenEditor.destroy());
+  }
+}
+
 async function checkSwatchWrapping(page: Page): Promise<void> {
   for (const large of [false, true]) for (const table of [false, true]) {
     const line = 'prefix should stay here #122321 tail';
@@ -212,6 +266,7 @@ async function main() {
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
 
+    await checkHashTokenClassification(page);
     await checkSwatchWrapping(page);
     await checkSwatchesWhileEditing(page);
 
@@ -256,7 +311,7 @@ async function main() {
 
       const input = document.querySelector<HTMLTextAreaElement>('tbody textarea')!;
       input.focus();
-      input.value = '#00ff00 #todo';
+      input.value = '#00ff00 #00ff00项目 #todo';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       document.getElementById('outside')!.focus();
       for (let index = 0; index < 3; index += 1) {
@@ -281,7 +336,7 @@ async function main() {
     if (JSON.stringify(result.initial) !== JSON.stringify(expectedInitial)) {
       throw new Error(`Table colors were not rendered separately from tags: ${JSON.stringify(result.initial)}`);
     }
-    if (JSON.stringify(result.updated) !== JSON.stringify({ colors: ['#00ff00'], tags: ['#todo'] })) {
+    if (JSON.stringify(result.updated) !== JSON.stringify({ colors: ['#00ff00'], tags: ['#00ff00项目', '#todo'] })) {
       throw new Error(`Edited table colors were not refreshed: ${JSON.stringify(result.updated)}`);
     }
 

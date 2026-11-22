@@ -1,8 +1,8 @@
 import { documentLines } from './documentLines';
-import { RangeSetBuilder, StateField } from '@codemirror/state';
+import { EditorState, RangeSetBuilder, StateField } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
-import { collectHexColorRangesFromText, isHexColorLikeLiteral } from '../../../src/shared/hexColorSwatches';
+import { MARKDOWN_TAG_PATTERN, isHexColorLikeLiteral } from '../../../src/shared/hexColorSwatches';
 import { currentSyntaxTree, syntaxTreeChanged } from './markdownSyntax';
 import { getLivePresentationBand, livePresentationBandChanged } from './liveViewportPresentation';
 import { hasSameLiveMarkdownSyntax } from './livePresentationSyntax';
@@ -14,7 +14,7 @@ import {
 } from '../editor/liveInputDerivedWork';
 
 const markdownTagDeco = Decoration.mark({ class: 'meo-md-tag' });
-const markdownTagRegex = /(^|[^\p{L}\p{N}_/-])#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)/gu;
+const markdownTagRegex = new RegExp(MARKDOWN_TAG_PATTERN, 'gu');
 const blockedTagAncestorNames = new Set([
   'FencedCode',
   'CodeBlock',
@@ -27,7 +27,7 @@ const blockedTagAncestorNames = new Set([
   'TableDelimiter'
 ]);
 
-function hasBlockedTagAncestor(state: any, position: number): boolean {
+function hasBlockedTagAncestor(state: EditorState, position: number): boolean {
   let node: SyntaxNode | null = currentSyntaxTree(state).resolveInner(position, 1);
   while (node) {
     if (blockedTagAncestorNames.has(node.name)) {
@@ -60,34 +60,25 @@ function isInsideMarkdownLinkDestination(text: string, position: number): boolea
   return false;
 }
 
-function buildMarkdownTagDecorations(state: any): DecorationSet {
+function buildMarkdownTagDecorations(state: EditorState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   const band = getLivePresentationBand(state);
   for (const line of documentLines(state.doc, band ? state.doc.lineAt(band.from).number : undefined,
     band ? state.doc.lineAt(band.to).number : undefined)) {
     const text = line.text;
     if (!text.includes('#')) continue;
-    const colorRanges = collectHexColorRangesFromText(text, line.from);
-    markdownTagRegex.lastIndex = 0;
     for (const match of text.matchAll(markdownTagRegex)) {
-      const prefixLength = match[1]?.length ?? 0;
-      const rawIndex = match.index ?? 0;
-      const from = line.from + rawIndex + prefixLength;
-      const to = from + 1 + (match[2]?.length ?? 0);
-      const linePosition = from - line.from;
-      const isColor = colorRanges.some((range) => range.from === from && range.to === to);
-      const rawTag = text.slice(linePosition, to - line.from);
-      const isHexColorText = isHexColorLikeLiteral(rawTag);
+      const tag = match[0];
+      const linePosition = match.index ?? 0;
+      const from = line.from + linePosition;
       if (
-        to <= from + 1 ||
-        isColor ||
-        isHexColorText ||
+        isHexColorLikeLiteral(tag) ||
         isInsideMarkdownLinkDestination(text, linePosition) ||
         hasBlockedTagAncestor(state, from)
       ) {
         continue;
       }
-      builder.add(from, to, markdownTagDeco);
+      builder.add(from, from + tag.length, markdownTagDeco);
     }
   }
   return builder.finish();

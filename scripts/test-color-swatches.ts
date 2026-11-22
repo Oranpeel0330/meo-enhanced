@@ -13,6 +13,12 @@ if (JSON.stringify(sources(supported)) !== JSON.stringify(expected)) {
   throw new Error(`Supported colors were not collected: ${JSON.stringify(sources(supported))}`);
 }
 
+const mixedHashTokens = '颜色：#122321，#33669988。 #AABBCC项目 #33669988𐐀 #AABBCCé #AABBCC\u0301 #AABBCC/alpha #AABBCC_任务 #AABBCC-项目 前缀#AABBCC #635 #875 #face #工作';
+assert.deepEqual(sources(mixedHashTokens), ['#122321', '#33669988'],
+  'A swatch requires a complete HEX word, including at Unicode boundaries');
+const clippedTag = '#AABBCC项目';
+assert.deepEqual(collectHexColorRangesFromText(clippedTag, 0, { from: 0, to: 7 }), [],
+  'A scan boundary must not make the HEX prefix of a tag into a color');
 assert.deepEqual(
   sources('linear-gradient(red, blue) value (#aabbcc) url(x) value (#aabbccdd)'),
   ['#aabbcc', '#aabbccdd'],
