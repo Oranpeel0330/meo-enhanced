@@ -183,6 +183,15 @@ async function checkLocalSource(page: Page) {
         const witness = formatWitnesses[word];
         if (witness) assert.deepEqual(await readFormats({ [word]: witness }), { [word]: readingFormats[word] },
           `revealing ${raw} retains the displayed style of ${word}`);
+        const ticks = /^`+/.exec(raw)?.[0];
+        if (ticks || raw.startsWith('<code>')) {
+          const code = await page.$eval(`${root} .meo-md-table-inline-source code`, code => ({
+            text: code.textContent,
+            markers: Array.from(code.querySelectorAll(':scope > .meo-md-table-inline-marker'), marker => marker.textContent)
+          }));
+          assert.deepEqual(code, ticks ? { text: raw, markers: [ticks, ticks] } : { text: word, markers: [] },
+            `${raw} places its delimiters in the appropriate painted region`);
+        }
         assert.ok(await page.$eval('tbody tr', row => row.getBoundingClientRect().height) >= reading - 1,
           `${raw} retains its row's reading height`);
       } else {
@@ -253,16 +262,25 @@ async function checkLocalSource(page: Page) {
           markers: markers.map(marker => marker.textContent),
           visible: markers.every(marker => marker.getBoundingClientRect().width > 0),
           ink: markers.map(marker => getComputedStyle(marker).webkitTextFillColor),
-          codeInk: getComputedStyle(code).webkitTextFillColor
+          codeInk: getComputedStyle(code).webkitTextFillColor,
+          background: getComputedStyle(code).backgroundColor
         };
       });
       assert.deepEqual(appearance.markers, ['``', '``']);
+      assert.notEqual(appearance.background, 'rgba(0, 0, 0, 0)', 'the code region paints its background');
       assert.ok(appearance.visible && appearance.ink[0] === appearance.ink[1] && appearance.ink[0] !== appearance.codeInk,
-        'visible source punctuation uses the theme syntax color beside styled code');
+        'visible source punctuation uses the theme syntax color within the code region');
+      if (!large && process.env.MEO_TEST_SCREENSHOTS) {
+        await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'local-source-table-code.png') });
+      }
       const delimiter = await pointIn(`${projected} .meo-md-table-inline-marker`, '``', 1);
       await page.mouse.click(delimiter.x, delimiter.y);
       assert(await page.$eval('tbody textarea', (input, raw) => input.selectionStart === input.value.indexOf(raw) + 1, paddedCode),
         'the second backtick maps to the original source offset');
+      const closing = await pointIn(`${projected} code > .meo-md-table-inline-marker:last-child`, '``', 0);
+      await page.mouse.click(closing.x, closing.y);
+      assert(await page.$eval('tbody textarea', (input, raw) => input.selectionStart === input.value.indexOf(raw) + raw.length - 2, paddedCode),
+        'the closing backticks map to the correct end of the payload');
       const escape = await pointIn(`${projected} code`, '\\|', 0);
       await page.mouse.click(escape.x, escape.y);
       assert(await page.$eval('tbody textarea', input => input.selectionStart === input.value.indexOf('\\|')),
@@ -282,7 +300,7 @@ async function checkLocalSource(page: Page) {
       } finally {
         await composition.detach();
       }
-      assert.equal(await page.$eval(`${projected} code`, code => code.textContent), ' Padded 中\\| code ');
+      assert.equal(await page.$eval(`${projected} code`, code => code.textContent), paddedCode.replace('Padded ', 'Padded 中'));
       await page.keyboard.press('Escape');
       assert.equal(await page.evaluate(() => (window as any).boundaryEditor.undo()), true);
     }

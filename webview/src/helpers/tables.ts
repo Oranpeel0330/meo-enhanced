@@ -1754,16 +1754,17 @@ function appendTableInlinePreviewLink(parent: HTMLElement, label: string, href: 
   parent.appendChild(wrapper);
 }
 
-const tableInlineContent = new WeakMap<HTMLElement, InlineEditRange & { element: HTMLElement; rawText?: boolean }>();
+type TableInlineContent = InlineEditRange & { element: HTMLElement; rawText?: boolean; markersInside?: boolean };
+const tableInlineContent = new WeakMap<HTMLElement, TableInlineContent>();
 
 function markTableInlineSource(element: HTMLElement, range: InlineEditRange, atomic = false) {
   element.dataset.meoEditInline = '';
   setInlineSourceRange(element, range, { atomic });
 }
 
-function markStyledTableInlineSource(element: HTMLElement, range: InlineEditRange, content: InlineEditRange, rawText = false) {
+function markStyledTableInlineSource(element: HTMLElement, range: InlineEditRange, content: Omit<TableInlineContent, 'element'>) {
   markTableInlineSource(element, range);
-  tableInlineContent.set(element, { element, ...content, rawText });
+  tableInlineContent.set(element, { element, ...content });
 }
 
 function revealTableInlineSource(element: HTMLElement, range: InlineEditRange, source: string): void {
@@ -1778,20 +1779,24 @@ function revealTableInlineSource(element: HTMLElement, range: InlineEditRange, s
     return;
   }
 
-  const styled = content.element;
-  const appendMarker = (from: number, to: number) => {
-    if (from < to) appendInlineMappedText(projected, source.slice(from, to), { from, to }, 'meo-md-table-inline-marker');
-  };
+  const { element: styled, markersInside } = content;
+  const markerHost = markersInside ? styled : projected;
+  const appendMarker = (from: number, to: number) => from < to
+    ? appendInlineMappedText(markerHost, source.slice(from, to), { from, to }, 'meo-md-table-inline-marker') : null;
   element.before(projected);
-  appendMarker(range.from, content.from);
   // Keep the styled DOM and nested projections. Restore source text in
   // literal payloads whose reading view trimmed spaces or decoded escapes.
   if (content.rawText) {
     const raw = source.slice(content.from, content.to);
-    if (styled.textContent !== raw) styled.textContent = raw;
+    if (styled.textContent !== raw) {
+      styled.replaceChildren();
+      appendInlineMappedText(styled, raw, content);
+    }
   }
   delete styled.dataset.meoEditInline;
-  setInlineSourceRange(styled, content);
+  setInlineSourceRange(styled, markersInside ? range : content);
+  const opening = appendMarker(range.from, content.from);
+  if (markersInside && opening) styled.prepend(opening);
   projected.appendChild(styled);
   appendMarker(content.to, range.to);
   if (styled !== element) {
@@ -1955,7 +1960,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       const el = document.createElement('code');
       el.className = 'meo-md-inline-code';
       markStyledTableInlineSource(el, { from: baseOffset + i, to: code.to },
-        { from: code.contentFrom, to: code.contentTo }, true);
+        { from: code.contentFrom, to: code.contentTo, rawText: true, markersInside: true });
       const raw = text.slice(code.contentFrom - baseOffset, code.contentTo - baseOffset);
       // CommonMark strips one bounding space unless the payload is all spaces.
       const padding = raw.startsWith(' ') && raw.endsWith(' ') && /[^ ]/.test(raw) ? 1 : 0;
@@ -1986,7 +1991,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         el.className = 'meo-md-kbd';
         const contentFrom = baseOffset + i + kbd.contentFrom;
         markStyledTableInlineSource(el, { from: baseOffset + i, to: baseOffset + kbd.nextIndex },
-          { from: contentFrom, to: contentFrom + kbd.content.length }, true);
+          { from: contentFrom, to: contentFrom + kbd.content.length, rawText: true });
         appendTablePlainText(
           el,
           keyText,
@@ -2123,7 +2128,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       const el = document.createElement(script.kind === 'subscript' ? 'sub' : 'sup');
       el.className = `meo-md-${script.kind}`;
       markStyledTableInlineSource(el, { from: baseOffset + i, to: baseOffset + script.to },
-        { from: baseOffset + i + 1, to: baseOffset + script.to - 1 }, true);
+        { from: baseOffset + i + 1, to: baseOffset + script.to - 1, rawText: true });
       let cursor = i + 1;
       for (const escape of script.escapes) {
         appendTablePlainText(el, text.slice(cursor, escape.from), baseOffset + cursor, diagnostics, searchState, sourceRange);
