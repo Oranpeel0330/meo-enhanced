@@ -18,8 +18,8 @@ export class NativeInputViewport {
 
   constructor(private readonly view: EditorView) {}
 
-  /** Pointer activation may supply the reference's pre-focus geometry. */
-  capture(target: EventTarget | null, top?: number): boolean {
+  /** Activation can retain a layout reference at its pre-focus position. */
+  capture(target: EventTarget | null, top?: number, layoutReference?: HTMLElement): boolean {
     const window = this.view.dom.ownerDocument?.defaultView;
     if (!window || !(target instanceof window.HTMLTextAreaElement)
       || !this.view.contentDOM.contains(target)
@@ -27,7 +27,7 @@ export class NativeInputViewport {
       || this.view.dom.ownerDocument.activeElement !== target) return false;
     const bounds = target.getBoundingClientRect(), viewport = this.view.scrollDOM.getBoundingClientRect();
     if (bounds.bottom <= viewport.top || bounds.top >= viewport.bottom) return false;
-    const reference = nativeInputViewportReference(target);
+    const reference = layoutReference ?? nativeInputViewportReference(target);
     this.anchor = { input: target, reference, top: top ?? (reference === target ? bounds.top : reference.getBoundingClientRect().top) };
     return true;
   }

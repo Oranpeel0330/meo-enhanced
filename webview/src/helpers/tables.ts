@@ -51,6 +51,8 @@ import {
 } from './listMarkers';
 import { getViewportController, visualLineContextMargin } from './viewportController';
 import { nativeInputViewportReference } from '../editor/nativeInputViewport';
+import { flushEditorLayout } from '../editor/layoutMeasurement';
+import { editorViewportBounds } from '../editor/editorViewportBounds';
 import { preserveTableColumnResizeLayout } from './tableColumnResizeViewport';
 import { changedDocumentRange, runEditorHistoryCommand } from './historyCommands';
 import { createOpenLinkButton } from './linkOpenButton';
@@ -3996,42 +3998,59 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (!lineStep) return false;
     const anchorLineNo = lineStep < 0 ? firstLine.number : lastLine.number;
     const targetLineNo = anchorLineNo + lineStep;
-    if (targetLineNo < 1 || targetLineNo > view.state.doc.lines) {
-      if (!createLineIfMissing || direction !== 'down' || targetLineNo !== view.state.doc.lines + 1) return false;
+    const appendLine = createLineIfMissing && direction === 'down' && targetLineNo === view.state.doc.lines + 1;
+    if (!appendLine && (targetLineNo < 1 || targetLineNo > view.state.doc.lines)) return false;
 
-      commitPendingTableEdits(view);
-      this.exitTableInteraction(container);
-      const appendAt = view.state.doc.length;
-      const targetPos = appendAt + 1;
-      view.dispatch({
-        changes: { from: appendAt, insert: '\n' },
-        selection: { anchor: targetPos }
-      });
-      const viewport = getViewportController(view);
-      const isRevealCurrent = viewport?.beginNavigationReveal();
-      if (viewport && isRevealCurrent) viewport.revealPosition(targetPos, {
-        y: 'nearest',
-        yMargin: visualLineContextMargin(view, 1)
-      }, isRevealCurrent);
-      else view.dispatch({ effects: editorScrollIntoView(targetPos, { y: 'nearest' }) });
-      view.focus();
-      return true;
-    }
-
-    const targetLine = view.state.doc.line(targetLineNo);
-    const targetPos = Math.min(targetLine.from + Math.max(preferredColumn, 0), targetLine.to);
-
-    commitPendingTableEdits(view);
-    this.exitTableInteraction(container);
     const viewport = getViewportController(view);
     const isRevealCurrent = viewport?.beginNavigationReveal();
-    view.dispatch({ selection: { anchor: targetPos } });
-    if (viewport && isRevealCurrent) viewport.revealPosition(targetPos, {
-      y: 'nearest',
-      yMargin: visualLineContextMargin(view, 1)
-    }, isRevealCurrent);
-    else view.dispatch({ effects: editorScrollIntoView(targetPos, { y: 'nearest' }) });
-    view.focus();
+    const shell = container.closest<HTMLElement>('.meo-md-html-table-shell');
+    const tableTop = shell?.getBoundingClientRect().top;
+    const resolveShell = () => shell?.isConnected ? shell : view.contentDOM.querySelector<HTMLElement>(
+      `.meo-md-html-table-shell[data-meo-rendered-block-start-line="${firstLine.number}"]`
+    );
+    const readOrigin = tableTop === undefined ? undefined : () => {
+      const currentShell = resolveShell();
+      const top = currentShell?.getBoundingClientRect().top ?? view.documentTop + view.lineBlockAt(firstLine.from).top;
+      return view.scrollDOM.scrollTop + (top - tableTop) / view.scaleY;
+    };
+    // Release the textarea only after reserving the visible table as the
+    // handoff's reference. The appended line can rebuild the Live height map.
+    let destination: { doc: typeof view.state.doc; position: number } | undefined;
+    const isCurrent = () => isRevealCurrent?.() === true && (!destination
+      || (view.state.doc === destination.doc && view.state.selection.main.head === destination.position));
+    const retention = tableTop === undefined ? null : viewport?.retainElementTop(
+      shell, resolveShell, isCurrent, { position: firstLine.from, top: tableTop }
+    );
+    try {
+      commitPendingTableEdits(view);
+      this.exitTableInteraction(container);
+      const doc = view.state.doc;
+      const targetLine = appendLine ? null : doc.line(targetLineNo);
+      const targetPos = targetLine ? Math.min(targetLine.from + Math.max(preferredColumn, 0), targetLine.to) : doc.length + 1;
+      view.dispatch({
+        changes: appendLine ? { from: doc.length, insert: '\n' } : undefined,
+        selection: { anchor: targetPos }
+      });
+      destination = { doc: view.state.doc, position: targetPos };
+      if (!viewport) view.dispatch({ effects: editorScrollIntoView(targetPos, { y: 'nearest' }) });
+      view.focus();
+      if (viewport) {
+        flushEditorLayout(view);
+        retention?.correct();
+        const caret = view.coordsAtPos(targetPos);
+        const bounds = editorViewportBounds(view);
+        if (!retention?.isCurrent() || !caret || caret.top < bounds.top || caret.bottom > bounds.bottom) {
+          retention?.cancel();
+          viewport.revealPositionUntilStable(targetPos, {
+            yMargin: visualLineContextMargin(view, 1), originScrollTop: readOrigin, retainOnLayout: true
+          }, isCurrent);
+          flushEditorLayout(view);
+        }
+      }
+    } finally {
+      if (destination) retention?.finish();
+      else retention?.cancel();
+    }
     return true;
   }
 
@@ -5128,7 +5147,6 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
             effects: [...previous, getTableHistoryFocus(view.state).effect(afterFocus, beforeFocus)] } };
         }
       }
-      // A different caret owns the viewport after deletion or keyboard insertion.
       const movedToInsertedRow = command === 'insert-row-below' && target.insertedRowFocus !== undefined;
       const preserveViewport = command !== 'delete-table' && !movedToInsertedRow;
       if (!confirmation) return plan.transaction ? { ...plan, preserveViewport } : plan;
@@ -5461,9 +5479,9 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     focusTarget: PendingCellFocus,
     replacedInput: HTMLTextAreaElement | null = null,
     replacedShell: HTMLElement | null = null,
-    options: { revealCaret?: boolean } = {}
+    options: { revealCaret?: boolean; tableTop?: number } = {}
   ) {
-    const { revealCaret = true } = options;
+    const { revealCaret = true, tableTop } = options;
     const viewport = getViewportController(view);
     const restoreContextMenu = this.pendingContextMenuRestore;
     const isRevealCurrent = restoreContextMenu || !revealCaret
@@ -5510,8 +5528,21 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
       dispose();
       // A structural commit can destroy this controller before the new cell is mounted.
-      if (revealCaret && !restoreContextMenu) owner?.revealTableCellCaretIfNeeded(input, isRevealCurrent);
-      else if (revealCaret) {
+      if (revealCaret && !restoreContextMenu) {
+        if (viewport && shell && tableTop !== undefined) {
+          // Earlier rows can still settle after the new cell gets focus.
+          // Anchor the editing session to the table, whose top is unaffected
+          // by those row heights. A clipped target owns its own reveal instead.
+          const shift = tableTop - shell.getBoundingClientRect().top;
+          const caret = tableCellCaretViewportBounds(input), bounds = tableUsableViewportBounds(view, input);
+          if (caret.top + shift >= bounds.top && caret.bottom + shift <= bounds.bottom
+            && viewport.captureNativeInputViewport(input, tableTop, shell)) {
+            viewport.reconcileAfterEditorUpdate();
+            flushEditorLayout(view);
+          }
+        }
+        owner?.revealTableCellCaretIfNeeded(input, isRevealCurrent);
+      } else if (revealCaret) {
         // Most contextual commands stay in place. Sorting/moving can relocate
         // the focused cell outside the viewport; only that case transfers
         // ownership from the old table anchor to a minimal caret reveal.
@@ -5587,11 +5618,13 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     {
       preserveScrollPosition = false,
       sourceRowOrder = null,
+      focusTableTop,
       extraEffects = [],
       alignmentOverrideColumns = []
     }: {
       preserveScrollPosition?: boolean;
       sourceRowOrder?: number[] | null;
+      focusTableTop?: number;
       extraEffects?: readonly StateEffect<unknown>[];
       alignmentOverrideColumns?: readonly number[];
     } = {}
@@ -5689,7 +5722,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
             tableStartLine,
             focusTarget,
             null,
-            expectsReplacement ? replacedShell : null
+            expectsReplacement ? replacedShell : null,
+            { tableTop: focusTableTop }
           )
         : undefined
     };
@@ -5704,7 +5738,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const focusTarget = insertedRowFocus
       ? { row: insertAt + 1, col: insertedRowFocus === 'first-cell' ? 0 : focusColumn, caret: 0 }
       : this.focusTargetAfterRowInsertion(insertAt, focusColumn);
-    const sourcePlan = this.buildInsertSourceRowTransaction(dom, insertAt, matrix.headerCells.length, focusTarget);
+    // A windowed table's offscreen rows are still estimates. Its targeted
+    // row reveal already preserves the visible region without a shell anchor.
+    const tableTop = insertedRowFocus && !this.rowWindow ? this.domRefs?.shell.getBoundingClientRect().top : undefined;
+    const sourcePlan = this.buildInsertSourceRowTransaction(dom, insertAt, matrix.headerCells.length, focusTarget, tableTop);
     if (sourcePlan) return sourcePlan;
     matrix.rows.splice(insertAt, 0, new Array(matrix.headerCells.length).fill(''));
     const sourceRowOrder = matrix.rows.map((_row, index) => (
@@ -5714,7 +5751,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       matrix,
       dom,
       focusTarget,
-      { sourceRowOrder }
+      { sourceRowOrder, focusTableTop: tableTop }
     );
   }
 
@@ -5799,7 +5836,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     dom: HTMLElement,
     insertAt: number,
     colCount: number,
-    focusTarget: PendingCellFocus
+    focusTarget: PendingCellFocus,
+    tableTop?: number
   ): TableCommandTransactionPlan | null {
     const view = this.getEditorView(dom);
     if (!view || colCount <= 0) return null;
@@ -5839,7 +5877,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         tableStartLine,
         focusTarget,
         null,
-        this.domRefs?.shell ?? null
+        this.domRefs?.shell ?? null,
+        { tableTop }
       )
     };
   }

@@ -1352,8 +1352,12 @@ export function createEditor({
     const top = live && doc.length > 0 && isPositionVisible(to)
       ? view.coordsAtPos(position, 1)?.top : undefined;
     if (top !== undefined) viewportController.markInteraction();
+    const mode = currentMode;
+    let acceptedDoc: typeof doc | undefined;
+    const isInsertionCurrent = viewportController.captureNavigationCurrentness();
     const retention = top === undefined ? null : viewportController.retainElementTop(
-      null, () => null, viewportController.captureNavigationCurrentness(), { position, top, geometry: 'caret' }
+      null, () => null, () => isInsertionCurrent() && currentMode === mode && (!acceptedDoc || view.state.doc === acceptedDoc),
+      { position, top, geometry: 'caret', retainOnLayout: !focusCell }
     );
     let inserted = false;
     try {
@@ -1365,8 +1369,8 @@ export function createEditor({
       });
       if (inserted) {
         const insertedDoc = view.state.doc;
+        acceptedDoc = insertedDoc;
         const head = view.state.selection.main.head;
-        const mode = currentMode;
         const isNavigationCurrent = viewportController.captureNavigationCurrentness();
         const isCurrent = () => isNavigationCurrent() && view.state.doc === insertedDoc && currentMode === mode;
         // The toolbar can finish returning focus after the command. Measure

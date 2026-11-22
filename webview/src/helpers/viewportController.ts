@@ -45,7 +45,7 @@ export type ElementTopRetention = {
   cancel(): void;
 };
 
-type ElementTopRetentionTarget = { position: number; top: number; geometry?: 'caret' };
+type ElementTopRetentionTarget = { position: number; top: number; geometry?: 'caret'; retainOnLayout?: boolean };
 
 export interface ViewportLayoutRegion {
   element: HTMLElement;
@@ -218,8 +218,8 @@ interface RevealPositionOptions {
   readonly retainOnLayout?: boolean;
   readonly geometry?: 'caret' | 'line-block';
   readonly marginMode?: 'outside-only' | 'comfort-band';
-  /** Evaluate visibility against the viewport that existed before browser auto-scroll. */
-  readonly originScrollTop?: number;
+  /** Evaluate visibility against the pre-scroll viewport, optionally resolved against the current layout. */
+  readonly originScrollTop?: number | (() => number | undefined);
   readonly y?: 'nearest' | 'center' | 'center-if-outside' | 'start';
   readonly yMargin?: number;
   readonly schedule?: 'immediate' | 'next-frame';
@@ -919,7 +919,12 @@ export class ViewportController {
       reconcile();
       if (settling) remainingFrames -= 1;
       if (remainingFrames > 0) requestAnimationFrame(settleFrame);
-      else finish();
+      else if (typeof target === 'object' && target.retainOnLayout) {
+        // Later resource changes can arrive well after the initial paint. Use
+        // the normal editor layout receipt from here, without polling the DOM.
+        this.activeElementRetentionObserver?.disconnect();
+        this.activeElementRetentionObserver = null;
+      } else finish();
     };
     // Observer notifications may arrive dozens of times within one frame.
     // They correct geometry immediately without consuming the frame budget or
@@ -3004,8 +3009,8 @@ export class ViewportController {
   hasNativeInputViewportOwner(): boolean { return this.nativeInputViewport.hasOwner(); }
 
   /** A widget may accept pointer focus after the document's release listener. */
-  captureNativeInputViewport(target: EventTarget | null, top?: number): boolean {
-    return this.nativeInputViewport.capture(target, top);
+  captureNativeInputViewport(target: EventTarget | null, top?: number, layoutReference?: HTMLElement): boolean {
+    return this.nativeInputViewport.capture(target, top, layoutReference);
   }
 
   /** Reveals a document position; viewport ownership changes only when measurement requires a scroll. */
@@ -3098,12 +3103,11 @@ export class ViewportController {
       };
     }
     this.runNavigationReveal(() => {
-      const current = this.readScrollPosition();
       const coords = geometry === 'caret' ? this.view.coordsAtPos(targetPosition) : null;
       const scrollerRect = editorViewportBounds(this.view);
-      const evaluationTop = Number.isFinite(originScrollTop)
-        ? Math.max(0, originScrollTop as number)
-        : current.top;
+      const origin = typeof originScrollTop === 'function' ? originScrollTop() : originScrollTop;
+      const current = this.readScrollPosition();
+      const evaluationTop = origin !== undefined && Number.isFinite(origin) ? Math.max(0, origin) : current.top;
       if (y === 'center' || y === 'center-if-outside') {
         if (coords) {
           if (
