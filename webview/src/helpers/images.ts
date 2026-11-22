@@ -225,7 +225,7 @@ export interface ImagePasteContext {
 
 export const handleImagePaste = async (
   event: ClipboardEvent,
-  editor: any,
+  editor: { view: EditorView; insertClipboardImage(position: number, markdown: string): void },
   context: ImagePasteContext
 ): Promise<boolean> => {
   const clipboardData = event.clipboardData;
@@ -305,12 +305,8 @@ export const handleImagePaste = async (
           const targetLine = currentState.doc.line(targetLineNumber);
           insertAt = Math.min(targetLine.to, targetLine.from + context.lineOffset);
         }
-        editor.view.dispatch({
-          changes: { from: insertAt, to: insertAt, insert: imageMarkdown },
-          selection: { anchor: insertAt + imageMarkdown.length }
-        });
+        editor.insertClipboardImage(insertAt, imageMarkdown);
         completed = true;
-        editor.focus();
         return true;
       } catch (error) {
         if (completed) return true;

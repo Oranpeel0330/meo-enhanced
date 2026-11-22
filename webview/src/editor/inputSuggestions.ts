@@ -52,8 +52,9 @@ export function createInputSuggestions(options: {
   readonly renderMathPreview: (source: string) => string | null;
   readonly requestLinks?: (context: { kind: 'documents' | 'paths' | 'headings'; query: string; target: string; wiki?: boolean }) => Promise<readonly LinkCandidate[]>;
   readonly replaceCell?: (input: HTMLTextAreaElement, value: string, anchor: number, head?: number) => boolean;
-  readonly focusTable?: () => void;
-  readonly focusMath?: () => boolean;
+  readonly insertSlash?: (from: number, to: number, insert: (acceptLayout: () => void) => boolean) => boolean;
+  readonly focusTable?: (acceptLayout: () => void) => void;
+  readonly focusMath?: (acceptLayout: () => void) => void;
   /** Viewport coordinates of the painted cell caret. */
   readonly cellCoords?: (input: HTMLTextAreaElement, offset: number) => { left: number; top: number };
   readonly currentHeadings: () => readonly LinkCandidate[];
@@ -623,16 +624,26 @@ export function createInputSuggestions(options: {
       }
       this.slashFrom = null; this.clear();
       this.dismissed = item.kind !== 'directory';
-      this.view.dispatch({ ...transaction, effects: command?.id === 'comment' ? [beginHtmlCommentTemplate.of({ from: caret, to: caret, end: templateEnd }), addAutomaticSymbolPair.of({ from, to: templateEnd, open: '<!--', close: '-->' })] : transaction.effects, annotations: [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')] });
-      if (fields) {
-        this.fieldInput = null;
-        this.fields = fields; this.fieldIndex = 0; this.templateEnd = templateEnd;
-        const field = this.fields[0]; this.view.dispatch({ selection: EditorSelection.range(field.from, field.to) });
-      }
-      this.view.focus();
+      const complete = (acceptLayout: () => void) => {
+        this.view.dispatch({ ...transaction, effects: command?.id === 'comment' ? [beginHtmlCommentTemplate.of({ from: caret, to: caret, end: templateEnd }), addAutomaticSymbolPair.of({ from, to: templateEnd, open: '<!--', close: '-->' })] : transaction.effects, annotations: [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')] });
+        if (fields) {
+          this.fieldInput = null;
+          this.fields = fields; this.fieldIndex = 0; this.templateEnd = templateEnd;
+          const field = this.fields[0]; this.view.dispatch({ selection: EditorSelection.range(field.from, field.to) });
+        }
+        if (command?.id === 'table' && options.focusTable) {
+          this.view.focus();
+          options.focusTable(acceptLayout);
+        } else if (command?.id === 'blockMath' && options.focusMath) options.focusMath(acceptLayout);
+        else {
+          acceptLayout();
+          this.view.focus();
+        }
+        return true;
+      };
+      if (command && options.insertSlash) options.insertSlash(from, to, complete);
+      else complete(() => {});
       if (item.kind === 'directory') this.schedule();
-      if (command?.id === 'blockMath') options.focusMath?.();
-      if (command?.id === 'table') options.focusTable?.();
     }
     keydown(event: KeyboardEvent) {
       if (event.isComposing || this.composing || this.view.compositionStarted || event.keyCode === 229) return false;

@@ -16,12 +16,33 @@ const cases: Array<{ kind: Kind; name: string; block: string; layout?: string; l
   { kind: 'math', name: 'math/fence', block: '```math\nx=42\n```' }
 ];
 
-async function insertTableAtScrollEnd(large: boolean, nearViewportBottom = false): Promise<void> {
+type EndInsertion = { slash?: string; query?: string; markdown: string; pasteImage?: boolean; keyboard?: boolean };
+const toolbarTable: EndInsertion = { markdown: emptyMarkdownTable(3, 3)! };
+const slashTable: EndInsertion = { slash: 'table', query: 'table', markdown: emptyMarkdownTable()! };
+const definition: EndInsertion = { slash: 'definition', query: 'definition', markdown: '<dl>\n<dt>Term</dt>\n<dd>Definition</dd>\n</dl>' };
+const endInsertions: readonly [boolean, EndInsertion][] = [
+  [false, slashTable], [false, definition],
+  [true, { slash: 'codeBlock', query: 'code', markdown: '```\n\n```' }],
+  [true, { slash: 'blockMath', query: 'equation', markdown: '$$\n\n$$', keyboard: true }],
+  [false, { slash: 'image', query: 'image', markdown: '![alt](url)' }],
+  [true, { pasteImage: true, markdown: '![test.png](test.png)' }]
+];
+
+async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewportBottom = false): Promise<void> {
+  const table = test === toolbarTable || test === slashTable;
+  const addBlankLines = test === toolbarTable && nearViewportBottom;
   const text = 'Paragraph with **bold** text.\n\n'.repeat(large ? 8_200 : 100)
-    + 'Table insert witness' + (nearViewportBottom ? '' : '\n\n');
+    + 'End insertion witness' + (addBlankLines ? '' : '\n\n');
   assert.equal(assessLargeDocument(text).boundedEditorWork, large);
   const page = await browser.newPage();
-  const host = await open(page, text, false, 'live', { scrollBeyondLastLine: true });
+  const host = await open(page, text, false, 'live', {
+    scrollBeyondLastLine: true, uiLanguage: 'zh-CN',
+    saveClipboardImage: () => ({ path: 'test.png', fileName: 'test.png' }),
+    resolveImageSrc: async () => {
+      if (test.pasteImage) await Bun.sleep(420);
+      return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"/>');
+    }
+  });
   try {
     await page.setViewport({ width: 1180, height: 610 });
     await page.$eval('.editor-host .cm-content', content => {
@@ -45,52 +66,96 @@ async function insertTableAtScrollEnd(large: boolean, nearViewportBottom = false
       await page.mouse.wheel({ deltaY });
       await frames(page, 10);
     }
-    const read = () => page.evaluate(() => {
+    const suggestion = `.meo-input-suggestions:not([hidden]) [data-command="${test.slash}"]`;
+    if (test.slash) {
+      await page.keyboard.type('/' + test.query);
+      await page.waitForSelector(suggestion);
+      await frames(page, 6);
+    }
+    const read = (observe = false) => page.evaluate(observe => {
       const content = document.querySelector('.editor-host .cm-content')!;
       const scroll = content.parentElement!;
       const viewport = scroll.getBoundingClientRect();
-      const witness = [...content.querySelectorAll('.cm-line')].find(line => line.textContent === 'Table insert witness');
+      const witnessY = () => {
+        const witness = [...content.querySelectorAll('.cm-line')].find(line => line.textContent === 'End insertion witness');
+        return witness ? witness.getBoundingClientRect().top - viewport.top : null;
+      };
       const table = content.querySelector('.meo-md-html-table-shell')?.getBoundingClientRect();
       const input = content.querySelector('.meo-md-html-table thead textarea');
-      const cell = input?.getBoundingClientRect();
+      const view = (content as any).cmTile.root.view;
+      const caret = input?.getBoundingClientRect() ?? view.coordsAtPos(view.state.selection.main.head);
+      const windowState = window as Window & { endInsertionFrames?: { id: number; positions: Array<number | null> } };
+      if (observe) {
+        const before = view.state.doc;
+        const sample = () => {
+          if (view.state.doc !== before) observation.positions.push(witnessY());
+          observation.id = requestAnimationFrame(sample);
+        };
+        const observation = { id: requestAnimationFrame(sample), positions: [] as Array<number | null> };
+        windowState.endInsertionFrames = observation;
+      } else if (windowState.endInsertionFrames) cancelAnimationFrame(windowState.endInsertionFrames.id);
       return { scrollTop: scroll.scrollTop, max: scroll.scrollHeight - scroll.clientHeight,
-        height: scroll.clientHeight, witnessY: witness ? witness.getBoundingClientRect().top - viewport.top : null,
+        height: scroll.clientHeight, witnessY: witnessY(), positions: windowState.endInsertionFrames?.positions ?? [],
         tableTop: table ? table.top - viewport.top : null, tableBottom: table ? table.bottom - viewport.top : null,
-        cellBottom: cell ? cell.bottom - viewport.top : null, focused: document.activeElement === input };
-    });
-    const before = await read();
+        caretTop: caret ? caret.top - viewport.top : null, caretBottom: caret ? caret.bottom - viewport.top : null,
+        focused: document.activeElement === (input ?? content) };
+    }, observe);
+    const before = await read(!nearViewportBottom);
     assert.ok(before.witnessY !== null);
     if (!nearViewportBottom) assert.ok(Math.abs(before.max - before.scrollTop) <= 1);
-    await page.hover('.table-wrapper > .format-button');
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('.table-dropdown-wrapper')!).opacity === '1');
-    await page.click('.table-wrapper > .format-button');
-    await page.click('.table-grid-cell[data-row="3"][data-col="3"]');
+    if (test.slash) {
+      if (test.keyboard) await page.keyboard.press('Enter');
+      else await page.click(suggestion);
+    } else if (test.pasteImage) {
+      await page.evaluate(() => {
+        const clipboard = new DataTransfer();
+        clipboard.items.add(new File(['clipboard image'], 'test.png', { type: 'image/png' }));
+        document.activeElement!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true }));
+      });
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.cm-content img')]
+        .some(image => image.complete && image.naturalWidth === 240));
+    } else {
+      await page.hover('.table-wrapper > .format-button');
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.table-dropdown-wrapper')!).opacity === '1');
+      await page.click('.table-wrapper > .format-button');
+      await page.click('.table-grid-cell[data-row="3"][data-col="3"]');
+    }
     await frames(page, 16);
     const after = await read();
-    assert.equal(host.readHost(), text + (nearViewportBottom ? '\n\n' : '') + emptyMarkdownTable(3, 3));
+    assert.equal(host.readHost(), text + (addBlankLines ? '\n\n' : '') + test.markdown);
     const details = JSON.stringify({ before, after });
-    assert.ok(after.focused, `Toolbar insertion should focus the first cell: ${details}`);
+    assert.ok(after.focused, `Insertion should return focus to the edit target: ${details}`);
     if (nearViewportBottom) {
-      assert.ok(after.witnessY !== null && after.witnessY < before.witnessY && after.cellBottom !== null
-        && Math.abs(after.height - after.cellBottom) <= 1, `Scroll just enough to show the first cell: ${details}`);
+      assert.ok(after.witnessY !== null && after.witnessY < before.witnessY && after.caretBottom !== null
+        && Math.abs(after.height - after.caretBottom) <= 1, `Scroll just enough to show the edit target: ${details}`);
     } else {
-      assert.ok(after.witnessY !== null && Math.abs(after.witnessY - before.witnessY) <= 1
-        && after.tableTop !== null && after.tableTop >= 0 && after.tableBottom !== null && after.tableBottom <= after.height,
-        `Keep the existing text and the new table visible: ${details}`);
+      const oldY = before.witnessY;
+      assert.ok(after.positions.length > 0 && [after.witnessY, ...after.positions].every(y => y !== null && Math.abs(y - oldY) <= 1),
+        `Keep the existing text in place through every observed frame: ${details}`);
+      if (table) assert.ok(after.tableTop !== null && after.tableTop >= 0 && after.tableBottom !== null && after.tableBottom <= after.height);
     }
-    await page.keyboard.type('First cell');
-    await page.waitForFunction(() => (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view
-      .state.doc.toString().endsWith('| First cell |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n|  |  |  |'));
+    assert.ok(after.caretTop !== null && after.caretTop >= 0 && after.caretBottom !== null && after.caretBottom <= after.height + 1,
+      `Keep the edit target visible: ${details}`);
+    if (table) {
+      await page.keyboard.type('First cell');
+      await page.waitForFunction(expected => (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view
+        .state.doc.toString().endsWith(expected), {}, test.markdown.replace('|  |', '| First cell |'));
+    }
     assert.deepEqual(host.errors, []);
     const fixture = nearViewportBottom ? 'near viewport bottom' : large ? 'optimized' : 'ordinary';
-    console.log(`Toolbar insertion and first cell input stay at the document end (${fixture})`);
+    console.log(`${test.slash ? '/' + test.slash : test.pasteImage ? 'Pasted image' : 'Toolbar table'} stays at the document end (${fixture})`);
   } finally { host.dispose(); await page.close(); }
 }
 
 try {
-  for (const large of [false, true]) await insertTableAtScrollEnd(large);
-  await insertTableAtScrollEnd(false, true);
-  for (const large of [false, true]) for (const test of process.argv.includes('--table-insertion-only') ? [] : cases) {
+  for (const large of [false, true]) await insertAtScrollEnd(large);
+  await insertAtScrollEnd(false, toolbarTable, true);
+  if (!process.argv.includes('--table-insertion-only')) {
+    for (const [large, test] of endInsertions) await insertAtScrollEnd(large, test);
+    await insertAtScrollEnd(false, definition, true);
+  }
+  const insertionsOnly = process.argv.includes('--table-insertion-only') || process.argv.includes('--end-insertion-only');
+  for (const large of [false, true]) for (const test of insertionsOnly ? [] : cases) {
     const { kind, block } = test, label = `${test.name}/${large ? 'large' : 'ordinary'}`;
     const marker = kind === 'math' ? '42' : 'Seed42';
     const text = (large ? 'Reading paragraph.\n\n'.repeat(800) : '') + 'Before\n\n' + block + '\n\nAfter\n\n'

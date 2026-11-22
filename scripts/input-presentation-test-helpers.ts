@@ -6,6 +6,7 @@ import type { Page } from 'puppeteer-core';
 import { launchTestBrowser } from './browser-test-helpers';
 import exportRuntime from '../src/export/runtime';
 import { createPreviewDocument } from '../src/export/previewDocument';
+import type { SavedImagePath } from '../src/protocol/clipboardImageSave';
 
 // Keep production code splitting and Workers: an IIFE mounts the editor before
 // the background Preview captures its typography and cannot expose this race.
@@ -149,7 +150,8 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
   testOptions: { uiLanguage?: 'en' | 'zh-CN'; beforePreviewRender?: () => Promise<void>; outlineVisible?: boolean; latexDelimiters?: boolean;
     scrollBeyondLastLine?: boolean;
     beforeMermaidLoad?: () => Promise<void>;
-    resolveImageSrc?: (url: string) => string | Promise<string> } = {}) {
+    resolveImageSrc?: (url: string) => string | Promise<string>;
+    saveClipboardImage?: () => SavedImagePath } = {}) {
   let hostText = text, version = 1, ready = false, firstRender = false;
   let renderedText = '', renderedDocumentId: string | undefined;
   const documents = new Map<string, ReturnType<typeof createPreviewDocument>>();
@@ -205,6 +207,9 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
     if (message.type === 'resolveImageSrc' && testOptions.resolveImageSrc) {
       return { type: 'resolvedImageSrc', requestId: message.requestId,
         result: { ok: true, value: { resolvedUrl: await testOptions.resolveImageSrc(message.url) } } };
+    }
+    if (message.type === 'saveImageFromClipboard' && testOptions.saveClipboardImage) {
+      return { type: 'savedImagePath', requestId: message.requestId, result: { ok: true, value: testOptions.saveClipboardImage() } };
     }
     if (message.type === 'requestPreviewDocument') {
       // Force an observable inter-frame handoff. The old reading DOM must stay
