@@ -188,6 +188,7 @@ type PanelSessionControllerParams = {
   getFindOptions: () => FindOptions;
   getUiLanguage: () => InitMessage['uiLanguage'];
   getSourceLineNumbers: () => SourceLineNumberMode;
+  getScrollBeyondLastLine?: () => boolean;
   setFindOptions: (options: FindOptions) => Promise<void>;
   getPreviewAppearance: () => PreviewAppearance;
   setPreviewAppearance: (appearance: PreviewAppearance) => Promise<void>;
@@ -571,6 +572,7 @@ export function createPanelSessionController(params: PanelSessionControllerParam
       ),
       automaticUiLanguage: resolveUiLanguage('auto', vscode.env.language),
       sourceLineNumbers: getSourceLineNumbers(),
+      scrollBeyondLastLine: params.getScrollBeyondLastLine?.(),
       editingPreferencesRevision: params.editingPreferences?.snapshot().revision ?? 0,
       editingPreferences: params.editingPreferences?.read() ?? { input: { ...defaultInputAssistance }, shortcuts: {} },
       previewAppearance: getPreviewAppearance(),

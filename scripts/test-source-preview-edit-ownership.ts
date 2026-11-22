@@ -337,12 +337,104 @@ async function exercise(count: number) {
     throw error;
   } finally { host.dispose(); await page.close(); }
 }
+async function exerciseScrollBeyondLastLine(large: boolean) {
+  const page = await browser.newPage();
+  const last = 'End of the scroll fixture.';
+  const text = Array.from({ length: large ? 4_250 : 75 }, (_, index) =>
+    `Paragraph ${index} with **formatted text** and ` + 'some wrapping words. '.repeat(index % 5 + 1) + '\n\n'
+  ).join('') + last;
+  const host = await open(page, text, false, 'source', { scrollBeyondLastLine: true });
+  try {
+    await page.setViewport({ width: 1250, height: 540 });
+    await frames(page, 8);
+    const read = () => page.evaluate(last => {
+      const scroller = document.querySelector<HTMLElement>('.editor-host .cm-scroller')!;
+      const view = (scroller.querySelector('.cm-content') as any).cmTile.root.view;
+      const source = [...scroller.querySelectorAll('.cm-line')].find(line => line.textContent === last);
+      const preview = document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument;
+      const right = preview?.scrollingElement;
+      const target = [...(preview?.querySelectorAll('p') ?? [])].find(line => line.textContent === last);
+      return { left: scroller.scrollTop, leftEnd: scroller.scrollHeight - scroller.clientHeight,
+        lineHeight: view.defaultLineHeight as number,
+        leftHeight: scroller.clientHeight, leftPadding: view.contentDOM.style.paddingBottom as string,
+        leftY: source ? source.getBoundingClientRect().top - scroller.getBoundingClientRect().top : null,
+        right: right?.scrollTop ?? 0, rightEnd: right ? right.scrollHeight - right.clientHeight : 0,
+        rightHeight: right?.clientHeight ?? 0,
+        rightY: target?.getBoundingClientRect().top ?? null,
+        windowed: preview?.documentElement.dataset.meoPreviewWindowed === 'true' };
+    }, last);
+    const wheel = async (pane: 'left' | 'right', deltaY: number) => {
+      const point = await page.$eval(pane === 'left' ? '.editor-host .cm-scroller' : '.preview-frame', element => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      });
+      await page.mouse.move(point.x, point.y);
+      await page.mouse.wheel({ deltaY });
+      await frames(page, 8);
+    };
+    await wheel('left', 2_000_000);
+    const end = await read();
+    assert.ok(Math.abs(end.leftEnd - end.left) <= 1 && end.leftY !== null && end.leftY >= -1 && end.leftY < end.lineHeight * 2,
+      `The last line can reach the top of the single pane: ${JSON.stringify(end)}`);
+    await wheel('left', -120);
+    const beforeSplit = await read();
+    assert.ok(end.left - beforeSplit.left >= 119, 'The editor starts part-way through its extra scroll range');
+    await page.click('.source-preview-button');
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('.preview-host')?.inert
+      && !!document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.querySelector('main.meo-export-doc'));
+    await page.waitForFunction(() => [...document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.querySelectorAll('p')]
+      .some(line => line.textContent === 'End of the scroll fixture.'));
+    await frames(page, 12);
+    const split = await read();
+    assert.equal(split.windowed, large);
+    assert.ok(split.leftY !== null && beforeSplit.leftY !== null && Math.abs(split.leftY - beforeSplit.leftY) <= 2,
+      `Opening split preserves the last line's position: ${JSON.stringify({ beforeSplit, split })}`);
+    await wheel('left', 2_000_000);
+    await page.waitForFunction(() => {
+      const scroller = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.scrollingElement!;
+      return Math.abs(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop) <= 1;
+    });
+    await new Promise(resolve => setTimeout(resolve, 450));
+    const linkedEnd = await read();
+    assert.ok(linkedEnd.rightY !== null && linkedEnd.rightY >= -1 && linkedEnd.rightY < linkedEnd.lineHeight * 2,
+      `The Preview keeps its last line at the top of its own extra scroll range: ${JSON.stringify(linkedEnd)}`);
+    await wheel('right', -32);
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await frames(page, 8);
+    const moved = await read();
+    assert.ok(Math.abs((linkedEnd.right - moved.right) - 32) <= 2 &&
+      linkedEnd.left - moved.left > 10 && linkedEnd.left - moved.left < 48,
+      `A small Preview gesture should move both panes smoothly: ${JSON.stringify({ linkedEnd, moved })}`);
+    await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'scrollBeyondLastLineChanged', enabled: false }
+    })));
+    await wheel('left', 2_000_000);
+    const disabledEditor = await read();
+    assert.ok(disabledEditor.leftPadding === '' && disabledEditor.leftY !== null
+      && disabledEditor.leftY > disabledEditor.leftHeight / 2 && disabledEditor.leftY < disabledEditor.leftHeight,
+      `When disabled, the editor stops with its last line near the bottom: ${JSON.stringify(disabledEditor)}`);
+    await wheel('right', 2_000_000);
+    const disabledPreview = await read();
+    assert.ok(disabledPreview.rightY !== null && disabledPreview.rightY > disabledPreview.rightHeight / 2
+      && disabledPreview.rightY < disabledPreview.rightHeight,
+      `When disabled, the preview stops with its last line near the bottom: ${JSON.stringify(disabledPreview)}`);
+    assert.equal(host.readHost(), text);
+    assert.deepEqual(host.errors, []);
+    console.log(`Linked scroll beyond last line passed (${large ? 'windowed' : 'ordinary'})`);
+  } finally { host.dispose(); await page.close(); }
+}
 let primaryError: unknown;
 try {
-  for (const [count, wrapped, scale] of [[180, false, 1], [5000, false, 1], [180, true, 1], [1800, true, 1.25]] as const) {
-    await exerciseClickScrollHandoff(count, wrapped, scale);
+  if (!process.argv.includes('--handoff-only')) {
+    await exerciseScrollBeyondLastLine(false);
+    await exerciseScrollBeyondLastLine(true);
   }
-  if (!process.argv.includes('--handoff-only')) for (const count of process.argv.includes('--ordinary-only') ? [180] : [180, 2500]) await exercise(count);
+  if (!process.argv.includes('--scroll-end-only')) {
+    for (const [count, wrapped, scale] of [[180, false, 1], [5000, false, 1], [180, true, 1], [1800, true, 1.25]] as const) {
+      await exerciseClickScrollHandoff(count, wrapped, scale);
+    }
+    if (!process.argv.includes('--handoff-only')) for (const count of process.argv.includes('--ordinary-only') ? [180] : [180, 2500]) await exercise(count);
+  }
 }
 catch (error) { primaryError = error; }
 finally { server.stop(true); if (primaryError === undefined) await closeTestBrowser(browser); else await closeTestBrowser(browser, primaryError); }

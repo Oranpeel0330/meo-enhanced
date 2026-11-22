@@ -76,6 +76,7 @@ export function previewWindowProjection(root: HTMLElement, manifest: PreviewDocu
 export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocumentManifest, dependencies: {
   request(documentId: string, operation: PreviewDocumentOperation): Promise<PreviewDocumentResult>;
   mutate(run: () => void): void;
+  hasScrollEnd?(): boolean;
   /** Fit newly attached tables before committing their logical heights. */
   prepare?(): void;
   changed(): void;
@@ -236,7 +237,7 @@ export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocume
     const structureChanged = [...mounted.keys()].some(index => !wanted.has(index))
       || indices.some(index => !mounted.has(index) && cache.has(index));
     if (!structureChanged && !geometryDirty) return;
-    const atBottom = scroll.scrollHeight > scroll.clientHeight
+    const atBottom = !dependencies.hasScrollEnd?.() && scroll.scrollHeight > scroll.clientHeight
       && scroll.scrollTop >= scroll.scrollHeight - scroll.clientHeight - 1;
     geometryDirty = false;
     dependencies.mutate(() => {
@@ -488,6 +489,7 @@ export function createPreviewViewport(root: HTMLElement, manifest: PreviewDocume
   refresh();
   return {
     get manifest() { return manifest; },
+    isEndMounted: () => manifest.blocks.length === 0 || mounted.has(manifest.blocks.length - 1),
     /** Read a bounded cache window without mounting it or displacing foreground
      * chunk requests. Source/SVG consumers still own their resource budgets. */
     async prepareReadingCache(isCurrent: () => boolean, content?: { prepared(chunk: PreviewDocumentChunk): boolean }): Promise<readonly PreviewDocumentChunk[]> {

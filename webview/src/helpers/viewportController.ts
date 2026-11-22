@@ -7,6 +7,7 @@ import { NativeInputViewport } from '../editor/nativeInputViewport';
 import type { CaretRetentionReference } from '../editor/blockInteraction';
 import { EditorView } from '@codemirror/view';
 import { createLinkedViewportMap, type LinkedViewportMap, type LinkedViewportPoint } from './linkedViewportMap';
+import { scrollEndProgress, scrollEndRange, scrollEndTop, type ScrollEndRange } from './scrollEndRange';
 
 export interface ViewportDocumentAnchor {
   position: number;
@@ -118,6 +119,7 @@ export interface PreviewViewportSurface {
     readonly maximumScrollTop: number;
   } | null;
   readScrollTop?(): number;
+  scrollEndRange?(): ScrollEndRange | null;
   writeScrollTop?(scrollTop: number): void;
   /** An estimated gap has geometry, but cannot paint an explicit alignment. */
   isSourceLineRendered?(line: number): boolean;
@@ -130,6 +132,7 @@ export interface PreviewViewportSurface {
 interface ViewportControllerOptions {
   attachInteractions?: boolean;
   getMode?: () => 'live' | 'source';
+  scrollPastEndEnabled?: () => boolean;
   previewSurface?: PreviewViewportSurface;
 }
 
@@ -233,6 +236,7 @@ interface ActiveScrollTarget {
 interface ViewportAnchorTokenRecord {
   anchor: ViewportDocumentAnchor;
   readonly interactionGeneration: number;
+  readonly scrollEndProgress?: number | null;
   readonly modeRoundTripSnapshot: {
     readonly editorMode: 'live' | 'source' | null;
     readonly owner: ViewportAnchorOwner;
@@ -445,6 +449,7 @@ export class ViewportController {
   private pendingLinkedSourceReveal: { line: number; started?: boolean; isCurrent: () => boolean } | null = null;
   private previewPresentationDepth = 0;
   private readonly getMode: () => 'live' | 'source';
+  private readonly scrollPastEndEnabled: () => boolean;
   private readonly previewSurface: PreviewViewportSurface | null;
   private readonly anchorTokens = new WeakMap<ViewportAnchorToken, ViewportAnchorTokenRecord>();
   private pendingDocumentPresentation: {
@@ -548,6 +553,7 @@ export class ViewportController {
   ) {
     this.nativeInputViewport = new NativeInputViewport(view);
     this.getMode = options.getMode ?? (() => 'live');
+    this.scrollPastEndEnabled = options.scrollPastEndEnabled ?? (() => false);
     this.previewSurface = options.previewSurface ?? null;
     controllerByDom.set(view.dom, this);
     if (options.attachInteractions !== false) {
@@ -1270,6 +1276,7 @@ export class ViewportController {
       this.destroyed || !this.linkedPreviewEnabled || !this.previewSurface ||
       generation !== this.linkedProjectionGeneration || this.linkedViewportDriver !== owner
     ) return;
+    if (this.projectLinkedScrollEnd(owner)) return;
     const linkedMap = this.linkedViewportMap;
     if (
       linkedMap && this.previewSurface.readScrollTop && this.previewSurface.writeScrollTop
@@ -1334,6 +1341,42 @@ export class ViewportController {
       previewPosition.sourceRange,
       reference?.sourceOffset
     );
+  }
+
+  private editorScrollEndRange(): ScrollEndRange | null {
+    // The original padding remains the end of the body scroll range.
+    return this.scrollPastEndEnabled()
+      ? scrollEndRange(this.view.scrollDOM, Math.max(0, this.view.documentPadding.bottom - 64))
+      : null;
+  }
+
+  private projectLinkedScrollEnd(owner: ViewportAnchorOwner): boolean {
+    const preview = this.previewSurface;
+    if (!preview?.readScrollTop || !preview.writeScrollTop) return false;
+    const editorRange = this.editorScrollEndRange();
+    const previewRange = preview.scrollEndRange?.();
+    if (!editorRange || !previewRange) return false;
+    const editorTop = this.view.scrollDOM.scrollTop;
+    const previewTop = preview.readScrollTop();
+    const driver = owner === 'editor' ? editorRange : previewRange;
+    const driverTop = owner === 'editor' ? editorTop : previewTop;
+    const follower = owner === 'editor' ? previewRange : editorRange;
+    const followerTop = owner === 'editor' ? previewTop : editorTop;
+    const progress = scrollEndProgress(driver, driverTop);
+    if (progress === null && !(driverTop === driver.start && followerTop > follower.start)) {
+      // A windowed Preview enters the body through the same physical pair
+      // that ended its linked tail, then resumes its normal semantic mapping.
+      if (!this.linkedViewportMap && followerTop > follower.start
+        && driver.start - driverTop <= this.view.scrollDOM.clientHeight) {
+        this.rebaseLinkedSemanticOrigin(editorRange.start, previewRange.start);
+      }
+      return false;
+    }
+    const top = scrollEndTop(follower, progress ?? 0);
+    if (owner === 'editor') preview.writeScrollTop(top);
+    else this.writeScrollPosition({ top, left: this.view.scrollDOM.scrollLeft });
+    this.linkedViewportPosition = { source: this.view.scrollDOM.scrollTop, preview: preview.readScrollTop() };
+    return true;
   }
 
   private claimLinkedViewport(owner: ViewportAnchorOwner): void {
@@ -1440,7 +1483,8 @@ export class ViewportController {
       const range = position.sourceRange;
       return range.startLine - 1 + (range.endLine - range.startLine + 1) * range.progress;
     };
-    const sourceMaximum = Math.max(0, this.view.scrollDOM.scrollHeight - this.view.scrollDOM.clientHeight);
+    const sourceMaximum = this.editorScrollEndRange()?.start
+      ?? Math.max(0, this.view.scrollDOM.scrollHeight - this.view.scrollDOM.clientHeight);
     const points: LinkedViewportPoint[] = [];
     for (const region of geometry.regions) {
       const startLineNumber = Math.min(
@@ -1460,7 +1504,7 @@ export class ViewportController {
     }
     const linkedMap = createLinkedViewportMap(points, {
       sourceMaximum: sourceCoordinate(sourceMaximum),
-      previewMaximum: Math.max(0, geometry.maximumScrollTop)
+      previewMaximum: this.previewSurface?.scrollEndRange?.()?.start ?? Math.max(0, geometry.maximumScrollTop)
     }, pinnedPoint ? { source: sourceCoordinate(pinnedPoint.source), preview: pinnedPoint.preview } : undefined);
     if (!sourceMode) return linkedMap;
     return {
@@ -3081,7 +3125,7 @@ export class ViewportController {
     return this.captureAnchorToken(owner, entryAnchor);
   }
 
-  captureAnchorToken(owner: ViewportAnchorOwner, entryAnchor?: ViewportDocumentAnchor): ViewportAnchorToken | null {
+  captureAnchorToken(owner: ViewportAnchorOwner, entryAnchor?: ViewportDocumentAnchor, preserveScrollEnd = false): ViewportAnchorToken | null {
     if (this.destroyed) return null;
     const navigationAnchor = owner === 'editor'
       ? this.consumeVisibleNavigationTargetAnchor()
@@ -3095,6 +3139,8 @@ export class ViewportController {
     this.anchorTokens.set(handle, {
       anchor,
       interactionGeneration: this.interactionGeneration,
+      scrollEndProgress: preserveScrollEnd && owner === 'editor'
+        ? scrollEndProgress(this.editorScrollEndRange(), this.view.scrollDOM.scrollTop) : null,
       modeRoundTripSnapshot: null,
       projectedOwners: new Set()
     });
@@ -3134,6 +3180,9 @@ export class ViewportController {
     this.anchorTokens.set(handle, {
       anchor: chain.anchor,
       interactionGeneration: this.interactionGeneration,
+      scrollEndProgress: capturedScrollTop === null ? null : scrollEndProgress(owner === 'editor'
+        ? this.editorScrollEndRange()
+        : this.previewSurface?.scrollEndRange?.() ?? null, capturedScrollTop),
       modeRoundTripSnapshot: capturedScrollTop === null
         ? null
         : {
@@ -3353,6 +3402,16 @@ export class ViewportController {
   ): void {
     const roundTrip = record.modeRoundTripSnapshot;
     const returningToCapture = this.canRestoreModeRoundTripSnapshot(record, owner);
+    const progress = record.scrollEndProgress;
+    if (owner === 'editor' && progress != null && this.editorScrollEndRange()) {
+      this.stabilize(() => {
+        const range = this.editorScrollEndRange();
+        return range ? { top: scrollEndTop(range, progress) } : null;
+      });
+      if (returningToCapture && roundTrip) roundTrip.returned = true;
+      record.projectedOwners.add(owner);
+      return;
+    }
     // Keep the document's leading space visible when switching edit modes at the top.
     const switchingAtTop = owner === 'editor' && roundTrip?.owner === 'editor'
       && roundTrip.scrollTop === 0 && roundTrip.editorMode !== this.getMode();
@@ -3362,7 +3421,10 @@ export class ViewportController {
         this.writeScrollPosition(target);
         this.stabilizeScrollPosition(target);
       } else {
-        this.stabilizePreviewScrollTop(roundTrip.scrollTop, record);
+        this.stabilizePreviewScrollTop(() => {
+          const range = progress == null ? null : this.previewSurface?.scrollEndRange?.();
+          return range && progress != null ? scrollEndTop(range, progress) : roundTrip.scrollTop;
+        }, record);
       }
       if (returningToCapture) roundTrip.returned = true;
       record.projectedOwners.add(owner);
@@ -3415,7 +3477,7 @@ export class ViewportController {
   }
 
   private stabilizePreviewScrollTop(
-    targetScrollTop: number,
+    readTarget: () => number,
     record: ViewportAnchorTokenRecord
   ): void {
     if (!this.previewSurface?.readScrollTop || !this.previewSurface.writeScrollTop) return;
@@ -3424,6 +3486,7 @@ export class ViewportController {
       if (this.destroyed || !this.isAnchorTokenCurrent(record)) return;
       const currentScrollTop = this.previewSurface?.readScrollTop?.();
       if (currentScrollTop === undefined) return;
+      const targetScrollTop = readTarget();
       if (Math.abs(currentScrollTop - targetScrollTop) > POSITION_EPSILON) {
         this.previewSurface?.writeScrollTop?.(targetScrollTop);
       }

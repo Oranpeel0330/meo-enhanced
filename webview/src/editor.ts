@@ -28,7 +28,7 @@ import { createMarkdownContentParser } from '../../src/shared/markdownContentPar
 import { ChangeSet, EditorState, Compartment, Prec, Transaction, StateEffect, type Annotation, type ChangeDesc, type ChangeSpec, type TransactionSpec, EditorSelection, type Extension, type SelectionRange, type Text } from '@codemirror/state';
 import { documentEdit, documentSnapshot } from './adapters/documentSnapshot';
 import type { DocumentText, DocumentTextEdit } from '../../src/foundation/documentSnapshot';
-import { EditorView, keymap, highlightActiveLine, lineNumbers, highlightActiveLineGutter, type ViewUpdate } from '@codemirror/view';
+import { EditorView, keymap, highlightActiveLine, lineNumbers, highlightActiveLineGutter, scrollPastEnd, type ViewUpdate } from '@codemirror/view';
 import type { SyntaxNode } from '@lezer/common';
 import { defaultKeymap, deleteLine, history, historyKeymap, indentMore, indentLess, isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { markdownKeymap } from '@codemirror/lang-markdown';
@@ -246,6 +246,7 @@ type SourcePositionChange = {
 };
 
 type CreateEditorOptions = {
+  initialScrollBeyondLastLine?: boolean;
   parent: HTMLElement;
   text: string | Text;
   onApplyTransaction: (edit: DocumentTextEdit) => void;
@@ -323,6 +324,7 @@ export function createEditor({
   initialGitGutter = true,
   initialLongCodeBlockFolding = true,
   initialTableStickyHeaderEnabled = true,
+  initialScrollBeyondLastLine = false,
   initialLatexDelimiters = false,
   initialInputAssistance = defaultInputAssistance,
   openInputSuggestionSettings,
@@ -351,6 +353,8 @@ export function createEditor({
   const mathBackgroundCompartment = new Compartment();
   const modeLanguage = () => mathLanguageCompartment.of(getEditorMarkdownLanguage(latexDelimiters));
   const modeCompartment = new Compartment();
+  const scrollPastEndCompartment = new Compartment();
+  let scrollBeyondLastLine = initialScrollBeyondLastLine;
   const sourcePreparationCompartment = new Compartment();
   const gitGutterCompartment = new Compartment();
   const lineNumberCompartment = new Compartment();
@@ -2451,6 +2455,7 @@ export function createEditor({
       gitGutterCompartment.of(startMode === 'live' ? gitDiffGutterLiveRenderExtensions() : gitDiffGutterRenderExtensions()),
       highlightActiveLine(),
       EditorView.lineWrapping,
+      scrollPastEndCompartment.of(scrollBeyondLastLine ? scrollPastEnd() : []),
       bodyCaret,
       EditorView.domEventHandlers({
         beforeinput(event) {
@@ -2987,6 +2992,7 @@ export function createEditor({
   for (const event of nestedCompositionEvents) view.dom.addEventListener(event, onNestedComposition, true);
   viewportController = new ViewportController(view, {
     getMode: () => currentMode === 'live' ? 'live' : 'source',
+    scrollPastEndEnabled: () => scrollBeyondLastLine,
     previewSurface: previewViewportSurface
   });
   const isReadingPreparationActive = () => {
@@ -3963,8 +3969,8 @@ export function createEditor({
       if (editorDestroyed) return;
       requestLiveInputDerivedWork(view, bootstrapDerivedConsumer, operation);
     },
-    captureViewportAnchorToken(owner: ViewportAnchorOwner): ViewportAnchorToken | null {
-      return viewportController.captureAnchorToken(owner);
+    captureViewportAnchorToken(owner: ViewportAnchorOwner, preserveScrollEnd = false): ViewportAnchorToken | null {
+      return viewportController.captureAnchorToken(owner, undefined, preserveScrollEnd);
     },
     captureDocumentPresentationAnchorToken(owner: ViewportAnchorOwner): ViewportAnchorToken | null {
       return viewportController.captureDocumentPresentationAnchorToken(owner);
@@ -4430,6 +4436,12 @@ export function createEditor({
       view.dispatch({
         effects: longCodeBlockPreferenceCompartment.reconfigure(longCodeBlockEnabledFacet.of(enabled))
       });
+    },
+    setScrollBeyondLastLine(enabled: boolean) {
+      if (enabled === scrollBeyondLastLine) return;
+      scrollBeyondLastLine = enabled;
+      view.dispatch({ effects: scrollPastEndCompartment.reconfigure(enabled ? scrollPastEnd() : []) });
+      viewportController.linkedPreviewReady();
     },
     setLatexDelimiters(enabled: boolean) {
       if (latexDelimiters === enabled) return;

@@ -76,6 +76,7 @@ export type InitMessage = {
   readonly editorFontSizeMode: EditorFontSizeMode;
   readonly editorFontSize: number;
   readonly editorMouseWheelZoom?: boolean;
+  readonly scrollBeyondLastLine?: boolean;
   readonly editorLineHeight?: number;
   readonly gitChangesGutter: boolean;
   readonly gitDiffLineHighlights: boolean;
@@ -126,6 +127,7 @@ export function decodeInitMessage(value: unknown): InitMessage | null {
   if (isRecord(value) && value.latexDelimiters !== undefined && typeof value.latexDelimiters !== 'boolean') return null;
   if (isRecord(value) && value.imageIntrinsicSizes !== undefined && decodeImageIntrinsicSizes(value.imageIntrinsicSizes) === null) return null;
   if (isRecord(value) && value.editorMouseWheelZoom !== undefined && typeof value.editorMouseWheelZoom !== 'boolean') return null;
+  if (isRecord(value) && value.scrollBeyondLastLine !== undefined && typeof value.scrollBeyondLastLine !== 'boolean') return null;
   if (isRecord(value) && value.editorLineHeight !== undefined
     && (typeof value.editorLineHeight !== 'number' || !Number.isFinite(value.editorLineHeight)
       || normalizeEditorLineHeight(value.editorLineHeight) !== value.editorLineHeight)) return null;

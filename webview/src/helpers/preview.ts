@@ -2,6 +2,7 @@ import { previewReconciliation, type PreviewCodeBlockUpdate } from './previewRec
 import { createLoadingPresentation } from '../adapters/loadingPresentation';
 import { createPreviewSearchController, previewSearchStyles } from './previewSearch';
 import { createPreviewViewport, preparePreviewWindow, previewWindowProjection } from './previewViewport';
+import { scrollEndProgress, scrollEndRange, scrollEndTop } from './scrollEndRange';
 import { previewSourceLineMapper, type PreviewSourceLineMapper } from './previewSourceIdentity';
 import { createPreviewTableColumnPreferences } from './previewTableColumns';
 import { createPreviewDocumentSearch } from './previewDocumentSearch';
@@ -991,6 +992,43 @@ export function createPreviewController({
   const previewRenderTransport = createPreviewRenderTransport((message) => vscode.postMessage(message));
   const previewDocumentTransport = createPreviewDocumentTransport(message => vscode.postMessage(message));
   let previewViewport: ReturnType<typeof createPreviewViewport> | null = null;
+  let scrollBeyondLastLine = false;
+  let scrollEndSpacer: HTMLElement | null = null;
+  let scrollEndHeight = 0;
+  const updateScrollEnd = (document: Document | null) => {
+    if (!scrollBeyondLastLine || document?.documentElement.dataset.meoPreviewLayout !== 'side') {
+      scrollEndSpacer?.remove();
+      scrollEndSpacer = null;
+      scrollEndHeight = 0;
+      return;
+    }
+    const main = document.querySelector<HTMLElement>('main.meo-export-doc');
+    const scroller = document.scrollingElement;
+    const window = document.defaultView;
+    if (!main?.parentElement || !scroller || !window) return;
+    if (!scrollEndSpacer || scrollEndSpacer.ownerDocument !== document) {
+      scrollEndSpacer = main.ownerDocument.createElement('div');
+      scrollEndSpacer.setAttribute('aria-hidden', 'true');
+      scrollEndSpacer.style.cssText = 'overflow-anchor:none; pointer-events:none;';
+    }
+    if (scrollEndSpacer.previousElementSibling !== main) main.after(scrollEndSpacer);
+    const style = window.getComputedStyle(main);
+    const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2;
+    const pagePadding = Number.parseFloat(window.getComputedStyle(main.parentElement).paddingBottom) || 0;
+    let last = main.lastElementChild;
+    while (last && !last.hasAttribute('data-source-line')) last = last.previousElementSibling;
+    const bottomSpace = pagePadding + (last
+      ? main.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom
+      : Number.parseFloat(style.paddingBottom) || 0);
+    // Round down to leave a complete visible line even when scrollHeight rounds up.
+    scrollEndHeight = Math.max(0, Math.floor(scroller.clientHeight - lineHeight - bottomSpace - 1));
+    if (scrollEndSpacer.style.height !== `${scrollEndHeight}px`) scrollEndSpacer.style.height = `${scrollEndHeight}px`;
+  };
+  const readScrollEndRange = () => {
+    const scroller = getFrameDocument()?.scrollingElement;
+    return scroller && scrollEndSpacer?.isConnected && scrollEndSpacer.ownerDocument === scroller.ownerDocument
+      && scrollEndHeight > 0 ? scrollEndRange(scroller, scrollEndHeight) : null;
+  };
   let previewDocumentSearch: ReturnType<typeof createPreviewDocumentSearch> | null = null;
   let searchQuery = '', searchOptions: { wholeWord?: boolean; caseSensitive?: boolean } = {};
   let searchAnchor: SearchMatchAnchor | null = null;
@@ -2064,9 +2102,11 @@ export function createPreviewController({
         previewViewport = createPreviewViewport(mappedRoot, payload.document, {
           request: requestPreviewDocument,
           mutate: run => { if (constructing) run(); else withViewportTransaction(() => run()); },
+          hasScrollEnd: () => scrollEndHeight > 0,
           prepare: () => previewTableLayout?.refresh(),
           changed: () => {
             if (constructing || disposed || activeFrameDocument !== frameDocument) return;
+            updateScrollEnd(frameDocument);
             sourceMapDirty = true; localGeometryViewport = null;
             localSourceGeometry = createPreviewSourceGeometry(frameDocument);
             previewViewportResources?.refresh();
@@ -2091,6 +2131,12 @@ export function createPreviewController({
         constructing = false;
         connectDocumentSearch();
       }
+      updateScrollEnd(frameDocument);
+      frameDocument.defaultView?.addEventListener('resize', () => {
+        if (!scrollBeyondLastLine || layout !== 'side' || activeFrameDocument !== frameDocument) return;
+        withViewportTransaction(() => updateScrollEnd(frameDocument));
+        onGeometryChanged?.();
+      }, { signal });
       localSourceGeometry = frameDocument.documentElement.dataset.meoPreviewLargeDocument === 'true'
         ? createPreviewSourceGeometry(frameDocument) : null;
       if (!localSourceGeometry) { previewScrollRange?.dispose(); previewScrollRange = null; }
@@ -2113,6 +2159,7 @@ export function createPreviewController({
             if (!disposed && activeFrameDocument === frameDocument) {
               // Consumers measure on demand. A resource outside the reading
               // band must not force a complete index read solely for resizing.
+              updateScrollEnd(frameDocument);
               refreshSourcePositionMarker();
               onGeometryChanged?.();
             }
@@ -2353,6 +2400,16 @@ export function createPreviewController({
   const captureVisualReadingAnchor = (viewportRatio = 0, preferredSourceLine?: number): (() => boolean) | null => {
     const document = getFrameDocument();
     if (!document) return null;
+    const progress = scrollEndProgress(readScrollEndRange(), document.scrollingElement?.scrollTop ?? 0);
+    if (progress !== null) return () => {
+      if (getFrameDocument() !== document) return false;
+      updateScrollEnd(document);
+      const range = readScrollEndRange();
+      if (!range || !document.scrollingElement) return false;
+      const top = scrollEndTop(range, progress);
+      if (Math.abs(document.scrollingElement.scrollTop - top) > 0.5) restoreVisualReadingScrollTop(document, top);
+      return true;
+    };
     const height = document.defaultView?.innerHeight ?? 0;
     const marker = sourcePositionMarkerDocument === document && sourcePositionMarker && !sourcePositionMarker.hidden
       && Number(sourcePositionMarker.dataset.meoSourcePositionLine) === preferredSourceLine ? sourcePositionMarker : null;
@@ -3709,6 +3766,12 @@ export function createPreviewController({
       updateViewportAlignment();
       updateThemeToggle();
     },
+    setScrollBeyondLastLine: (enabled: boolean) => {
+      if (scrollBeyondLastLine === enabled) return;
+      scrollBeyondLastLine = enabled;
+      updateScrollEnd(getFrameDocument());
+      onGeometryChanged?.();
+    },
     setLayout: (layout: 'side' | 'full') => {
       if (previewLayout !== layout) {
         // Retire the old destination's in-flight work. The last accepted
@@ -3835,6 +3898,7 @@ export function createPreviewController({
       } else reveal();
     },
     isSourceLineRendered: (line: number) => !previewViewport || previewViewport.containsLine(line),
+    scrollEndRange: () => previewViewport?.isEndMounted() === false ? null : readScrollEndRange(),
     captureLinkedGeometry: () => {
       // Unmounted block heights are estimates. They cannot define a global
       // pixel-to-pixel map; the controller must use versioned source anchors.

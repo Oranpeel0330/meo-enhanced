@@ -2302,6 +2302,7 @@ const getActiveEditableMode = (): 'live' | 'source' => {
 };
 let pendingInitialText: string | null = null;
 let pendingSourceLineNumbers: InitMessage['sourceLineNumbers'] = 'on';
+let scrollBeyondLastLine = false;
 let previousVisibleSourceLineNumbers: Exclude<InitMessage['sourceLineNumbers'], 'off'> = 'on';
 let longCodeBlockFoldingEnabled = true;
 let gitClient: any = null;
@@ -3260,6 +3261,7 @@ const mountEditorForMode = async (mode: 'live' | 'source', signal: AbortSignal):
     mermaidDiagramPresentationFactory,
     uiLanguage: activeUiLanguage,
     sourceLineNumbers: pendingSourceLineNumbers,
+    initialScrollBeyondLastLine: scrollBeyondLastLine,
     onGitDiffSummaryChange: (summary, comparison) => {
       gitDiffSummary = summary;
       gitDiffComparison = comparison;
@@ -3308,6 +3310,9 @@ const mountEditorForMode = async (mode: 'live' | 'source', signal: AbortSignal):
       },
       captureLinkedGeometry() {
         return previewController.captureLinkedGeometry();
+      },
+      scrollEndRange() {
+        return previewController.scrollEndRange();
       },
       readScrollTop() {
         return previewController.readScrollTop();
@@ -3647,6 +3652,8 @@ const handleInit = (message: InitMessage) => {
     value: message.editorFontSize
   }, { refreshPreview: false });
   pendingSourceLineNumbers = message.sourceLineNumbers;
+  scrollBeyondLastLine = message.scrollBeyondLastLine ?? false;
+  previewController.setScrollBeyondLastLine(scrollBeyondLastLine);
   if (message.sourceLineNumbers !== 'off') {
     previousVisibleSourceLineNumbers = message.sourceLineNumbers;
   }
@@ -3914,6 +3921,12 @@ window.addEventListener('message', (event) => {
   if (message.type === 'editorLineHeightChanged') { applyEditorLineHeight(message.value); return; }
   if (message.type === 'uiLanguageChanged') { acceptUiLanguageSettings(message); return; }
   if (message.type === 'editorMouseWheelZoomChanged') { editorFontWheel.flush(); editorMouseWheelZoom = message.enabled; editorFontWheel.refresh(); return; }
+  if (message.type === 'scrollBeyondLastLineChanged') {
+    scrollBeyondLastLine = message.enabled;
+    editor?.setScrollBeyondLastLine(scrollBeyondLastLine);
+    previewController.setScrollBeyondLastLine(scrollBeyondLastLine);
+    return;
+  }
   if (message.type === 'uiColorsResult') { uiColorsTransport.accept(message); return; }
   if (message.type === 'uiColorsChanged') { uiColors = message.colors; refreshUiColors(); return; }
   if (message.type === 'openPreviewPresetSettings') { setMoreToolsVisible(false); getSettingsWindow().open('presets'); return; }
@@ -4455,7 +4468,7 @@ sourceButton.addEventListener('click', () => {
 sourcePreviewButton.addEventListener('click', () => {
   if (getActiveEditorMode() !== 'source' || !editor) return;
   documentViews?.close(false);
-  const viewport = editor.captureViewportAnchorToken?.('editor') ?? null;
+  const viewport = editor.captureViewportAnchorToken?.('editor', true) ?? null;
   sourcePreviewEnabled = !sourcePreviewEnabled;
   const { split } = presentPreviewSurface(false, { atomicSplit: sourcePreviewEnabled });
   editor.focus();

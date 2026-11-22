@@ -582,6 +582,14 @@ class MarkdownWebviewProvider implements vscode.CustomTextEditorProvider {
   }
 
   async handleConfigurationChanged(event: vscode.ConfigurationChangeEvent): Promise<void> {
+    for (const session of this.panelSessions.values()) {
+      if (event.affectsConfiguration('editor.scrollBeyondLastLine', session.document)) {
+        void session.panel.webview.postMessage({
+          type: 'scrollBeyondLastLineChanged',
+          enabled: this.getScrollBeyondLastLine(session.document)
+        } satisfies HostConfigurationEvent);
+      }
+    }
     if (event.affectsConfiguration(`${EXTENSION_CONFIG_SECTION}.language`)) {
       const preference = normalizeUiLanguagePreference(vscode.workspace.getConfiguration(EXTENSION_CONFIG_SECTION).get('language', 'auto'));
       this.broadcast({ type: 'uiLanguageChanged', uiLanguagePreference: preference,
@@ -795,6 +803,7 @@ class MarkdownWebviewProvider implements vscode.CustomTextEditorProvider {
           .get<string>('lineNumbers', 'on');
         return value === 'off' || value === 'relative' || value === 'interval' ? value : 'on';
       },
+      getScrollBeyondLastLine: () => this.getScrollBeyondLastLine(document),
       setFindOptions: (options) => this.setFindOptions(options),
       getPreviewAppearance: this.appearanceSettings.getPreviewAppearance,
       setPreviewAppearance: this.appearanceSettings.setPreviewAppearance,
@@ -851,6 +860,10 @@ class MarkdownWebviewProvider implements vscode.CustomTextEditorProvider {
       this.lastActivePanel = panel;
     }
     this.updateActiveEditorContext();
+  }
+
+  private getScrollBeyondLastLine(document: vscode.TextDocument): boolean {
+    return vscode.workspace.getConfiguration('editor', document).get<boolean>('scrollBeyondLastLine', true);
   }
 
   private broadcast(message: HostConfigurationEvent | EditingPreferencesChangedEvent | ImageStorageChangedEvent): void {

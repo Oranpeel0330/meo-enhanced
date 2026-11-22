@@ -131,10 +131,14 @@ assert.equal(decodeInitMessage({ ...completeInit, previewShowComments: 'yes' }),
 assert.equal(decodeInitMessage({ ...completeInit, editorFontSizeMode: 'invalid' }), null);
 assert.equal(decodeInitMessage({ ...completeInit, editorMouseWheelZoom: 'yes' }), null);
 assert.equal(decodeInitMessage({ ...completeInit, editorMouseWheelZoom: false })?.editorMouseWheelZoom, false);
+assert.equal(decodeInitMessage({ ...completeInit, scrollBeyondLastLine: 'yes' }), null);
+assert.equal(decodeInitMessage({ ...completeInit, scrollBeyondLastLine: false })?.scrollBeyondLastLine, false);
 assert.deepEqual(decodeEditorCommand({ type: 'setEditorMouseWheelZoom', enabled: false }), { type: 'setEditorMouseWheelZoom', enabled: false });
 assert.equal(decodeEditorCommand({ type: 'setEditorMouseWheelZoom', enabled: 1 }), null);
 assert.deepEqual(decodeHostConfigurationEvent({ type: 'editorMouseWheelZoomChanged', enabled: false }), { type: 'editorMouseWheelZoomChanged', enabled: false });
 assert.equal(decodeHostConfigurationEvent({ type: 'editorMouseWheelZoomChanged', enabled: 'false' }), null);
+assert.deepEqual(decodeHostConfigurationEvent({ type: 'scrollBeyondLastLineChanged', enabled: true }), { type: 'scrollBeyondLastLineChanged', enabled: true });
+assert.equal(decodeHostConfigurationEvent({ type: 'scrollBeyondLastLineChanged', enabled: 'true' }), null);
 const uiLanguageEvent = { type: 'uiLanguageChanged', uiLanguage: 'zh-CN', uiLanguagePreference: 'auto', automaticUiLanguage: 'zh-CN' } as const;
 assert.deepEqual(decodeHostConfigurationEvent(uiLanguageEvent), uiLanguageEvent);
 for (const field of ['uiLanguage', 'uiLanguagePreference', 'automaticUiLanguage']) {

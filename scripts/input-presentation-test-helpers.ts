@@ -147,6 +147,7 @@ async function assertStablePaint(page: Page, clip: PaintClip | readonly PaintCli
 
 async function open(page: Page, text: string, coldPreview = false, initialMode: 'source' | 'live' | 'preview' = 'source',
   testOptions: { uiLanguage?: 'en' | 'zh-CN'; beforePreviewRender?: () => Promise<void>; outlineVisible?: boolean; latexDelimiters?: boolean;
+    scrollBeyondLastLine?: boolean;
     beforeMermaidLoad?: () => Promise<void>;
     resolveImageSrc?: (url: string) => string | Promise<string> } = {}) {
   let hostText = text, version = 1, ready = false, firstRender = false;
@@ -176,6 +177,7 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
         gitChangesGutter: false, gitDiffLineHighlights: false, gitDiffDetailsVisible: false, diffBaselineMode: 'current-edit',
         fixedBaselinePinned: false, fixedBaselineActive: false, contentMaxWidthEnabled: false, largeDocumentOptimizationEnabled: true,
         latexDelimiters: testOptions.latexDelimiters ?? false,
+        scrollBeyondLastLine: testOptions.scrollBeyondLastLine,
         findOptions: { wholeWord: false, caseSensitive: false }, outlinePosition: 'right', outlineVisible: testOptions.outlineVisible ?? false, outlineWidth: 260,
         restoreReadingPositionOnOpen: false, vscodeTheme: null };
     }
