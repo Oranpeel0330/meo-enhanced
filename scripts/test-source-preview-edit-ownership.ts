@@ -484,15 +484,77 @@ async function exerciseScrollEndEditing(large: boolean) {
   } finally { host.dispose(); await page.close(); }
 }
 
+async function exerciseScrollEndBlockInsertion(large: boolean, action: 'codeBlock' | 'hr' | 'math') {
+  const page = await browser.newPage();
+  const witness = 'Paragraph before inserted block.';
+  const text = 'Earlier paragraph with **formatted text**.\n\n'.repeat(large ? 8_200 : 80) + witness + '\n\n';
+  const expected = text + (action === 'codeBlock' ? '```\n\n```' : action === 'hr' ? '---\n\n' : '$$\n\n$$');
+  const host = await open(page, text, false, 'source', { scrollBeyondLastLine: true, uiLanguage: 'zh-CN' });
+  try {
+    await page.setViewport({ width: 1200, height: 565 });
+    await page.click('.source-preview-button');
+    await page.waitForFunction(() => !!document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.querySelector('main.meo-export-doc'));
+    await page.$eval('.editor-host .cm-content', (element) => {
+      const view = (element as any).cmTile.root.view;
+      view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true }); view.focus();
+    });
+    await frames(page, 8);
+    const point = await page.$eval('.editor-host .cm-scroller', (element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + 65, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel({ deltaY: 2_000_000 });
+    await page.waitForFunction(witness => [...document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.querySelectorAll('p')]
+      .some(element => element.textContent === witness && Math.abs(element.getBoundingClientRect().top) <= 2), {}, witness);
+    if (action === 'math') {
+      await page.keyboard.type('/equation');
+      await page.waitForSelector('.meo-input-suggestions:not([hidden]) [data-command="blockMath"]');
+    }
+    const before = await page.evaluate(witness => {
+      const read = () => {
+        const documentInPreview = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+        return [...documentInPreview.querySelectorAll('p')].find(element => element.textContent === witness)?.getBoundingClientRect().top ?? null;
+      };
+      const results: Array<number | null> = [];
+      const measure = () => { results.push(read()); sample.id = requestAnimationFrame(measure); };
+      const sample = { results, id: requestAnimationFrame(measure) };
+      (window as any).endBlockPreviewSample = sample;
+      return read();
+    }, witness);
+    if (action === 'math') await page.keyboard.press('Enter');
+    else await page.click(`button[data-action="${action}"]`);
+    const deadline = Date.now() + 8_000;
+    while (host.readPresentation().text !== expected && Date.now() < deadline) await frames(page, 3);
+    assert.equal(host.readPresentation().text?.slice(text.length), expected.slice(text.length));
+    await frames(page, 22);
+    const sample = await page.evaluate(() => {
+      const sample = (window as any).endBlockPreviewSample;
+      cancelAnimationFrame(sample.id);
+      return sample.results as Array<number | null>;
+    });
+    assert.ok(before !== null && sample.length > 0 && sample.every(top => top !== null && Math.abs(top - before) <= 2),
+      `Inserting ${action} leaves the previous Preview paragraph at the same screen position: ${JSON.stringify({ before, sample })}`);
+    assert.deepEqual(host.errors, []);
+    console.log(`${action} stays below the existing text in split Preview (${large ? 'windowed' : 'ordinary'})`);
+  } finally { host.dispose(); await page.close(); }
+}
+
 let primaryError: unknown;
 try {
-  if (!process.argv.includes('--handoff-only')) {
+  const blockInsertionsOnly = process.argv.includes('--end-block-only');
+  if (!process.argv.includes('--handoff-only') && !blockInsertionsOnly) {
     await exerciseScrollBeyondLastLine(false);
     await exerciseScrollBeyondLastLine(true);
     await exerciseScrollEndEditing(false);
     await exerciseScrollEndEditing(true);
   }
-  if (!process.argv.includes('--scroll-end-only')) {
+  if (!process.argv.includes('--handoff-only')) {
+    await exerciseScrollEndBlockInsertion(false, 'codeBlock');
+    await exerciseScrollEndBlockInsertion(false, 'hr');
+    await exerciseScrollEndBlockInsertion(true, 'math');
+  }
+  if (!process.argv.includes('--scroll-end-only') && !blockInsertionsOnly) {
     for (const [count, wrapped, scale] of [[180, false, 1], [5000, false, 1], [180, true, 1], [1800, true, 1.25]] as const) {
       await exerciseClickScrollHandoff(count, wrapped, scale);
     }

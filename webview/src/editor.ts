@@ -1323,18 +1323,33 @@ export function createEditor({
     if (currentMode !== 'live') return;
     view.dispatch({ effects: supersedeLiveInputDerivedWork() });
     beforeFocus?.();
-    const selection = view.state.selection.main;
-    restoreTableModeSelection({ anchor: selection.anchor, head: selection.head }, true);
+    focusInsertedTableCell(view.state.selection.main.head);
   };
 
-  const withEndInsertionViewport = (from: number, to: number, insert: (acceptLayout: () => void) => boolean) => {
+  const focusInsertedTableCell = (position: number): HTMLTextAreaElement | null => {
+    refreshMountedTablePositions(view, currentDiagnostics, view.state.field(gitDiffLineFlagsField, false));
+    const input = mountedTableInputsForLine(view, view.state.doc.lineAt(position).number)[0];
+    if (!input || input.dataset.tableRow !== '0') return null;
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(0, 0);
+    lastFocusedEditorTarget = input;
+    lastTextareaSelection = { target: input, start: 0, end: 0, direction: 'forward' };
+    return getActiveTableInput() === input ? input : null;
+  };
+
+  const withInsertionViewport = (
+    from: number, to: number, insert: (acceptLayout: () => void) => boolean,
+    target: 'caret' | 'cell' = 'caret'
+  ) => {
     const { doc } = view.state;
-    if (currentMode !== 'live' || !scrollBeyondLastLine || to !== doc.length) return insert(() => {});
+    const live = currentMode === 'live';
+    const focusCell = live && target === 'cell';
+    if (!focusCell && to !== doc.length) return insert(() => {});
     const line = doc.lineAt(from);
     // Slash completion can replace the whole last line. Anchor the retained
     // text before that range, while its geometry still belongs to the old DOM.
     const position = doc.sliceString(line.from, from).trim() ? line.from : Math.max(0, line.from - 1);
-    const top = doc.length > 0 && isPositionVisible(to)
+    const top = live && doc.length > 0 && isPositionVisible(to)
       ? view.coordsAtPos(position, 1)?.top : undefined;
     if (top !== undefined) viewportController.markInteraction();
     const retention = top === undefined ? null : viewportController.retainElementTop(
@@ -1343,32 +1358,53 @@ export function createEditor({
     let inserted = false;
     try {
       inserted = insert(() => {
-        if (!retention) return;
-        interactionContinuity?.cancel();
+        if (!retention && !focusCell) return;
+        if (retention) interactionContinuity?.cancel();
         flushEditorLayout(view);
-        retention.correct();
+        retention?.correct();
       });
       if (inserted) {
         const insertedDoc = view.state.doc;
-        const isCurrent = viewportController.captureNavigationCurrentness();
+        const head = view.state.selection.main.head;
+        const mode = currentMode;
+        const isNavigationCurrent = viewportController.captureNavigationCurrentness();
+        const isCurrent = () => isNavigationCurrent() && view.state.doc === insertedDoc && currentMode === mode;
         // The toolbar can finish returning focus after the command. Measure
         // the accepted editing layer and scroll only if its target is clipped.
         requestAnimationFrame(() => {
-          if (!isCurrent() || view.state.doc !== insertedDoc) return;
-          const input = getActiveTableInput();
+          if (!isCurrent()) return;
+          let input = getActiveTableInput();
+          if (focusCell && !input) {
+            input = focusInsertedTableCell(head);
+            if (!input) {
+              viewportController.revealPosition(head, { y: 'nearest' }, isCurrent);
+              flushEditorLayout(view);
+              input = isCurrent() ? focusInsertedTableCell(head) : null;
+            }
+          }
           if (input) {
-            const rect = input.getBoundingClientRect(), bounds = tableUsableViewportBounds(view, input);
-            if (rect.top >= bounds.top && rect.bottom <= bounds.bottom) return;
+            const cell = input;
+            // The first cell is now the normal native editing owner. Give it
+            // the accepted row position so later syntax or resource layout
+            // cannot undo the bounded pre-focus retention.
+            retention?.correct();
+            const rect = cell.getBoundingClientRect(), bounds = tableUsableViewportBounds(view, cell);
+            if (rect.top >= bounds.top && rect.bottom <= bounds.bottom) {
+              if (viewportController.captureNativeInputViewport(cell)) retention?.cancel();
+              return;
+            }
             const revealIsCurrent = viewportController.beginNavigationReveal();
+            viewportController.captureNativeInputViewport(cell);
             viewportController.revealVerticalBounds(
-              () => input.isConnected ? input.getBoundingClientRect() : null,
-              () => revealIsCurrent() && input === getActiveTableInput(),
-              { readViewportBounds: () => tableUsableViewportBounds(view, input) }
+              () => cell.isConnected ? cell.getBoundingClientRect() : null,
+              () => revealIsCurrent() && cell === getActiveTableInput(),
+              { readViewportBounds: () => tableUsableViewportBounds(view, cell), retainOnLayout: true }
             );
           } else if (view.hasFocus) {
-            const head = view.state.selection.main.head;
             if (isPositionVisible(head)) return;
-            viewportController.revealPosition(head, { y: 'nearest' }, viewportController.beginNavigationReveal());
+            // Source owns the local reveal without releasing the split
+            // Preview's current edit before its new presentation arrives.
+            viewportController.revealPosition(head, { y: 'nearest' }, live ? viewportController.beginNavigationReveal() : isCurrent);
           }
         });
       }
@@ -1382,11 +1418,11 @@ export function createEditor({
   const insertTableAtSelection = (cols = 3, rows = 2) => {
     if (getActiveTableInput()) return false;
     const selection = view.state.selection.main;
-    return withEndInsertionViewport(selection.to, selection.to, acceptLayout => {
+    return withInsertionViewport(selection.to, selection.to, acceptLayout => {
       if (!insertTable(view, selection, inputContext, cols, rows, Transaction.userEvent.of('input.toolbar'))) return false;
       focusInsertedTable(acceptLayout);
       return true;
-    });
+    }, 'cell');
   };
 
   const requestEditorHistoryReplay = async (direction: EditorHistoryDirection): Promise<boolean> => {
@@ -2416,7 +2452,7 @@ export function createEditor({
         openSettings: openInputSuggestionSettings,
         renderMathPreview: source => renderLatexMathToHtml(source, 'inline'),
         cellCoords: measureTextareaSelectionStart,
-        insertSlash: withEndInsertionViewport,
+        insertSlash: withInsertionViewport,
         focusTable: focusInsertedTable,
         focusMath: acceptLayout => {
           view.dispatch({ effects: supersedeLiveInputDerivedWork() });
@@ -4626,7 +4662,7 @@ export function createEditor({
       };
       // Saving the image can outlive the original caret or scroll gesture.
       if (view.hasFocus && position === view.state.selection.main.head && isPositionVisible(position)) {
-        withEndInsertionViewport(position, position, insert);
+        withInsertionViewport(position, position, insert);
       } else insert(() => {});
     },
     setInputAssistance(preferences: InputAssistance) {

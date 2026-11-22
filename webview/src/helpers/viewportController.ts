@@ -80,7 +80,7 @@ export interface PreviewViewportSurface {
   /** Reveal after the matching reading DOM is ready. */
   revealSourcePosition?(line: number, isCurrent: () => boolean, intent?: 'end-edit'): void | Promise<void>;
   /** A mounted unchanged glyph is more precise than an estimated source range. */
-  captureVisualReadingAnchor?(viewportRatio?: number, preferredSourceLine?: number): (() => boolean) | null;
+  captureVisualReadingAnchor?(viewportRatio?: number, preferredSourceLine?: number, preserveEndProgress?: boolean): (() => boolean) | null;
   captureTopVisiblePosition(viewportOffset?: number): {
     line: number;
     lineOffset: number;
@@ -1191,8 +1191,12 @@ export class ViewportController {
         ? findChangedDocumentRange(documentChange.previousText, documentChange.nextText) : null;
       const endEditLine = documentChange && changedRange && this.previewSurface.revealSourcePosition
         ? this.linkedEndEditLine(documentChange.nextText, changedRange) : null;
-      const restoreVisualAnchor = endEditLine === null
-        ? this.previewSurface.captureVisualReadingAnchor?.(documentChange ? 0 : readingRatio, preferredSourceLine) : null;
+      const editingEnd = endEditLine !== null || this.linkedPreviewAttentionHeld && (
+        this.pendingLinkedSourceReveal?.intent === 'end-edit' || this.linkedEndEditRange !== null
+      );
+      const restoreVisualAnchor = this.previewSurface.captureVisualReadingAnchor?.(
+        documentChange || editingEnd ? 0 : readingRatio, editingEnd ? undefined : preferredSourceLine, !editingEnd
+      );
       let readingAnchor: ViewportDocumentAnchor | null = null;
       // Source scrolling cannot displace an independently scrolled Preview.
       if (endEditLine === null && (!linkedPreviewEnabled || !this.isUserScrolling()) && !previewGestureActive) {
@@ -1217,9 +1221,9 @@ export class ViewportController {
       mutate();
       this.linkedViewportMapDirty = true;
       if (endEditLine !== null) {
-        // Keep the current reading offset while the new body is committed.
-        // Reapplying the blank-space ratio would scroll past the new text.
-        this.previewSurface.writeScrollTop(heldPreviewTop);
+        // Window estimates above the reading line may also have changed.
+        // Keep its painted position before revealing any offscreen addition.
+        if (restoreVisualAnchor?.() !== true) this.previewSurface.writeScrollTop(heldPreviewTop);
         this.locateLinkedSourcePosition(endEditLine, 'end-edit');
         this.scheduleLinkedViewportMapRefresh();
         return;
@@ -1294,8 +1298,11 @@ export class ViewportController {
   private linkedEndEditLine(nextText: string, change: ChangedDocumentRange): number | null {
     const { doc, selection } = this.view.state;
     if (doc !== this.linkedPreviewInputDocument || !this.linkedPreviewAttentionHeld || !this.view.hasFocus
-      || this.getMode() !== 'source' || selection.main.head !== doc.length || doc.length !== nextText.length
+      || this.getMode() !== 'source' || doc.length !== nextText.length
       || scrollEndProgress(this.editorScrollEndRange(), this.view.scrollDOM.scrollTop) === null) return null;
+    // A template usually places its caret inside the inserted block. Its
+    // remaining delimiters are still part of the same append in Preview.
+    if (selection.main.head < change.from || selection.main.head > change.from + change.insertedText.length) return null;
     const inserted = change.insertedText.trimEnd();
     const end = change.from + inserted.length;
     return inserted && nextText.slice(end).trim() === '' ? doc.lineAt(end - 1).number : null;
@@ -2248,12 +2255,14 @@ export class ViewportController {
       yMargin = 0,
       y = 'nearest',
       readViewportBounds,
-      originScrollTop
+      originScrollTop,
+      retainOnLayout = false
     }: {
       yMargin?: number;
       y?: 'nearest' | 'center-if-outside';
       readViewportBounds?: () => { top: number; bottom: number };
       originScrollTop?: number;
+      retainOnLayout?: boolean;
     } = {}
   ): void {
     this.runNavigationReveal(() => {
@@ -2289,7 +2298,7 @@ export class ViewportController {
         ? (Math.abs(topDelta) <= bottomDelta ? topDelta : bottomDelta)
         : topDelta < 0 ? topDelta : bottomDelta;
       return { kind: 'target', target: { top: evaluationTop + delta } };
-    }, { settle: true }, isCurrent);
+    }, { settle: true, retainOnLayout }, isCurrent);
   }
 
   /** Waits for the post-reconfiguration height map, anchor projection, and visible block geometry. */

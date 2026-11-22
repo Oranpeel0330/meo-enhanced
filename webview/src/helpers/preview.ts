@@ -2397,10 +2397,10 @@ export function createPreviewController({
     } else if (restoreFullPreviewReadingScrollTop(document, top)) sourceMapDirty = true;
   };
 
-  const captureVisualReadingAnchor = (viewportRatio = 0, preferredSourceLine?: number): (() => boolean) | null => {
+  const captureVisualReadingAnchor = (viewportRatio = 0, preferredSourceLine?: number, preserveEndProgress = true): (() => boolean) | null => {
     const document = getFrameDocument();
     if (!document) return null;
-    const progress = scrollEndProgress(readScrollEndRange(), document.scrollingElement?.scrollTop ?? 0);
+    const progress = preserveEndProgress ? scrollEndProgress(readScrollEndRange(), document.scrollingElement?.scrollTop ?? 0) : null;
     if (progress !== null) return () => {
       if (getFrameDocument() !== document) return false;
       updateScrollEnd(document);

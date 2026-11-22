@@ -3272,7 +3272,7 @@ const mountEditorForMode = async (mode: 'live' | 'source', signal: AbortSignal):
       isCurrentDocument: () => previewController.isCurrentDocument(),
       revealSourcePosition: (line, isCurrent, intent) => previewController.revealSourcePosition(line, isCurrent, intent),
       restoreLinkedPosition: (position, isCurrent) => previewController.restoreLinkedPosition(position, isCurrent),
-      captureVisualReadingAnchor: (ratio, line) => previewController.captureVisualReadingAnchor(ratio, line),
+      captureVisualReadingAnchor: previewController.captureVisualReadingAnchor,
       isInteracting: () => previewController.isViewportInteracting(),
       isScrollbarDragging: () => previewController.isScrollbarDragging(),
       captureTopVisiblePosition(viewportOffset) {

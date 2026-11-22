@@ -194,7 +194,7 @@ async function open(page: Page, text: string, coldPreview = false, initialMode: 
       renders.push({ fontSize: message.environment.editorFontSizePx }); firstRender = true;
       if (testOptions.beforePreviewRender) await testOptions.beforePreviewRender();
       await Promise.all(held.splice(0).map(release => release()));
-      const options = { markdownText: message.text, sourceDocumentPath: '/fixture/presentation.md', uiLanguage: 'en' as const,
+      const options = { markdownText: message.text, sourceDocumentPath: '/fixture/presentation.md', uiLanguage: 'en' as const, layout: message.layout,
         preset: message.preset, styleEnvironment: message.environment };
       let value;
       if (message.window) {

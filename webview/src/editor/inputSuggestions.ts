@@ -52,7 +52,7 @@ export function createInputSuggestions(options: {
   readonly renderMathPreview: (source: string) => string | null;
   readonly requestLinks?: (context: { kind: 'documents' | 'paths' | 'headings'; query: string; target: string; wiki?: boolean }) => Promise<readonly LinkCandidate[]>;
   readonly replaceCell?: (input: HTMLTextAreaElement, value: string, anchor: number, head?: number) => boolean;
-  readonly insertSlash?: (from: number, to: number, insert: (acceptLayout: () => void) => boolean) => boolean;
+  readonly insertSlash?: (from: number, to: number, insert: (acceptLayout: () => void) => boolean, target: 'caret' | 'cell') => boolean;
   readonly focusTable?: (acceptLayout: () => void) => void;
   readonly focusMath?: (acceptLayout: () => void) => void;
   /** Viewport coordinates of the painted cell caret. */
@@ -641,7 +641,7 @@ export function createInputSuggestions(options: {
         }
         return true;
       };
-      if (command && options.insertSlash) options.insertSlash(from, to, complete);
+      if (command && options.insertSlash) options.insertSlash(from, to, complete, command.id === 'table' ? 'cell' : 'caret');
       else complete(() => {});
       if (item.kind === 'directory') this.schedule();
     }

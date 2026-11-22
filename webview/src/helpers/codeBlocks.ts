@@ -713,7 +713,7 @@ class CodeLanguageLabelWidget extends WidgetType {
   }
 }
 
-/** An indented header shares a row with editable text. Keep its widget's native
+/** A code header shares a row with editable text. Keep its widget's native
  * caret anchor in that text flow while the actual controls sit above it. */
 class CodeHeaderCaretAnchor extends WidgetType {
   constructor(readonly inner: WidgetType) { super(); }
@@ -1047,7 +1047,7 @@ export function addMermaidDiagram(
 
 export function addCopyCodeButton(builder: any[], state: EditorState, node: SyntaxNodeRef): void {
   const widget = createCodeBlockActionsWidget(state, node);
-  if (widget) addTopLineWidget(builder, state.doc.lineAt(node.from).to, widget, -1, node.name === 'CodeBlock');
+  if (widget) addTopLineWidget(builder, state.doc.lineAt(node.from).to, widget, -1, true);
 }
 
 export function createCodeBlockActionsWidget(state: EditorState, node: SyntaxNodeRef): WidgetType | null {
