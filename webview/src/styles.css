@@ -3625,6 +3625,12 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
   font-weight: inherit;
 }
 
+.cm-editor.meo-mode-live .meo-md-color-swatch-group {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .cm-editor.meo-mode-live .meo-md-color-swatch {
   display: inline-block;
   width: 0.78em;

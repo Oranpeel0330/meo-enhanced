@@ -8,6 +8,80 @@ import { launchTestBrowser } from './browser-test-helpers';
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-table-colors-'));
 
+async function checkSwatchWrapping(page: Page): Promise<void> {
+  for (const large of [false, true]) for (const table of [false, true]) {
+    const line = 'prefix should stay here #122321 tail';
+    const text = (table ? `| Color |\n| --- |\n| ${line} |` : line) + '\n\nAfter.'
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+    const label = `${table ? 'table' : 'prose'}/${large ? 'optimized' : 'ordinary'}`;
+    const swatchSelector = '[data-color-value="#122321"]';
+    await page.evaluate(text => {
+      const harness = (window as any).TableStabilityHarness;
+      const editor = (window as any).wrappingColorEditor = harness.createEditor({
+        parent: document.getElementById('app')!, initialMode: 'live', text, onApplyChanges() {}
+      });
+      editor.view.dispatch({ selection: { anchor: text.indexOf('After.') } });
+    }, text);
+    await page.waitForFunction(({ large, swatchSelector }) => {
+      const { TableStabilityHarness, wrappingColorEditor } = window as any;
+      return TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(wrappingColorEditor.view.state) === large
+        && !!document.querySelector(swatchSelector);
+    }, {}, { large, swatchSelector });
+    const lineSelector = table ? 'tbody .meo-md-html-table-cell-preview' : '.cm-line';
+    const rule = await page.$eval(swatchSelector, (swatch, lineSelector) => {
+      const line = swatch.closest(lineSelector)!;
+      const left = line.getBoundingClientRect().left;
+      const right = swatch.getBoundingClientRect().right;
+      return `#app ${lineSelector} { box-sizing: border-box; width: ${right - left + 8}px !important; }`;
+    }, lineSelector);
+    const style = await page.addStyleTag({ content: rule });
+    const measure = () => page.$eval(swatchSelector, (swatch, lineSelector) => {
+      const line = swatch.closest(lineSelector)!;
+      const glyph = (value: string, length: number) => {
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const index = node.textContent!.indexOf(value);
+          if (index < 0) continue;
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + length);
+          return Array.from(range.getClientRects(), rect => rect.toJSON());
+        }
+        throw new Error(`Missing ${value}`);
+      };
+      return { prefix: glyph('prefix', 6)[0]!, color: glyph('#122321', 7), swatch: swatch.getBoundingClientRect().toJSON() };
+    }, lineSelector);
+    const verify = async () => {
+      const geometry = await measure();
+      assert.equal(geometry.color.length, 1, `${label}: the value stays on one visual row`);
+      const color = geometry.color[0]!;
+      assert.ok(color.top > geometry.prefix.top + 5, `${label}: the value wraps to the next row`);
+      assert.ok(Math.abs((color.top + color.bottom - geometry.swatch.top - geometry.swatch.bottom) / 2) <= 1.5,
+        `${label}: the swatch wraps with the value ${JSON.stringify(geometry)}`);
+      return color;
+    };
+    const color = await verify();
+    await page.mouse.click(Math.ceil(color.left + color.width / 2), (color.top + color.bottom) / 2);
+    if (table) await page.waitForSelector(`${lineSelector} .meo-md-table-active-source-line`);
+    const caretInColor = await page.evaluate(table => {
+      const editor = (window as any).wrappingColorEditor;
+      const input = table ? document.querySelector<HTMLTextAreaElement>('tbody .is-editing textarea') : null;
+      const source = table ? input?.value : editor.getText();
+      const offset = table ? input?.selectionStart : editor.view.state.selection.main.head;
+      const start = source?.indexOf('#122321') ?? -1;
+      return start >= 0 && offset !== undefined && offset > start && offset < start + '#122321'.length;
+    }, table);
+    assert.ok(caretInColor, `${label}: clicking the wrapped HEX selects a character position inside it`);
+    await verify();
+    if (!large && process.env.MEO_TEST_SCREENSHOTS) {
+      fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `wrapped-swatch-${table ? 'table' : 'prose'}.png`) });
+    }
+    await style.evaluate(style => style.remove());
+    await page.evaluate(() => (window as any).wrappingColorEditor.destroy());
+  }
+}
+
 async function checkSwatchesWhileEditing(page: Page): Promise<void> {
   await page.setViewport({ width: 1100, height: 700 });
   for (const large of [false, true]) for (const table of [false, true]) {
@@ -138,6 +212,7 @@ async function main() {
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
 
+    await checkSwatchWrapping(page);
     await checkSwatchesWhileEditing(page);
 
     const result = await page.evaluate(async () => {

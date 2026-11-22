@@ -2169,8 +2169,11 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         ? createInteractiveColorSwatchElement(options.view, { from, to, value: color.value })
         : createColorSwatchElement(color.value, options.uiLanguage);
       setInlineSourceRange(swatch, { from: baseOffset + i, to: baseOffset + color.to });
-      parent.appendChild(swatch);
-      appendTablePlainText(parent, color.value, baseOffset + i, diagnostics, searchState, sourceRange);
+      const group = document.createElement('span');
+      group.className = 'meo-md-color-swatch-group';
+      group.appendChild(swatch);
+      appendTablePlainText(group, color.value, baseOffset + i, diagnostics, searchState, sourceRange);
+      parent.appendChild(group);
       i = color.to;
       continue;
     }

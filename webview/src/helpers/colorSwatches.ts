@@ -1,5 +1,5 @@
 import { isolateHistory } from '@codemirror/commands';
-import { StateEffect, StateField, type Extension, type ChangeDesc } from '@codemirror/state';
+import { StateEffect, StateField, type Extension, type ChangeDesc, type Range } from '@codemirror/state';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import {
   Decoration,
@@ -539,14 +539,18 @@ export class ColorSwatchWidget extends UiLanguageSensitiveWidget {
   }
 }
 
+const colorSwatchGroup = Decoration.mark({ class: 'meo-md-color-swatch-group', inclusiveStart: true });
+
 export function addColorSwatchDecoration(
-  ranges: Array<any>,
+  ranges: Range<Decoration>[],
   colorRange: HexColorRange
 ): void {
   ranges.push(
+    colorSwatchGroup.range(colorRange.from, colorRange.to),
     Decoration.widget({
       widget: new ColorSwatchWidget(colorRange),
-      side: -1
+      // Put the widget inside the mark while keeping the editable HEX text.
+      side: 1
     }).range(colorRange.from)
   );
 }
