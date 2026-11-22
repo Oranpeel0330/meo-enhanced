@@ -1,5 +1,5 @@
 /** Only overrides are persisted. Missing inputs use the host theme or bundled defaults. */
-export const uiColorKeys = ['surface', 'documentBackground', 'text', 'caret', 'accent', 'textEmphasis', 'link', 'success', 'warning', 'danger'] as const;
+export const uiColorKeys = ['surface', 'documentBackground', 'text', 'accent', 'textEmphasis', 'link', 'success', 'warning', 'danger'] as const;
 export type UiColorKey = typeof uiColorKeys[number];
 export type UiColorOverrides = Partial<Record<UiColorKey, string>>;
 export type UiColors = { readonly light: UiColorOverrides; readonly dark: UiColorOverrides };
@@ -20,6 +20,8 @@ export function decodeUiColors(value: unknown): UiColors | null {
     if (profile === undefined) continue;
     if (typeof profile !== 'object' || profile === null || Array.isArray(profile)) return null;
     for (const [key, value] of Object.entries(profile)) {
+      // Keep other colors from profiles saved with the retired cursor override.
+      if (key === 'caret') continue;
       if (!uiColorKeys.includes(key as UiColorKey) || typeof value !== 'string') return null;
       const color = normalizeUiColor(value);
       if (!color) return null;

@@ -70,15 +70,16 @@ try {
     });
     assert.ok(selected.focus && selected.empty, `${label}: unfocused/non-collapsed ${JSON.stringify(selected)}`);
     assert.equal(selected.nativeHead, selected.head, `${label}: native/document positions differ ${JSON.stringify(selected)}`);
-    const rgb = selected.color.match(/[\d.]+/g)?.slice(0, 3).map(Number);
-    assert.ok(rgb?.length === 3 && !selected.color.endsWith(', 0)'), `${label}: transparent caret ${selected.color}`);
+    const channels = selected.color.match(/[\d.]+/g)?.map(Number);
+    assert.ok(channels && channels.length >= 3 && (channels[3] ?? 1) > 0, `${label}: transparent caret ${selected.color}`);
+    const rgb = channels.slice(0, 3);
     const { data, info } = await sharp(await page.screenshot({ clip: selected.clip })).removeAlpha().raw().toBuffer({ resolveWithObject: true });
     let bestColumn = 0;
     for (let x = 0; x < info.width; x++) {
       let count = 0;
       for (let y = 0; y < info.height; y++) {
         const offset = (y * info.width + x) * info.channels;
-        if (rgb!.every((value, channel) => Math.abs(data[offset + channel]! - value) < 40)) count++;
+        if (rgb.every((value, channel) => Math.abs(data[offset + channel]! - value) < 40)) count++;
       }
       bestColumn = Math.max(bestColumn, count);
     }

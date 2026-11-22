@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
 import { installEditorCaretProbe, launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
-import { createAppearanceSettingsOwner, type AppearanceSettingsStore } from '../src/host/appearanceSettings';
+import { createAppearanceSettingsOwner, UI_COLORS_SETTING_KEY, type AppearanceSettingsStore } from '../src/host/appearanceSettings';
 import { decodeWebviewToHostMessage } from '../src/protocol/messages';
 import type { UpdateUiColorsRequest, UiColorsResult } from '../src/protocol/uiColors';
 
@@ -108,47 +108,51 @@ try {
   const source = () => page.$$eval('.cm-content, .cm-line, .cm-line span, .cm-gutters', elements => elements.map(element => [element.textContent, getComputedStyle(element).color, getComputedStyle(element).backgroundColor]));
   await openFixture();
   const blink = await page.addStyleTag({ content: '.cm-cursorLayer{animation:none!important}' });
-  for (const mode of ['source', 'live']) {
-    await page.click(`[data-mode="${mode}"]`);
-    const editor = `.cm-editor.meo-mode-${mode}`;
-    await page.click(editor + ' .cm-line:nth-child(3)');
-    const cursor = editor + ' > .cm-scroller > .cm-cursorLayer .cm-cursor-primary';
-    await page.waitForSelector(cursor, { visible: true });
-    await page.keyboard.press('Home');
-    for (const scale of [1, 1.25, 1.5, 1.8, 2, 1]) {
-      // Workbench zoom changes both the resolution and the CSS viewport.
-      await page.setViewport({ width: Math.round(1100 / scale), height: Math.round(820 / scale), deviceScaleFactor: scale });
-      for (const position of ['stationary', 'moved']) {
-        if (position === 'moved') await page.keyboard.press('ArrowRight');
-        const probe = await page.$eval(cursor, async marker => {
-          await new Promise(requestAnimationFrame);
-          await new Promise(requestAnimationFrame);
-          const box = marker.getBoundingClientRect();
-          return {
-            left: box.left * devicePixelRatio,
-            middle: (box.top + box.height / 2) * devicePixelRatio,
-            width: box.width * devicePixelRatio
-          };
-        });
-        const { data, info } = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-        const row = Math.floor(probe.middle) * info.width;
-        const columns: number[] = [];
-        const sample: number[][] = [];
-        for (let x = Math.floor(probe.left) - 2; x < Math.ceil(probe.left + probe.width) + 2; x++) {
-          const offset = (row + x) * info.channels;
-          sample.push([...data.subarray(offset, offset + 3)]);
-          if (data[offset] === 69 && data[offset + 1] === 209 && data[offset + 2] === 187) columns.push(x);
+  for (const [appearance, color] of [['dark', 'rgb(255, 255, 255)'], ['light', 'rgb(0, 0, 0)']]) {
+    await openSettings();
+    await page.click(`[data-appearance-mode="${appearance}"]`);
+    await page.click('.settings-close');
+    for (const mode of ['source', 'live']) {
+      await page.click(`[data-mode="${mode}"]`);
+      const editor = `.cm-editor.meo-mode-${mode}`;
+      await page.click(editor + ' .cm-line:nth-child(3)');
+      const cursor = editor + ' > .cm-scroller > .cm-cursorLayer .cm-cursor-primary';
+      await page.waitForSelector(cursor, { visible: true });
+      await page.keyboard.press('Home');
+      for (const scale of [1, 1.25, 1.5, 2, 1]) {
+        await page.setViewport({ width: Math.round(1100 / scale), height: Math.round(820 / scale), deviceScaleFactor: scale });
+        for (const position of ['stationary', 'moved']) {
+          if (position === 'moved') await page.keyboard.press('ArrowRight');
+          const probe = await page.$eval(cursor, async marker => {
+            await new Promise(requestAnimationFrame);
+            await new Promise(requestAnimationFrame);
+            const box = marker.getBoundingClientRect();
+            const style = getComputedStyle(marker);
+            return { left: box.left * devicePixelRatio, middle: (box.top + box.height / 2) * devicePixelRatio,
+              width: box.width, color: style.backgroundColor, transform: style.transform };
+          });
+          const label = `${appearance}/${mode}, ${scale}×, ${position}`;
+          assert.deepEqual({ width: probe.width, color: probe.color, transform: probe.transform },
+            { width: 1, color, transform: 'none' }, label);
+          const painted = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+          const hide = await page.addStyleTag({ content: '.cm-cursor-primary{visibility:hidden!important}' });
+          const hidden = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer();
+          await hide.evaluate(style => style.remove());
+          const row = Math.floor(probe.middle) * painted.info.width;
+          let columns = 0;
+          for (let x = Math.floor(probe.left) - 1; x < Math.ceil(probe.left + scale) + 1; x++) {
+            const offset = (row + x) * painted.info.channels;
+            if (!painted.data.subarray(offset, offset + 3).equals(hidden.subarray(offset, offset + 3))) columns++;
+          }
+          assert.ok(columns >= 1 && columns <= Math.ceil(scale) + 1, `${label}: ${columns} painted columns`);
         }
-        const label = `${mode}, ${scale}×, ${position}`;
-        assert.ok(Math.abs(probe.width - 3) < 0.01, `${label} has a 3-device-pixel width (${probe.width})`);
-        assert.equal(columns.length, 3, `${label} paints a single 3-screen-pixel cursor in the VS Code theme color ${JSON.stringify({ probe, sample })}`);
-        assert.equal(columns[2]! - columns[0]!, 2, `${label} cursor pixels are contiguous`);
       }
     }
   }
   await blink.evaluate(style => style.remove());
   await page.click('[data-mode="source"]');
   await openSettings();
+  await page.click('[data-appearance-mode="auto"]');
   assert.equal(await page.$eval(input('surface'), element => element.getAttribute('title')), null,
     'color inputs must not display native rectangular hints');
   await page.hover(input('surface'));
@@ -199,9 +203,8 @@ try {
   assert.deepEqual(await page.$$eval('.settings-jump', elements => elements.map(e => e.textContent)), ['界面模式', '文档排版', '基础颜色', '高级颜色']);
   const screenshots = process.env.MEO_UI_COLORS_SCREENSHOT_DIR;
   if (screenshots) await fs.mkdir(screenshots, { recursive: true });
-  assert.equal(await caret(), 'rgb(69, 209, 187)', 'Source follows the distinct native cursor color');
-  assert.equal(await value('caret'), '', 'the theme cursor is not stored as an override');
-  assert.equal(await page.$eval('[data-setting="caret"] .appearance-color-swatch', element => (element as HTMLInputElement).value), '#45d1bb');
+  assert.equal(await caret(), 'rgb(255, 255, 255)', 'Source uses white even when the host theme defines a different cursor color');
+  assert.equal(await page.$('[data-setting="caret"]'), null);
   for (const [index, tab] of ['general', 'appearance', 'typing', 'presets', 'shortcuts'].entries()) {
     await page.click(`[data-tab="${tab}"]`);
     assert.deepEqual(await page.evaluate(() => {
@@ -227,10 +230,13 @@ try {
   assert.deepEqual(await page.$$eval('.settings-jump', elements => elements.map(e => e.textContent)), ['高级颜色'], 'filtered navigation contains only matching sections');
   await page.click('.settings-search-clear');
   await page.click('.settings-search'); await page.keyboard.type('光标');
-  assert.deepEqual(await page.$$eval('.appearance-item', elements => elements.map(e => (e as HTMLElement).dataset.setting)), ['caret']);
+  assert.equal(await page.$('.appearance-item'), null, 'cursor color is absent from Chinese appearance search');
   await page.click('.settings-search-clear');
   await page.click('[data-tab="general"]'); await page.click('[data-setting="language"] [data-value="en"]'); await page.click('[data-tab="appearance"]');
   assert.equal(await page.$eval('[data-appearance-mode="auto"]', e => e.textContent), 'Auto');
+  await page.click('.settings-search'); await page.keyboard.type('cursor color');
+  assert.equal(await page.$('.appearance-item'), null, 'cursor color is absent from English appearance search');
+  await page.click('.settings-search-clear');
   await checkControlLayout();
   await checkColorFocus();
   if (screenshots) await page.screenshot({ path: path.join(screenshots, '058-appearance-english.png') });
@@ -257,7 +263,7 @@ try {
     .map(key => [key, document.documentElement.style.getPropertyValue(key)]));
   await page.click('[data-appearance-mode="light"]');
   assert.equal(await role('accent'), 'rgb(0, 105, 204)', 'VS Code dark/MEO light uses the Light 2026 accent');
-  assert.equal(await caret(), 'rgb(32, 32, 32)', 'opposite appearance uses its bundled cursor color');
+  assert.equal(await caret(), 'rgb(0, 0, 0)', 'the cursor uses the effective light appearance');
   assert.equal(await page.$eval(input('surface'), e => (e as HTMLInputElement).placeholder), '默认浅色配色');
   assert.match(await page.$eval('.appearance-color-reset', e => e.getAttribute('aria-label')!), /默认浅色配色/);
   if (screenshots) await page.screenshot({path: path.join(screenshots, '064-default-light.png')});
@@ -302,7 +308,7 @@ try {
   assert.match(await page.$eval('.appearance-note', e => e.textContent!), /dark default palette/);
   assert.match(await page.$eval('.appearance-color-reset', e => e.getAttribute('aria-label')!), /Default dark palette/);
   await page.click('.settings-search'); await page.keyboard.type('Default dark palette');
-  assert.equal(await page.$$eval('.appearance-item', elements => elements.length), 10, 'default palette searches expose all color inputs');
+  assert.equal(await page.$$eval('.appearance-item', elements => elements.length), 9, 'default palette searches expose all color inputs');
   await page.click('.settings-search-clear');
   await page.evaluate(inputs => { for (const [key, value, priority] of inputs) document.documentElement.style.setProperty(key!, value!, priority!); }, originalHostInputs);
   await changeHost('dark'); await page.click('[data-appearance-mode="auto"]');
@@ -392,16 +398,15 @@ try {
   assert.equal(owner.getUiColors().dark.textEmphasis, undefined);
   fail = false; await page.click('.appearance-save-retry'); await saved('dark', 'textEmphasis', '#99CCAA');
   await page.waitForFunction(() => document.querySelector<HTMLElement>('.appearance-save-retry')!.hidden);
-  await edit('caret', '#FFAA44');
-  assert.equal(await caret(), 'rgb(255, 170, 68)', 'a custom cursor previews in Source');
-  await saved('dark', 'caret', '#FFAA44');
+  const previousColors = owner.getUiColors();
+  configuration.set(UI_COLORS_SETTING_KEY, { ...previousColors, dark: { ...previousColors.dark, caret: '#FFAA44' } });
   await page.click('.settings-close'); await openFixture(); await openSettings();
   assert.equal(await value('surface'), '#122739', 'reload receives persisted values');
   assert.equal(await value('textEmphasis'), '#99CCAA');
-  assert.equal(await value('caret'), '#FFAA44', 'the cursor override survives a reload');
+  assert.equal(await page.$('[data-setting="caret"]'), null);
   await page.click('.settings-close'); await page.click('[data-mode="live"]');
   await page.waitForSelector('.meo-md-heading-content');
-  assert.equal(await caret(), 'rgb(255, 170, 68)', 'Live uses the same saved cursor override');
+  assert.equal(await caret(), 'rgb(255, 255, 255)', 'Live ignores the old cursor value and keeps the dark appearance cursor');
   assert.equal(await page.$eval('.meo-md-heading-content', e => getComputedStyle(e).color), await role('text-emphasis-content'), 'saved content emphasis projects its contrast-corrected role onto the actual Live heading');
   const headingContrast = await page.evaluate(() => {
     const ink = getComputedStyle(document.querySelector('.meo-md-heading-content')!).color;
@@ -417,9 +422,7 @@ try {
   await openSettings();
   await page.click('[data-appearance-mode="light"]');
   assert.equal(await value('surface'), '', 'light and dark profiles are independent');
-  assert.equal(await value('caret'), '', 'the dark cursor override stays in its own profile');
-  await edit('caret', '#9B3000'); await saved('light', 'caret', '#9B3000');
-  assert.equal(await caret(), 'rgb(155, 48, 0)', 'Live applies the light cursor override');
+  assert.equal(await caret(), 'rgb(0, 0, 0)', 'Live uses black in light appearance');
   await checkControlLayout(); await checkColorFocus();
   await edit('surface', '#F8F4EF'); await saved('light', 'surface', '#F8F4EF');
   if (screenshots) await page.screenshot({path: path.join(screenshots, '060-appearance-light.png')});
@@ -446,7 +449,7 @@ try {
     window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'HC', type: 'dark', colors: {}, tokenColors: []}}}));
   });
   assert.equal(await role('surface'), 'rgb(34, 39, 46)', 'high contrast uses the native palette');
-  assert.equal(await caret(), 'rgb(255, 255, 0)', 'the high-contrast theme takes precedence over the cursor override');
+  assert.equal(await caret(), 'rgb(255, 255, 255)', 'the fixed dark cursor also applies in high contrast');
   assert.ok(await page.$eval('.appearance-note', e => e.textContent?.includes('高对比度')));
   await checkPlaceholders('native high contrast', 7);
   if (screenshots) await page.screenshot({ path: path.join(screenshots, 'appearance-high-contrast.png') });
@@ -456,9 +459,7 @@ try {
     window.dispatchEvent(new MessageEvent('message', {data: {type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: {name: 'dark', type: 'dark', colors: {}, tokenColors: []}}}));
   });
   assert.equal(await value('surface'), '#122739');
-  assert.equal(await caret(), 'rgb(255, 170, 68)', 'returning to a regular theme restores the override');
-  await page.click('[data-setting="caret"] .appearance-color-reset'); await saved('dark', 'caret', null);
-  assert.equal(await caret(), 'rgb(152, 210, 255)', 'reset follows the newly applied VS Code theme in Live');
+  assert.equal(await caret(), 'rgb(255, 255, 255)', 'dark remains white after a host theme change');
   if (screenshots) await page.screenshot({ path: path.join(screenshots, 'appearance-cursor-dark.png') });
   await page.click(resetColors); await saved('dark', 'surface', null); await saved('light', 'surface', null);
   assert.deepEqual(owner.getUiColors(), {light: {}, dark: {}}, 'reset immediately clears both profiles');
@@ -548,7 +549,7 @@ try {
         recolored: getComputedStyle(link).color !== before,
         caret: window.readEditorCaretColor(view.contentDOM)};
     });
-    assert.deepEqual(stable, {state: true, line: true, link: true, scroll: true, recolored: true, caret: 'rgb(155, 48, 0)'}, `${large ? 'large' : 'ordinary'} document color changes preserve editor state, DOM and viewport`);
+    assert.deepEqual(stable, {state: true, line: true, link: true, scroll: true, recolored: true, caret: 'rgb(0, 0, 0)'}, `${large ? 'large' : 'ordinary'} document color changes preserve editor state, DOM and viewport`);
     await page.evaluate(() => window.dispatchEvent(new MessageEvent('message', {data: {type: 'uiColorsChanged', colors: {light: {}, dark: {}}}})));
   }
   const checkFeedbackAction = async (label: string, blue = true) => {
