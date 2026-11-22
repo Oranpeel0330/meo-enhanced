@@ -2895,7 +2895,7 @@ html[data-editor-appearance='dark'] .cm-editor.meo-mode-live {
   display: none;
 }
 
-.cm-editor.meo-mode-live .meo-md-marker-active {
+.cm-editor.meo-mode-live :is(.meo-md-marker-active, .meo-md-table-inline-marker) {
   display: inline !important;
   line-height: inherit;
   color: var(--meo-semantic-markdownSyntax) !important;
@@ -3105,15 +3105,15 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
   -webkit-text-fill-color: var(--meo-ui-link) !important;
 }
 
-.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active),
-.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active) * {
+.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active, .meo-md-table-inline-marker),
+.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active, .meo-md-table-inline-marker) * {
   font-style: normal !important;
   font-weight: var(--meo-markdown-marker-font-weight) !important;
   text-decoration: none !important;
 }
 
-.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active)::selection,
-.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active) *::selection {
+.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active, .meo-md-table-inline-marker)::selection,
+.cm-editor.meo-mode-live :is(.meo-md-marker, .meo-md-marker-active, .meo-md-code-marker, .meo-md-code-marker-active, .meo-md-table-inline-marker) *::selection {
   color: var(--meo-semantic-markdownSyntax) !important;
   -webkit-text-fill-color: var(--meo-semantic-markdownSyntax) !important;
 }
@@ -7613,9 +7613,13 @@ html[data-editor-appearance='dark'] body.vscode-dark
 }
 
 .cm-editor.meo-mode-live .meo-md-table-active-list-item:has(.is-prefix-source)::marker,
-.cm-editor.meo-mode-live .is-cell-composing .meo-md-table-active-list-item::marker,
-.cm-editor .is-cell-composing .meo-md-table-source-text {
+.cm-editor.meo-mode-live .is-cell-composing .meo-md-table-active-list-item::marker {
   color: transparent;
+}
+
+/* The native textarea paints the active line during IME composition. */
+.cm-editor .is-cell-composing .meo-md-table-source-text {
+  visibility: hidden;
 }
 
 .cm-editor .meo-md-table-task-content:has(.is-prefix-source) > .meo-md-html-table-cell-task-checkbox,

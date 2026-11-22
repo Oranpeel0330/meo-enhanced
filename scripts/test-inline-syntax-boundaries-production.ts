@@ -56,6 +56,7 @@ async function snapshot(page: Page, selector: string, witnessTexts: readonly str
 const failures: string[] = [];
 
 async function checkLocalSource(page: Page) {
+  const paddedCode = '`` Padded \\| code ``';
   const fragments: ReadonlyArray<readonly [string, string, string?]> = [
     ['**Alpha**', 'Alpha'], ['_Beta_', 'Beta'], ['~~Gamma~~', 'Gamma'],
     ['==Delta==', 'Delta'], ['`Epsilon`', 'Epsilon'], ['~lower~', 'lower'],
@@ -66,8 +67,16 @@ async function checkLocalSource(page: Page) {
     ['**LinkedBold**', 'LinkedBold', '[**LinkedBold**](https://example.test/wrapped-label "title")'],
     ['**PairedLabel**', 'PairedLabel', '[**PairedLabel** ![LabelImage](fixture.svg)](https://example.test/with-image)'],
     ['`PathCode`', 'PathCode', '**Tool `PathCode` and _SiblingWitness_**'],
+    [paddedCode, 'Padded'],
     ['_Inner_', 'Inner', '**Parent _Inner_ tail**']
   ];
+  const formatWitnesses: Record<string, readonly [string, keyof CSSStyleDeclaration]> = {
+    Alpha: ['strong', 'fontWeight'], Beta: ['em', 'fontStyle'], Gamma: ['.meo-md-strike', 'textDecorationLine'],
+    Delta: ['mark', 'backgroundColor'], Epsilon: ['code', 'backgroundColor'], lower: ['sub', 'verticalAlign'],
+    upper: ['sup', 'verticalAlign'], Label: ['.meo-md-link', 'color'], Wiki: ['.meo-md-link', 'color'],
+    Tab: ['kbd', 'borderBottomWidth'], HtmlCode: ['code', 'fontFamily'], auto: ['.meo-md-link', 'color'],
+    LinkedBold: ['.meo-md-link strong', 'fontWeight'], PathCode: ['strong code', 'fontFamily'], Padded: ['code', 'fontFamily']
+  };
   const text = fragments.map(([raw, , markup]) => markup ?? raw).join(' and ')
     + ' then **LeftEdge**`RightEdge` afterward<br>Break witness<BR />Last witness';
   for (const large of [false, true]) for (const table of [false, true]) {
@@ -75,9 +84,10 @@ async function checkLocalSource(page: Page) {
       + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
     const source = (table ? `| Header |\n| --- |\n| ${text} |` : `> ## ${text}`) + suffix;
     const root = table ? 'tbody .meo-md-html-table-cell-preview' : '.cm-content';
-    await page.evaluate(source => {
+    await page.evaluate(({ source, large }) => {
       const harness = (window as any).InlineCodeLayoutHarness;
       (window as any).boundaryEditor?.destroy();
+      harness.applyBuiltInVisualBaseline(large ? 'light' : 'dark');
       harness.setImageSrcResolver(() => 'data:image/svg+xml,' + encodeURIComponent(
         '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="48"><rect width="24" height="48" fill="teal"/></svg>'
       ));
@@ -85,22 +95,37 @@ async function checkLocalSource(page: Page) {
         parent: document.getElementById('app'), text: source, initialMode: 'live', onApplyChanges() {}
       });
       editor.view.dispatch({ selection: { anchor: source.indexOf('After.') } });
-    }, source);
+    }, { source, large });
     await page.waitForFunction(large => (window as any).InlineCodeLayoutHarness
       .usesLargeDocumentDerivedWorkBudget((window as any).boundaryEditor.view.state) === large, {}, large);
     await page.waitForSelector('.cm-content .meo-md-image-img');
-    const pointIn = (selector: string, word: string) => page.$eval(selector, (element, word) => {
+    const readFormats = (witnesses: typeof formatWitnesses) => page.$eval(root, (root, witnesses) => {
+      const formats: Record<string, unknown> = {};
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        for (const [word, [selector, property]] of Object.entries(witnesses)) {
+          if (word in formats || !node.textContent?.includes(word)) continue;
+          const element = node.parentElement?.closest(selector);
+          if (element) formats[word] = getComputedStyle(element)[property];
+        }
+      }
+      return formats;
+    }, witnesses);
+    const readingFormats = table ? await readFormats(formatWitnesses) : {};
+    if (table) assert.equal(Object.keys(readingFormats).length, Object.keys(formatWitnesses).length, 'all reading style witnesses are visible in the cell');
+    const pointIn = (selector: string, word: string, offset = 2) => page.$eval(selector, (element, { word, offset }) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
       let text = walker.nextNode();
       while (text && !text.textContent?.includes(word)) text = walker.nextNode();
       if (!text) throw new Error(`Missing click target ${word}`);
       const start = text.textContent!.indexOf(word);
       const range = document.createRange();
-      range.setStart(text, start + 2);
-      range.setEnd(text, start + 3);
+      range.setStart(text, start + offset);
+      range.setEnd(text, start + offset + 1);
       const rect = range.getBoundingClientRect();
       return { x: rect.left + rect.width / 5, y: rect.top + rect.height / 2 };
-    }, word);
+    }, { word, offset });
     const boldPoint = await pointIn(`${root} ${table ? 'strong' : '.meo-md-strong'}`, 'Alpha');
     const reading = table ? await page.$eval('tbody tr', row => row.getBoundingClientRect().height) : 0;
     await page.mouse.move(boldPoint.x, boldPoint.y);
@@ -155,6 +180,9 @@ async function checkLocalSource(page: Page) {
         assert.ok(await page.$(`${root} img[alt="LabelImage"]`), 'an image next to the active label fragment stays rendered');
       }
       if (table) {
+        const witness = formatWitnesses[word];
+        if (witness) assert.deepEqual(await readFormats({ [word]: witness }), { [word]: readingFormats[word] },
+          `revealing ${raw} retains the displayed style of ${word}`);
         assert.ok(await page.$eval('tbody tr', row => row.getBoundingClientRect().height) >= reading - 1,
           `${raw} retains its row's reading height`);
       } else {
@@ -213,6 +241,50 @@ async function checkLocalSource(page: Page) {
     if (!large && process.env.MEO_TEST_SCREENSHOTS) {
       fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
       await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `local-source-${table ? 'table' : 'prose'}.png`) });
+    }
+    if (table) {
+      await placeCaret(paddedCode, 4);
+      await settle(page);
+      const projected = `${root} .meo-md-table-inline-source`;
+      const appearance = await page.$eval(projected, el => {
+        const markers = Array.from(el.querySelectorAll('.meo-md-table-inline-marker'));
+        const code = el.querySelector('code')!;
+        return {
+          markers: markers.map(marker => marker.textContent),
+          visible: markers.every(marker => marker.getBoundingClientRect().width > 0),
+          ink: markers.map(marker => getComputedStyle(marker).webkitTextFillColor),
+          codeInk: getComputedStyle(code).webkitTextFillColor
+        };
+      });
+      assert.deepEqual(appearance.markers, ['``', '``']);
+      assert.ok(appearance.visible && appearance.ink[0] === appearance.ink[1] && appearance.ink[0] !== appearance.codeInk,
+        'visible source punctuation uses the theme syntax color beside styled code');
+      const delimiter = await pointIn(`${projected} .meo-md-table-inline-marker`, '``', 1);
+      await page.mouse.click(delimiter.x, delimiter.y);
+      assert(await page.$eval('tbody textarea', (input, raw) => input.selectionStart === input.value.indexOf(raw) + 1, paddedCode),
+        'the second backtick maps to the original source offset');
+      const escape = await pointIn(`${projected} code`, '\\|', 0);
+      await page.mouse.click(escape.x, escape.y);
+      assert(await page.$eval('tbody textarea', input => input.selectionStart === input.value.indexOf('\\|')),
+        'the restored escape character inside styled code has a precise caret');
+      const composition = await page.createCDPSession();
+      try {
+        await composition.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 });
+        const preedit = await page.$eval('tbody textarea', input => ({
+          value: input.value,
+          markerVisibility: getComputedStyle(input.parentElement!.querySelector('.meo-md-table-inline-marker')!).visibility,
+          codeVisibility: getComputedStyle(input.parentElement!.querySelector('.meo-md-table-inline-source code')!).visibility
+        }));
+        assert.ok(preedit.value.includes(' Padded zhong\\| code '), 'the native input receives the composition at the clicked offset');
+        assert.equal(preedit.markerVisibility, 'hidden', 'the native composition owns the punctuation paint');
+        assert.equal(preedit.codeVisibility, 'hidden', 'the native composition owns the text paint');
+        await composition.send('Input.insertText', { text: '中' });
+      } finally {
+        await composition.detach();
+      }
+      assert.equal(await page.$eval(`${projected} code`, code => code.textContent), ' Padded 中\\| code ');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(() => (window as any).boundaryEditor.undo()), true);
     }
     assert.equal(await page.evaluate(() => (window as any).boundaryEditor.getText()), source);
     if (table) await page.keyboard.press('Escape');
