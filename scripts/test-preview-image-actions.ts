@@ -64,6 +64,7 @@ try {
       '[![linked](linked.svg)](https://example.com/image-link)',
       `<img src="${new URL('/remote.svg', server.url)}" width="160" alt="html">`,
       `<picture><source media="(min-width: 1px)" srcset="${new URL('/picture.svg', server.url)} 1x, ${new URL('/picture-2x.svg', server.url)} 2x"><img src="fallback.svg" width="160" alt="picture"></picture>`,
+      '<img src="small.svg" width="18" alt="small">',
       '![broken](broken.svg)',
       ...Array.from({ length: large ? 2800 : 30 }, (_, index) => `Paragraph ${index}: ` + 'reading content '.repeat(28))].join('\n\n');
     assert.equal(assessLargeDocument(text).windowedPreview, large);
@@ -94,9 +95,17 @@ try {
       if (box.y + box.height <= viewport.y || box.y >= viewport.y + viewport.height) {
         await image.scrollIntoView(); box = await image.boundingBox(); assert.ok(box);
       }
-      await page.mouse.move(box.x + box.width / 2, Math.max(viewport.y + 30, Math.min(box.y + box.height / 2, viewport.y + viewport.height - 30)));
+      const visibleTop = Math.max(box.y, viewport.y);
+      const visibleBottom = Math.min(box.y + box.height, viewport.y + viewport.height);
+      await page.mouse.move(box.x + box.width / 2, (visibleTop + visibleBottom) / 2);
       const action = await frame.$(`:is(img[alt="${alt}"], picture:has(img[alt="${alt}"]), a:has(img[alt="${alt}"])) + .meo-preview-image-actions > [role="button"]:nth-child(${index + 1})`);
       const point = await action!.boundingBox(); assert.ok(point);
+      const hit = await action!.evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return { match: button.contains(hit), hit: hit?.outerHTML.slice(0, 140), opacity: getComputedStyle(button.parentElement!).opacity };
+      });
+      assert.ok(hit.match, `${alt} action ${index} could not be hit: ${JSON.stringify(hit)}`);
       await page.mouse.click(point.x + point.width / 2, point.y + point.height / 2);
     };
     await clickAction('local', 1);
@@ -201,6 +210,33 @@ try {
     assert.equal(await frame.$eval('img[alt="html"] + .meo-preview-image-actions > [role="button"]:nth-child(2)', node => node.getAttribute('aria-label')),
       language === 'en' ? 'Open image in browser' : '在浏览器中打开图片');
     await page.screenshot({ path: `${output}/${large}-${layout}-${appearance}-controls.png` });
+    await waitImage('small');
+    const small = await frame.$('img[alt="small"]');
+    assert.ok(small);
+    await small.scrollIntoView();
+    await small.hover();
+    const smallToolbar = await small.evaluate(image => {
+      const toolbar = image.nextElementSibling!;
+      const picture = image.getBoundingClientRect(), actions = toolbar.getBoundingClientRect();
+      return {
+        outside: actions.bottom <= picture.top + 1 || actions.top >= picture.bottom - 1,
+        reachable: Array.from(toolbar.children, button => {
+          const rect = button.getBoundingClientRect();
+          return button.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
+        })
+      };
+    });
+    assert.deepEqual(smallToolbar, { outside: true, reachable: [true, true, true] },
+      'small Preview images expose their complete toolbar outside the image');
+    const smallImageBox = await small.boundingBox();
+    const smallAction = await frame.$('img[alt="small"] + .meo-preview-image-actions > [role="button"]:last-child');
+    const smallActionBox = await smallAction?.boundingBox();
+    assert.ok(smallImageBox && smallActionBox);
+    const target = { x: smallActionBox.x + smallActionBox.width / 2, y: smallActionBox.y + smallActionBox.height / 2 };
+    await page.mouse.move(smallImageBox.x + smallImageBox.width / 2, target.y, { steps: 5 });
+    await page.mouse.move(target.x, target.y, { steps: 5 });
+    assert.equal(await smallAction!.evaluate(button => getComputedStyle(button.parentElement!).opacity), '1');
+    await page.screenshot({ path: `${output}/${large}-${layout}-${appearance}-small-controls.png` });
     if (large) {
       await page.evaluate(() => (window as any).__previewController.restoreTopLine(4000));
       await page.waitForFunction(() => !document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.querySelector('img[alt="local"]'));

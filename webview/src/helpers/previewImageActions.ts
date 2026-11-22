@@ -1,6 +1,7 @@
 import { AppWindow, createElement, Maximize2, RefreshCw } from 'lucide';
 import { getUiStrings, type UiLanguage } from '../application/uiLanguage';
 import { openImageFullscreen, type ImageFullscreenViewer } from './imageFullscreen';
+import { placeImageToolbar } from './imageToolbarPlacement';
 import { focusRenderedBlockAction, suppressRenderedBlockPointerFocus } from './renderedBlockActionFocus';
 
 type ImageActions = {
@@ -32,13 +33,7 @@ export function createPreviewImageActions(owner: Document, options: {
   const ready = (image: HTMLImageElement) => image.complete && image.naturalWidth > 0
     && !image.hasAttribute('data-meo-deferred-image-src') && image.dataset.meoPreviewImageReady === 'true';
   const position = (record: ImageActions) => {
-    const bounds = record.image.getBoundingClientRect();
-    const width = owner.documentElement.clientWidth, height = owner.documentElement.clientHeight;
-    const visible = bounds.width > 0 && bounds.height > 0 && bounds.bottom > 0 && bounds.right > 0 && bounds.top < height && bounds.left < width;
-    record.controls.hidden = !visible;
-    if (!visible) return;
-    record.controls.style.left = `${Math.max(8, Math.min(bounds.right - record.controls.offsetWidth - 5, width - record.controls.offsetWidth - 8))}px`;
-    record.controls.style.top = `${Math.max(4, bounds.top + 4)}px`;
+    record.controls.hidden = !placeImageToolbar(record.image, record.controls, null, 4);
   };
   const schedulePosition = () => {
     if (frame !== null) return;
@@ -188,7 +183,10 @@ export function createPreviewImageActions(owner: Document, options: {
 }
 
 export const previewImageActionStyles = `
-.meo-preview-image-actions { position: fixed; top: 0; left: 0; right: auto; padding: 2px; border-radius: 6px; background: var(--meo-bg); }
+.meo-preview-image-actions { position: fixed; top: 0; left: 0; right: auto; box-sizing: border-box;
+  width: max-content; flex-wrap: wrap; padding: 2px; border-radius: 6px; background: var(--meo-bg); }
+.meo-preview-image-actions > [role="button"] { flex: none; }
+.meo-preview-image-actions > .meo-preview-action-status { top: calc(100% + 1px); }
 .meo-preview-image-actions[data-meo-image-hover] { opacity: 1; pointer-events: auto; }
 .meo-preview-image-actions[hidden] { display: none; }
 `;

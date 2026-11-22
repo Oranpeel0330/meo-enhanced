@@ -5583,12 +5583,31 @@ html[data-editor-appearance='light'] .meo-visual-control-btn {
 }
 
 .cm-editor .meo-md-image-controls {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: max-content;
+  flex-wrap: wrap;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.15s ease;
 }
 
-.cm-editor .meo-md-image:hover .meo-md-image-controls {
+.cm-editor .meo-md-image-controls > button {
+  flex: none;
+  pointer-events: none;
+}
+
+.cm-editor .meo-md-image-controls[data-meo-image-hover] {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.cm-editor .meo-md-image-controls[data-meo-image-hover] > button {
+  pointer-events: auto;
+}
+
+.cm-editor .meo-md-html-table-cell-content:has(.meo-md-image-controls[data-meo-image-hover]) {
+  z-index: 2;
 }
 
 .meo-md-image-fullscreen-scrim {

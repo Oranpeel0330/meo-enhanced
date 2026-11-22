@@ -332,7 +332,7 @@ const tableCellEditMinHeight = '--meo-table-cell-edit-min-height';
 const possibleTableReferenceLink = /\[[^\]\n]+\](?!\()/;
 const tableCellCaretNavigationKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const tableCellTextSelectingClass = 'meo-md-html-table-cell-text-selecting';
-const tableControlSelector = '.meo-md-html-table-context-trigger, .meo-md-html-table-context-menu, .meo-md-html-table-context-btn, .meo-md-link-open-btn, .meo-md-color-swatch-interactive, .meo-md-html-table-column-resize-handle';
+const tableControlSelector = '.meo-md-html-table-context-trigger, .meo-md-html-table-context-menu, .meo-md-html-table-context-btn, .meo-md-link-open-btn, .meo-md-image-controls, .meo-md-color-swatch-interactive, .meo-md-html-table-column-resize-handle';
 const tableCellAutoCommitDelayMs = 250;
 // Chromium reports fractional caret bounds while scrollTop is effectively
 // quantized. Treat sub-pixel differences as visible so reveal retries settle.
@@ -848,7 +848,7 @@ function isModifierLinkActivationEvent(event: PointerEvent): boolean {
 function getModifierLinkActivationHref(event: PointerEvent): string {
   if (!isPrimaryModifierPointerClick(event)) return '';
   const target = targetElementFrom(event.target);
-  if (!target) return '';
+  if (!target || target.closest('.meo-md-image-controls')) return '';
   const link = target.closest('[data-meo-link-href]');
   if (!(link instanceof Element)) return '';
   const href = link.getAttribute('data-meo-link-href');

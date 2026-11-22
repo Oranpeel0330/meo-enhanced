@@ -117,14 +117,6 @@ async function main(): Promise<void> {
       const animations = controls.flatMap((control) => control.getAnimations({ subtree: true }));
       await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
     });
-    const hoverPoints = await page.$$eval('.meo-md-image', (images) => images.map((image) => {
-      const imageRect = image.querySelector<HTMLElement>('.meo-md-image-img')!.getBoundingClientRect();
-      const controlsRect = image.querySelector<HTMLElement>('.meo-md-image-controls')!.getBoundingClientRect();
-      return {
-        image: { x: imageRect.left + 8, y: imageRect.bottom - 8 },
-        controls: { x: controlsRect.left + controlsRect.width / 2, y: controlsRect.top + controlsRect.height / 2 }
-      };
-    }));
     const readImagePoint = (index: number) => page.$$eval('.meo-md-image-img', (images, targetIndex) => {
       const rect = images[targetIndex]!.getBoundingClientRect();
       return { x: rect.left + 8, y: rect.bottom - 8 };
@@ -135,14 +127,19 @@ async function main(): Promise<void> {
       { hovered: false, opacity: 0 }
     ], 'loaded Live image controls should start hidden');
 
-    await page.mouse.move(hoverPoints[0].image.x, hoverPoints[0].image.y);
+    const firstImagePoint = await readImagePoint(0);
+    await page.mouse.move(firstImagePoint.x, firstImagePoint.y);
     await settleControlAnimations();
     assert.deepEqual(await readHoverState(), [
       { hovered: true, opacity: 1 },
       { hovered: false, opacity: 0 }
     ], 'only the currently hovered image should expose controls');
 
-    await page.mouse.move(hoverPoints[0].controls.x, hoverPoints[0].controls.y);
+    const firstToolbar = await page.$eval('.meo-md-image-controls', controls => {
+      const rect = controls.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.move(firstToolbar.x, firstToolbar.y);
     await settleControlAnimations();
     assert.deepEqual(await readHoverState(), [
       { hovered: true, opacity: 1 },
@@ -247,6 +244,118 @@ async function main(): Promise<void> {
       (window as any).__imageHoverEditor.destroy();
       document.getElementById('app')!.replaceChildren();
     });
+
+    for (const large of [false, true]) {
+      await page.evaluate((large) => {
+        const harness = (window as any).TableStabilityHarness;
+        harness.setImageSrcResolver((url: string) => {
+          const width = url === 'narrow.svg' ? 24 : 160;
+          const height = url === 'short.svg' ? 12 : 90;
+          return 'data:image/svg+xml,' + encodeURIComponent(
+            `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="teal"/></svg>`
+          );
+        });
+        const editor = harness.createEditor({
+          parent: document.getElementById('app')!,
+          text: [
+            '![Short](short.svg)',
+            '',
+            '![Regular](regular.svg)',
+            '![Narrow](narrow.svg)',
+            '',
+            '| [![Linked table image](narrow.svg)](#target) | Text |',
+            '| --- | --- |',
+            '| Other cell | Next column |',
+            '',
+            '# target',
+            ...(large ? ['', 'padding text\n'.repeat(8100)] : [])
+          ].join('\n'),
+          initialMode: 'live',
+          onApplyChanges() {}
+        });
+        if (harness.usesLargeDocumentDerivedWorkBudget(editor.view.state) !== large) throw new Error('Unexpected document budget');
+        (window as any).__imageHoverEditor = editor;
+      }, large);
+      for (const [alt, expected, compact = false] of [
+        ['Short', 'below'], ['Regular', 'inside'], ['Narrow', 'above'], ['Linked table image', 'above'], ['Narrow', 'above', true]
+      ] as const) {
+        await page.mouse.move(1, 1);
+        if (compact) {
+          await page.$eval('#app', async app => {
+            (app as HTMLElement).style.width = '140px';
+            // Let the document and table settle their resize before measuring hover.
+            for (let frame = 0; frame < 4; frame++) await new Promise(requestAnimationFrame);
+          });
+        }
+        const image = await page.waitForSelector(`.meo-md-image-img[alt="${alt}"]`, { visible: true });
+        assert.ok(image);
+        const before = await image.evaluate(image => ({
+          rect: image.getBoundingClientRect().toJSON(),
+          scrollHeight: image.closest('.cm-scroller')!.scrollHeight
+        }));
+        const visibleTop = Math.max(0, before.rect.top);
+        await page.mouse.move(before.rect.left + before.rect.width / 2, (visibleTop + before.rect.bottom) / 2);
+        await settleControlAnimations();
+        const geometry = await image.evaluate(image => {
+          const toolbar = image.parentElement!.querySelector('.meo-md-image-controls')!;
+          const picture = image.getBoundingClientRect(), actions = toolbar.getBoundingClientRect();
+          const placement = actions.bottom <= picture.top + 1 ? 'above' : actions.top >= picture.bottom - 1 ? 'below'
+            : actions.left >= picture.left && actions.right <= picture.right && actions.top >= picture.top && actions.bottom <= picture.bottom
+              ? 'inside' : 'overlapping';
+          const buttons = Array.from(toolbar.querySelectorAll('button'), button => {
+            const rect = button.getBoundingClientRect();
+            const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+            return { x, y, reachable: button.contains(document.elementFromPoint(x, y)) };
+          });
+          return { placement, opacity: getComputedStyle(toolbar).opacity, buttons,
+            topInset: actions.top - picture.top, rightInset: picture.right - actions.right,
+            toolbarLeft: actions.left, toolbarWidth: actions.width,
+            gutterRight: image.closest('.cm-scroller')!.querySelector('.cm-gutters')!.getBoundingClientRect().right,
+            rect: picture.toJSON(), scrollHeight: image.closest('.cm-scroller')!.scrollHeight };
+        });
+        assert.equal(geometry.opacity, '1', alt);
+        assert.equal(geometry.placement, expected, alt);
+        assert.deepEqual({ rect: geometry.rect, scrollHeight: geometry.scrollHeight }, before, 'hover preserves image and scroll geometry');
+        assert.equal(geometry.buttons.length, alt === 'Linked table image' ? 4 : 3);
+        assert.ok(geometry.buttons.every(button => button.reachable), `${alt} exposes all buttons`);
+        if (expected === 'inside') {
+          assert.ok(Math.abs(geometry.topInset - 5) < 0.5, 'the regular toolbar keeps its top inset');
+          assert.ok(Math.abs(geometry.rightInset - 5) < 0.5, 'the regular toolbar keeps its right inset');
+        }
+        if (alt === 'Narrow' && !compact) {
+          assert.ok(before.rect.left + (before.rect.width - geometry.toolbarWidth) / 2 < geometry.gutterRight,
+            'the centered toolbar would cross the gutter');
+          assert.ok(geometry.toolbarLeft >= geometry.gutterRight, 'the toolbar moves horizontally into the editor view');
+        }
+        if (compact) assert.ok(new Set(geometry.buttons.map(button => button.y)).size > 1, 'the toolbar wraps when the editor is extremely narrow');
+        if (expected !== 'inside') {
+          const fullscreen = geometry.buttons.at(-1)!;
+          await page.mouse.move(geometry.rect.left + geometry.rect.width / 2, fullscreen.y, { steps: 5 });
+          await page.mouse.move(fullscreen.x, fullscreen.y, { steps: 5 });
+          const toolbarOpacity = () => image.evaluate(image =>
+            getComputedStyle(image.parentElement!.querySelector('.meo-md-image-controls')!).opacity
+          );
+          await settleControlAnimations();
+          assert.equal(await toolbarOpacity(), '1', `${alt} keeps the toolbar visible during pointer travel`);
+          if (alt === 'Linked table image') {
+            if (process.env.MEO_TEST_SCREENSHOTS && !large) {
+              await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'live-small-image-toolbar.png') });
+            }
+            await page.mouse.click(fullscreen.x, fullscreen.y);
+            await page.waitForSelector('.meo-md-image-fullscreen');
+            await page.keyboard.press('Escape');
+            await page.waitForSelector('.meo-md-image-fullscreen', { hidden: true });
+          }
+          await page.mouse.move(1, 1);
+          await settleControlAnimations();
+          assert.equal(await toolbarOpacity(), '0', `${alt} hides the toolbar after the pointer leaves`);
+        }
+      }
+      await page.$eval('#app', (app) => {
+        (window as any).__imageHoverEditor.destroy();
+        (app as HTMLElement).style.width = '';
+      });
+    }
 
     const result = await page.evaluate(async () => {
       const harness = (window as any).TableStabilityHarness;

@@ -15,6 +15,7 @@ import { getUiStrings, type UiLanguage } from '../application/uiLanguage';
 import { encodeMarkdownPath } from '../../../src/foundation/linkDestination';
 import { isWikiImageTarget, parseWikiReference, wikiImageSrc, wikiTargetFromImageSrc, WIKI_IMAGE_SCHEME } from '../../../src/foundation/wikiReference';
 import { openImageFullscreen, type ImageFullscreenViewer } from './imageFullscreen';
+import { placeImageToolbar } from './imageToolbarPlacement';
 import { getEnclosingSourceLinkHref, hrefFromSourceLinkNode, isPrimaryModifierPointerClick } from './linkNavigation';
 import { createLinkOpenIcon } from './linkOpenButton';
 
@@ -69,6 +70,7 @@ type ImageMount = {
   presentationHandle: ImagePresentationHandle | null;
   wikiPresentation?: WikiImagePresentation;
   fullscreenViewer: ImageFullscreenViewer | null;
+  disposeToolbar?: () => void;
 };
 type ImageElement = HTMLElement & { __meoImageMount?: ImageMount };
 type ImageDoubleClickCandidate = {
@@ -427,6 +429,8 @@ export class ImageWidget extends WidgetType {
     const presentationHandle = this.presentationFactory.create({
       showFallback: () => {
         if (mount.disposed) return false;
+        mount.disposeToolbar?.();
+        mount.disposeToolbar = undefined;
         this.renderFallback(container);
         return true;
       },
@@ -435,7 +439,10 @@ export class ImageWidget extends WidgetType {
         const image = this.createDisplayImage(loadedImage);
         delete container.dataset.tooltip;
         container.classList.remove('meo-md-image-fallback');
-        container.replaceChildren(image, this.createImageControls(image, mount));
+        mount.disposeToolbar?.();
+        const controls = this.createImageControls(image, mount);
+        container.replaceChildren(image, controls);
+        mount.disposeToolbar = this.attachImageToolbar(container, image, controls);
         return true;
       },
       preserveLayoutChange: (apply) => this.preserveImageLayoutChange(container, view, apply),
@@ -598,6 +605,54 @@ export class ImageWidget extends WidgetType {
     return `![${this.altText}](${this.url})`;
   }
 
+  private attachImageToolbar(container: HTMLElement, image: HTMLImageElement, controls: HTMLElement): () => void {
+    const owner = container.ownerDocument;
+    const browser = owner.defaultView!;
+    const lifetime = new AbortController();
+    let tracking: AbortController | undefined;
+    let resize: ResizeObserver | undefined;
+    let frame: number | undefined;
+    const hide = () => {
+      delete controls.dataset.meoImageHover;
+      tracking?.abort();
+      tracking = undefined;
+      resize?.disconnect();
+      resize = undefined;
+      if (frame !== undefined) browser.cancelAnimationFrame(frame);
+      frame = undefined;
+    };
+    const show = () => {
+      if (tracking || !container.isConnected) return;
+      const scroller = container.closest<HTMLElement>('.cm-scroller');
+      const place = () => {
+        if (container.isConnected && placeImageToolbar(image, controls, scroller)) controls.dataset.meoImageHover = 'true';
+        else hide();
+      };
+      const schedule = () => {
+        if (frame === undefined) frame = browser.requestAnimationFrame(() => {
+          frame = undefined;
+          place();
+        });
+      };
+      place();
+      if (!controls.hasAttribute('data-meo-image-hover')) return;
+      tracking = new AbortController();
+      const { signal } = tracking;
+      owner.addEventListener('scroll', schedule, { capture: true, passive: true, signal });
+      browser.addEventListener('resize', schedule, { signal });
+      resize = new ResizeObserver(schedule);
+      resize.observe(image);
+      if (scroller) resize.observe(scroller);
+    };
+    container.addEventListener('pointerenter', show, { signal: lifetime.signal });
+    container.addEventListener('pointerleave', hide, { signal: lifetime.signal });
+    if (container.matches(':hover')) show();
+    return () => {
+      hide();
+      lifetime.abort();
+    };
+  }
+
   private createImageControls(img: HTMLImageElement, mount: ImageMount): HTMLElement {
     const strings = getUiStrings(this.uiLanguage);
     const controls = document.createElement('div');
@@ -718,6 +773,8 @@ export class ImageWidget extends WidgetType {
     if (!mount) return;
     delete container.__meoImageMount;
     mount.disposed = true;
+    mount.disposeToolbar?.();
+    mount.disposeToolbar = undefined;
     if (mount.wikiPresentation) wikiImagePresentations.delete(mount.wikiPresentation);
     mount.wikiPresentation = undefined;
     mount.presentationHandle?.dispose();
