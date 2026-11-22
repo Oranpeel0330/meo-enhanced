@@ -3631,7 +3631,9 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
   width: 0.78em;
   height: 0.78em;
   margin: 0 0.28em 0 0.08em;
-  vertical-align: 0.08em;
+  vertical-align: middle;
+  /* Align to the center of the HEX digits while keeping the line box height. */
+  margin-block: calc((1ex - 1cap) / 2) calc((1cap - 1ex) / 2);
   border: 1px solid color-mix(in srgb, currentColor 55%, transparent);
   border-radius: 2px;
   box-sizing: border-box;

@@ -11,7 +11,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-table-colors-'));
 async function checkSwatchesWhileEditing(page: Page): Promise<void> {
   await page.setViewport({ width: 1100, height: 700 });
   for (const large of [false, true]) for (const table of [false, true]) {
-    const line = 'Color #336699 and **sample #AA4411**';
+    const line = '#336699 and **#AA4411**';
     const source = (table ? `| Color |\n| --- |\n| ${line} |` : line) + '\n\nAfter.'
       + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
     const label = `${table ? 'table' : 'prose'}/${large ? 'optimized' : 'ordinary'}`;
@@ -44,16 +44,45 @@ async function checkSwatchesWhileEditing(page: Page): Promise<void> {
     const visibleSwatches = () => page.$$eval(`${root} .meo-md-color-swatch`, elements =>
       elements.filter(element => element.getBoundingClientRect().width > 0 && getComputedStyle(element).visibility === 'visible')
         .map(element => (element as HTMLElement).style.backgroundColor));
+    const swatchAlignment = () => page.$eval(
+      `${root} .meo-md-color-swatch:is([data-color-value="#AA4411"], [data-tooltip="#AA4411"])`,
+      (swatch, root) => {
+        const walker = document.createTreeWalker(swatch.closest(root)!, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const index = node.textContent!.indexOf('#AA4411');
+          if (index < 0) continue;
+          const range = document.createRange();
+          range.setStart(node, index);
+          range.setEnd(node, index + '#AA4411'.length);
+          const swatchRect = swatch.getBoundingClientRect();
+          const textRect = range.getBoundingClientRect();
+          return { tag: swatch.tagName, offset: swatchRect.y + swatchRect.height / 2 - (textRect.y + textRect.height / 2) };
+        }
+        throw new Error('Missing text next to the swatch');
+      }, root
+    );
     const reading = await visibleSwatches();
     assert.deepEqual(reading, ['rgb(51, 102, 153)', 'rgb(170, 68, 17)'], `${label}: both reading swatches are visible`);
+    const readingAlignment = await swatchAlignment();
+    assert.equal(readingAlignment.tag, 'BUTTON');
+    assert(Math.abs(readingAlignment.offset) <= 1.5, `${label}: reading swatch is centered with its HEX text (${readingAlignment.offset}px)`);
+    const assertStableAlignment = async (phase: string, tag: string) => {
+      const alignment = await swatchAlignment();
+      assert.equal(alignment.tag, tag, `${label}: ${phase} measures the intended swatch state`);
+      const shift = alignment.offset - readingAlignment.offset;
+      assert(Math.abs(shift) <= 0.25, `${label}: ${phase} moves the swatch ${shift}px relative to its text`);
+    };
     await page.mouse.click(point.x, point.y);
     if (table) await page.waitForSelector(`${root} .meo-md-table-active-source-line`);
     await page.evaluate(() => new Promise(requestAnimationFrame));
     assert.deepEqual(await visibleSwatches(), reading, `${label}: placing the caret in the color keeps both swatches`);
+    await assertStableAlignment('entering the source line', 'BUTTON');
     await page.keyboard.press('Delete');
+    if (table) await assertStableAlignment('editing ahead of the swatch', 'SPAN');
     await page.keyboard.type('8');
     await page.waitForFunction(root => Array.from(document.querySelectorAll<HTMLElement>(`${root} .meo-md-color-swatch`))
       .some(swatch => swatch.style.backgroundColor === 'rgb(51, 134, 153)' && swatch.getBoundingClientRect().width > 0), {}, root);
+    await assertStableAlignment('returning to the interactive swatch', 'BUTTON');
     const inBold = table ? `${root} .meo-md-table-inline-source` : `${root} .meo-md-strong-marker-active`;
     await page.keyboard.press('End');
     await page.keyboard.press('ArrowLeft');
