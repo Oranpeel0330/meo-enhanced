@@ -14,6 +14,197 @@ async function waitForTable(page: any) {
   await page.waitForFunction(() => document.querySelectorAll('.meo-md-html-table-shell tbody textarea').length === 4);
 }
 
+async function dragTableHeightColumn(
+  page: import('puppeteer-core').Page,
+  delta: number,
+  height: () => Promise<number>,
+  settle: () => Promise<void>
+): Promise<number> {
+  const point = await page.$$eval('.cm-editor [data-table-resize-column="0"]', handles => {
+    const viewport = document.querySelector('.cm-scroller')!.getBoundingClientRect();
+    for (const handle of handles) {
+      const rect = handle.getBoundingClientRect();
+      const top = Math.max(rect.top, viewport.top);
+      const bottom = Math.min(rect.bottom, viewport.bottom, innerHeight);
+      if (bottom - top < 2) continue;
+      const x = rect.left + rect.width / 2, y = (top + bottom) / 2;
+      if (document.elementFromPoint(x, y) === handle) return { x, y };
+    }
+    return null;
+  });
+  assert(point, 'The column divider has a visible pointer target');
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + delta, point.y);
+  await settle();
+  const during = await height();
+  await page.mouse.up();
+  await settle();
+  return during;
+}
+
+async function checkProjectedCellHeight(page: import('puppeteer-core').Page, sizing = 'native') {
+  const row = 'tbody tr:first-child';
+  const cell = `${row} td:first-child`;
+  const height = () => page.$eval(row, element => element.getBoundingClientRect().height);
+  const settle = () => page.evaluate(async () => {
+    for (let frame = 0; frame < 8; frame++) await new Promise(requestAnimationFrame);
+  });
+  for (const large of [false, true]) {
+    const label = `${large ? 'optimized' : 'ordinary'}/${sizing}`;
+    const text = '| A | B |\n| --- | --- |\n| 3. Ordered text ![picture](fixture.svg) | neighbor |\n\nAfter.'
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+    await page.evaluate(text => {
+      const harness = (window as any).TableStabilityHarness;
+      (window as any).__tableCellEditor?.destroy();
+      harness.setImageSrcResolver(() => 'data:image/svg+xml,' + encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="180" height="240"><rect width="180" height="240" fill="teal"/></svg>'
+      ));
+      (window as any).__tableCellEditor = harness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+    }, text);
+    await page.waitForFunction(({ cell, large }) => {
+      const image = document.querySelector<HTMLImageElement>(`${cell} img`);
+      return image?.complete && image.naturalHeight === 240 && (window as any).TableStabilityHarness
+        .usesLargeDocumentDerivedWorkBudget((window as any).__tableCellEditor.view.state) === large;
+    }, {}, { cell, large });
+    await settle();
+    const reading = await height();
+    assert(reading >= 240, `${label}/rendered image contributes its height (${reading})`);
+    const click = await page.$eval(`${cell} li`, element => {
+      const { left, top } = element.getBoundingClientRect();
+      return { x: left + 18, y: top + 12 };
+    });
+    await page.mouse.click(click.x, click.y);
+    await page.waitForSelector(`${cell} .meo-md-table-active-source-line`);
+    await settle();
+    const editing = await height();
+    assert(Math.abs(editing - reading) < 2, `${label}/entering list item source preserves image row height (${reading} → ${editing})`);
+    if (!large && sizing === 'native' && process.env.MEO_TEST_SCREENSHOTS) {
+      fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, 'table-height-list-source.png') });
+    }
+    const initialWidth = await page.$eval(cell, element => element.getBoundingClientRect().width);
+    const narrowDelta = 135 - initialWidth;
+    assert(narrowDelta < -25, `${label}/fixture leaves room to narrow the image column`);
+    const narrowEditing = await dragTableHeightColumn(page, narrowDelta, height, settle);
+    assert(narrowEditing < reading - 20, `${label}/list source minimum reflows with the narrower image (${reading} → ${narrowEditing})`);
+    assert(await page.$eval(`${cell} textarea`, input => input === document.activeElement), `${label}/resize keeps list source focused`);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector(`${cell} .is-editing`, { hidden: true });
+    await page.waitForSelector(`${cell} .meo-md-html-table-cell-preview img`);
+    await settle();
+    assert(Math.abs(await height() - narrowEditing) < 2, `${label}/list source keeps the reading height at the new width`);
+    await dragTableHeightColumn(page, -narrowDelta, height, settle);
+    assert(Math.abs(await height() - reading) < 2, `${label}/restoring the column width restores the image row`);
+    console.log(`Table projected source preserves image row height (${label})`);
+  }
+}
+
+async function checkCellHeightLayoutChanges(page: import('puppeteer-core').Page, sizing: string) {
+  const table = '.meo-md-html-table:not(.meo-md-html-table-sticky-table)';
+  const inputAt = (row: number) => `${table} textarea[data-table-row="${row}"][data-table-col="0"]`;
+  const rowHeight = (row: number) => page.$eval(inputAt(row), input => input.closest('tr')!.getBoundingClientRect().height);
+  const settle = () => page.evaluate(async () => {
+    for (let frame = 0; frame < 10; frame++) await new Promise(requestAnimationFrame);
+  });
+  const open = async (rows: string[], large: boolean, windowed: boolean, header = '| A | B |') => {
+    const extraRows = windowed ? Array.from({ length: 512 - rows.length }, () => '| small | small |') : [];
+    const text = [header, '| --- | --- |', ...rows, ...extraRows, '', 'After the table.',
+      ...(large ? ['padding text\n'.repeat(8100)] : [])].join('\n');
+    await page.evaluate(text => {
+      (window as any).__tableCellEditor?.destroy();
+      const harness = (window as any).TableStabilityHarness;
+      const editor = (window as any).__tableCellEditor = harness.createEditor({
+        parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+      });
+      const handle: typeof import('../webview/src/helpers/shortcuts').handleEditorShortcut = harness.handleEditorShortcut;
+      editor.view.dom.addEventListener('keydown', (event: KeyboardEvent) => {
+        handle(event, { editor, editableMode: 'live', editorSurfaceActive: true, platform: 'windows',
+          requestSave() {}, openFindPanel() {}, requestMode() {} });
+      }, { capture: true });
+    }, text);
+    await page.waitForSelector(inputAt(2));
+    await page.waitForFunction(large => (window as any).TableStabilityHarness
+      .usesLargeDocumentDerivedWorkBudget((window as any).__tableCellEditor.view.state) === large, {}, large);
+    assert.equal(await page.$eval(table, element => element.hasAttribute('data-meo-table-windowed')), windowed);
+    await settle();
+  };
+  const edit = async (row: number) => {
+    const point = await page.$eval(inputAt(row), input => {
+      const rect = input.parentElement!.getBoundingClientRect();
+      const viewport = input.closest('.cm-scroller')!.getBoundingClientRect();
+      return { x: rect.left + 12, y: Math.max(rect.top, viewport.top) + 12 };
+    });
+    await page.mouse.click(point.x, point.y);
+    await settle();
+    assert(await page.$eval(inputAt(row), input => input === document.activeElement), 'The cell owns native input before the layout change');
+  };
+  const resize = (row: number, delta: number) => dragTableHeightColumn(page, delta, () => rowHeight(row), settle);
+
+  for (const [large, windowed] of [[false, false], [true, false], [true, true]] as const) {
+    const label = `${windowed ? 'windowed' : large ? 'optimized' : 'ordinary'}/${sizing}`;
+    if (!process.argv.includes('--move-height-only')) {
+      const sentence = 'Changing the column width changes word wrapping. '.repeat(12);
+      const longRow = `| ${sentence} | ${sentence} |`;
+      const rows = windowed ? ['| short | short |', '| short | short |'] : [longRow, '| short | short |'];
+      await open(rows, large, windowed, windowed ? longRow : undefined);
+      const row = windowed ? 0 : 1;
+      const initial = await rowHeight(row);
+      await resize(row, -150);
+      const narrow = await rowHeight(row);
+      assert(narrow > initial + 20, `${label}/narrow reading row grows (${initial} → ${narrow})`);
+      const widened = await resize(row, 150);
+      assert(Math.abs(widened - initial) < 2,
+        `${label}/reading row shrinks during drag (${narrow} → ${widened}, expected ${initial})`);
+
+      await resize(row, -150);
+      await edit(row);
+      const narrowEditing = await rowHeight(row);
+      for (let cycle = 0; cycle < 2; cycle++) {
+        const wideEditing = await resize(row, 150);
+        assert(wideEditing < narrowEditing - 20 && Math.abs(wideEditing - initial) < 2,
+          `${label}/editing row shrinks during drag ${cycle + 1} (${narrowEditing} → ${wideEditing}, expected ${initial})`);
+        assert(Math.abs(await rowHeight(row) - initial) < 2, `${label}/editing row stays compact after release`);
+        assert(await page.$eval(inputAt(row), input => input === document.activeElement), `${label}/resize keeps the active editor`);
+        assert(Math.abs(await resize(row, -150) - narrowEditing) < 2, `${label}/narrowing restores the original wrapping`);
+      }
+      await page.keyboard.press('Escape');
+      await settle();
+      assert(Math.abs(await rowHeight(row) - narrow) < 2, `${label}/leaving editing restores the narrow reading height`);
+    }
+    if (!process.argv.includes('--resize-height-only')) {
+      const short = `| [link](https://example.test/${'a'.repeat(60)}) | short |`;
+      const tall = `| Line ${Array.from({ length: 12 }, (_, index) => index + 1).join('<br>Line ')} | tall |`;
+      await open([short, tall], large, windowed);
+      const shortReading = await rowHeight(1), tallReading = await rowHeight(2);
+      await edit(1);
+      const shortEditing = await rowHeight(1);
+      assert(shortEditing > shortReading + 10 && tallReading > shortEditing + 20,
+        `${label}/fixture distinguishes rendered, source and neighbor heights (${[shortReading, shortEditing, tallReading]})`);
+      for (const [key, row] of [['ArrowDown', 2], ['ArrowUp', 1]] as const) {
+        await page.keyboard.down('Alt');
+        await page.keyboard.press(key);
+        await page.keyboard.up('Alt');
+        await page.waitForFunction(selector => {
+          const input = document.querySelector<HTMLTextAreaElement>(selector);
+          return input === document.activeElement && input?.value.startsWith('[link]');
+        }, { timeout: 3000 }, inputAt(row));
+        await settle();
+        const moved = await rowHeight(row);
+        assert(Math.abs(moved - shortEditing) < 2,
+          `${label}/${key} keeps the moved row's current source height (${shortEditing} → ${moved}, neighbor ${tallReading})`);
+        assert(Math.abs(await rowHeight(3 - row) - tallReading) < 2, `${label}/${key} keeps the other row's rendered height`);
+      }
+      await page.keyboard.press('Escape');
+      await settle();
+      assert(Math.abs(await rowHeight(1) - shortReading) < 2, `${label}/moved row returns to its own reading height`);
+    }
+    console.log(`Table row heights during layout changes passed (${label})`);
+  }
+}
+
 async function checkCellHeightTransitions(page: import('puppeteer-core').Page, sizing = 'native') {
   const inputAt = (row: number, col: number) => `tbody tr:nth-child(${row}) td:nth-child(${col}) textarea`;
   const rowHeight = (row: number) => page.$eval(`tbody tr:nth-child(${row})`, element => element.getBoundingClientRect().height);
@@ -197,7 +388,9 @@ async function checkCellHeightFallback(page: import('puppeteer-core').Page) {
     };
   });
   try {
+    await checkProjectedCellHeight(page, 'fallback');
     await checkCellHeightTransitions(page, 'fallback');
+    await checkCellHeightLayoutChanges(page, 'fallback');
   } finally {
     await page.evaluate(() => { (window as any).__restoreCellSizing(); delete (window as any).__restoreCellSizing; });
   }
@@ -1675,8 +1868,18 @@ async function main() {
       return;
     }
     if (process.argv.includes('--height-only')) {
+      await checkProjectedCellHeight(page);
       await checkCellHeightTransitions(page);
+      await checkCellHeightLayoutChanges(page, 'native');
       await checkCellHeightFallback(page);
+      return;
+    }
+    if (process.argv.includes('--projected-height-only')) {
+      await checkProjectedCellHeight(page);
+      return;
+    }
+    if (process.argv.some(arg => ['--resize-height-only', '--move-height-only'].includes(arg))) {
+      await checkCellHeightLayoutChanges(page, 'native');
       return;
     }
     if (process.argv.includes('--line-presentation-only')) {
@@ -1700,7 +1903,9 @@ async function main() {
     await checkCellEntryRegressions(page);
     if (process.argv.includes('--entry-regressions-only') || process.argv.includes('--rapid-input-only') || process.argv.includes('--entry-drag-only')) return;
     await checkCellTypography(page);
+    await checkProjectedCellHeight(page);
     await checkCellHeightTransitions(page);
+    await checkCellHeightLayoutChanges(page, 'native');
     await checkCellHeightFallback(page);
     await page.addStyleTag({ content: '.cm-editor .meo-md-html-table { width: 240px !important; table-layout: fixed !important; } .cm-editor .meo-md-html-table :is(th, td) { width: 120px !important; max-width: 120px !important; }' });
     await page.evaluate((text) => {

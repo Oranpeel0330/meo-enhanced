@@ -325,6 +325,7 @@ interface TableSearchMatchRange {
 const sourceTableHeaderLineDeco = Decoration.line({ class: 'meo-md-source-table-header-line' });
 const sourceTableHeaderCellDeco = Decoration.mark({ class: 'meo-md-source-table-header-cell' });
 const tableCellSelector = 'th[data-table-row][data-table-col], td[data-table-row][data-table-col]';
+const tableCellEditMinHeight = '--meo-table-cell-edit-min-height';
 const tableCellCaretNavigationKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const tableCellTextSelectingClass = 'meo-md-html-table-cell-text-selecting';
 const tableControlSelector = '.meo-md-html-table-context-trigger, .meo-md-html-table-context-menu, .meo-md-html-table-context-btn, .meo-md-link-open-btn, .meo-md-color-swatch-interactive, .meo-md-html-table-column-resize-handle';
@@ -3108,6 +3109,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   cellInteraction: TableCellInteraction;
   private heldCellPresentation: { input: HTMLTextAreaElement; pointerId: number } | null = null;
   private linePresentation: TableCellLinePresentation | null = null;
+  private readonly editingPreviews = new WeakMap<HTMLElement, { width: number; readingPreview?: HTMLElement }>();
   private cellVerticalGoal: { input: HTMLTextAreaElement; head: number; x: number } | null = null;
   private cellWrapStart: { input: HTMLTextAreaElement; position: number } | null = null;
   private wholeCellInput: HTMLTextAreaElement | null = null;
@@ -6289,6 +6291,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (projection && entries.some(({ row }) => row === projectedRow)) {
       this.layoutCellSourceLine(projection);
     }
+    this.refreshEditingHeightBaselines(entries);
     // Only the current display layer sizes each cell. Active source editors
     // retain their entry baseline without reserving space for hidden URLs.
     if (typeof CSS !== 'undefined' && CSS.supports('field-sizing', 'content')) {
@@ -6318,12 +6321,12 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         widths: editingInputs.map((input) => input.getBoundingClientRect().width),
         // Editing keeps the previous preview DOM alive, but its stale height
         // must not keep a row from shrinking as the user deletes text.
-        previewHeight: Math.max(0, ...contents.map((content) =>
-          content.classList.contains('is-editing') && !content.classList.contains('is-editing-line')
-            && !content.classList.contains('has-search-match')
-            ? 0
-            : content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview')?.scrollHeight ?? 0
-        ))
+        previewHeight: Math.max(0, ...contents.map(content => {
+          const minimum = Number.parseFloat(content.style.getPropertyValue(tableCellEditMinHeight)) || 0;
+          const preview = content.matches('.is-editing:not(.is-editing-line, .has-search-match)')
+            ? null : content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
+          return Math.max(minimum, preview?.scrollHeight ?? 0);
+        }))
       };
     }).filter(({ contents }) => contents.length > 0);
     // A virtualized table can remount during a scroll. Attach all zero-height
@@ -6350,6 +6353,49 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       for (const probe of probes) probe.remove();
       for (const content of contents) content.style.minHeight = `${heights[index]}px`;
     }
+  }
+
+  private refreshEditingHeightBaselines(entries: readonly RowEntry[]) {
+    const changed: { content: HTMLElement; width: number; height: string }[] = [];
+    for (const { inputs } of entries) {
+      for (const input of inputs) {
+        const content = input.parentElement;
+        if (!content?.classList.contains('is-editing')) continue;
+        const previous = this.editingPreviews.get(content);
+        const preview = previous?.readingPreview ?? content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
+        if (!preview) continue;
+        // The cell wrapper fills the whole row and may still have the old
+        // row's minimum after a reorder. Use the retained preview's own size.
+        const { width, height } = getComputedStyle(preview);
+        const previewWidth = Number.parseFloat(width);
+        if (previewWidth > 0 && previous?.width !== previewWidth) {
+          changed.push({ content, width: previewWidth, height });
+        }
+      }
+    }
+    for (const { content, width, height } of changed) {
+      this.editingPreviews.set(content, { ...this.editingPreviews.get(content), width });
+      content.style.setProperty(tableCellEditMinHeight, height);
+    }
+  }
+
+  private retainCellReadingPreview(content: HTMLElement, preview: HTMLElement) {
+    const editing = this.editingPreviews.get(content);
+    if (!editing || editing.readingPreview) return;
+    // The mixed preview replaces one rendered line, so keep its reading
+    // geometry available for column reflow throughout the edit.
+    const readingPreview = preview.cloneNode(true) as HTMLElement;
+    readingPreview.className = 'meo-md-html-table-cell-reading-preview';
+    readingPreview.inert = true;
+    readingPreview.setAttribute('aria-hidden', 'true');
+    content.appendChild(readingPreview);
+    editing.readingPreview = readingPreview;
+  }
+
+  private releaseCellReadingPreview(content: HTMLElement) {
+    this.editingPreviews.get(content)?.readingPreview?.remove();
+    this.editingPreviews.delete(content);
+    content.style.removeProperty(tableCellEditMinHeight);
   }
 
   resizeAllRows() {
@@ -6452,7 +6498,11 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   }
 
   recalcTableLayout() {
-    if (this.pendingResizeRows) this.rowWindow?.invalidate();
+    if (this.pendingResizeRows && this.rowWindow && this.domRefs) {
+      // The row window sizes the body. The mounted header reflows separately.
+      this.resizeRows(this.domRefs.rowEntries.slice(0, 1));
+      this.rowWindow.invalidate();
+    }
     this.rowWindow?.update();
     if (this.pendingResizeRows) {
       if (!this.rowWindow) this.resizeAllRows();
@@ -6869,6 +6919,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     }
 
     if (this.linePresentation) this.clearCellLinePresentation(this.linePresentation.input);
+    this.retainCellReadingPreview(content, preview);
     this.renderCellPreview(preview, source, diagnostics, sourceRange, line);
     const sourceElement = preview.querySelector<HTMLElement>('.meo-md-table-active-source-line');
     const textElement = sourceElement?.querySelector<HTMLElement>('.meo-md-table-source-text');
@@ -6884,8 +6935,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     };
     this.linePresentation = presentation;
     this.paintCellLineSelection(presentation, preview, from, to);
-    // The native editor briefly owns the whole value on focus. Release the
-    // height measured for that layout once the mixed preview owns the row.
+    // Use the mixed preview's source height with the same reading minimum.
     resize();
     return true;
   }
@@ -6925,15 +6975,11 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       }
     }
     if (content.classList.contains('is-editing') === isEditing) return;
-    if (isEditing) {
-      // End the former cell first, including its latest preview and row sizing.
-      // A same-row switch must not inherit the former source editor's height.
-      content.style.setProperty('--meo-table-cell-edit-min-height', `${content.getBoundingClientRect().height}px`);
-    } else {
+    if (!isEditing) {
       this.clearCellLinePresentation(input);
       if (this.wholeCellInput === input) this.wholeCellInput = null;
       content.classList.remove('is-cell-composing');
-      content.style.removeProperty('--meo-table-cell-edit-min-height');
+      this.releaseCellReadingPreview(content);
     }
     content.classList.toggle('is-editing', isEditing);
     const row = content.closest('tr');
@@ -6953,9 +6999,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.heldCellPresentation = null;
     if (!presentation.input.isConnected) {
       const content = presentation.input.parentElement;
-      content?.classList.remove('is-editing');
-      content?.style.removeProperty('--meo-table-cell-edit-min-height');
-      for (const cell of content?.closest('tr')?.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content') ?? []) {
+      if (!content) return;
+      content.classList.remove('is-editing');
+      this.releaseCellReadingPreview(content);
+      for (const cell of content.closest('tr')?.querySelectorAll<HTMLElement>('.meo-md-html-table-cell-content') ?? []) {
         cell.style.removeProperty('min-height');
       }
       return;
@@ -7885,13 +7932,9 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.tableCommandTargetRegistration = this.tableCommandEnvironment.registerTarget(tableCommandTarget);
     this.tableCommandTargetId = this.tableCommandTargetRegistration.id;
     this.stickyHeaderAdapter.mount();
-    const onColumnWidthProjected = (event: Event) => {
-      const resizeRows = !(
-        event instanceof CustomEvent &&
-        event.detail?.resizeRows === false
-      );
+    const onColumnWidthProjected = () => {
       this.stickyHeaderAdapter.invalidate();
-      this.scheduleLayout({ resizeRows });
+      this.scheduleLayout({ resizeRows: true });
     };
     table.addEventListener('meo-table-column-width-projected', onColumnWidthProjected);
     this.cleanupFns.push(() => {

@@ -717,11 +717,7 @@ export function createCodeMirrorDomTableColumnWidthAdapter(
           snapshot
         });
         render(table, result.widths, result.totalWidth);
-        table.dispatchEvent(
-          new CustomEvent(projectionEventName, {
-            detail: { resizeRows: false },
-          }),
-        );
+        table.dispatchEvent(new CustomEvent(projectionEventName));
       };
 
       const removeDragListeners = () => {

@@ -1970,7 +1970,15 @@ held-pointer and Tab handoffs within one row, stable cross-cell drags, taller/sh
 image entry baselines, deletion without a historical height maximum, and accepting
 the old cell's latest preview before sizing its neighbor. Both native content
 sizing and the unsupported-feature measurement fallback use the production CSS
-and input owners. The default table-editing invocation includes these cases.
+and input owners. The same cases measure row growth and shrinkage during repeated
+column drags in reading and editing states, and check that Alt+Up and Alt+Down
+keep the moved source editor and its neighbor at their respective content heights.
+An ordered list item with an inline image retains its reading height when its
+logical line shows source. Resizing that column while editing reflows the image's
+reading height at the new width.
+The layout cases cover ordinary documents, optimized documents, and a windowed
+table with an editable header. The default table-editing invocation includes
+these cases.
 
 `scripts/test-document-block-preview-idle.ts` exercises the production optional
 block adapter with small and many-code-block preview DOMs. Absent, panel-only and

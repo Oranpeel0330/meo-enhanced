@@ -18,6 +18,7 @@ import { applyUiTheme } from '../webview/src/helpers/uiTheme';
 import { applyBuiltInVisualBaseline } from '../webview/src/helpers/theme';
 import { createWidgetRemountProbe } from './widget-remount-test-helpers';
 import { usesLargeDocumentDerivedWorkBudget } from '../webview/src/editor/liveInputDerivedWork';
+import { handleEditorShortcut } from '../webview/src/helpers/shortcuts';
 
 const getTableProvenanceSnapshot = () => {
   const view = EditorView.findFromDOM(document.querySelector('.cm-editor')!);
@@ -32,6 +33,7 @@ const getTableProvenanceSnapshot = () => {
 (globalThis as typeof globalThis & {
   TableStabilityHarness?: {
     usesLargeDocumentDerivedWorkBudget: typeof usesLargeDocumentDerivedWorkBudget;
+    handleEditorShortcut: typeof handleEditorShortcut;
     applyUiTheme: typeof applyUiTheme;
     applyBuiltInVisualBaseline: typeof applyBuiltInVisualBaseline;
     createEditor: typeof createEditor;
@@ -50,6 +52,7 @@ const getTableProvenanceSnapshot = () => {
   };
 }).TableStabilityHarness = {
   usesLargeDocumentDerivedWorkBudget,
+  handleEditorShortcut,
   applyUiTheme,
   applyBuiltInVisualBaseline,
   createEditor,
