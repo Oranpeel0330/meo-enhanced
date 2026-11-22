@@ -511,7 +511,7 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
     selection: [number, number],
     key: 'Backspace' | 'Delete' | 'Shift+Enter' | 'cellBreak',
     expected: { value: string; caret: number; source: string },
-    large = false
+    { large = false, wholeCell = false, checkHistory = cases === 'structure' } = {}
   ) => {
     const suffix = large ? '\n\n' + 'padding text\n'.repeat(8100) : '';
     const original = table(before.replaceAll('\n', '')) + suffix;
@@ -527,6 +527,14 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
     }, {}, large);
     await page.waitForSelector(preview, { visible: true });
     await page.click(preview);
+    if (wholeCell) {
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('F10');
+      await page.keyboard.up('Shift');
+      await page.click('.meo-md-html-table-context-next');
+      await page.click('button[aria-label="Edit entire cell"]');
+      assert.equal(await page.$(`${preview} .meo-md-table-active-source-line`), null);
+    }
     const initial = await page.$eval(cell, (input, [from, to]) => {
       if (input !== document.activeElement) throw new Error('clicked cell must own native input');
       input.setSelectionRange(from, to);
@@ -550,7 +558,7 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
     await page.keyboard.press('Escape');
     const source = await page.evaluate(() => (window as any).__tableCellEditor.getText());
     assert.equal(source, table(expected.source) + suffix, `${label} commits the edited cell`);
-    if (cases === 'structure') {
+    if (checkHistory) {
       const history = await page.evaluate(async () => {
         const editor = (window as any).__tableCellEditor;
         const depth = editor.getHistoryDepth();
@@ -591,7 +599,7 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
       const initial = withCaret(before);
       const expected = withCaret(after);
       await checkEdit(initial.value, [initial.caret, initial.caret], key,
-        { ...expected, source: expected.value.replaceAll('\n', '').trim() }, large);
+        { ...expected, source: expected.value.replaceAll('\n', '').trim() }, { large });
     }
     await page.evaluate(() => (window as any).__tableCellEditor.destroy());
     console.log('table list and quote editing passed');
@@ -599,14 +607,27 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
   }
 
   const joined = { value: 'AB', caret: 1, source: 'AB' };
-  for (const tag of ['<br>', '<br/>', '<BR />']) {
+  for (const large of [false, true]) for (const tag of ['<br>', '<br/>', '<BR />']) {
     const before = `A${tag}\nB`;
     const lineEnd = 1 + tag.length;
-    await checkEdit(before, [lineEnd, lineEnd], 'Backspace', joined);
-    await checkEdit(before, [lineEnd + 1, lineEnd + 1], 'Backspace', joined);
-    await checkEdit(before, [lineEnd, lineEnd], 'Delete', joined);
-    await checkEdit(before, [1, 1], 'Delete', joined);
-    await checkEdit(before, [1, lineEnd], 'Backspace', joined);
+    const withoutClosing = `A${tag.slice(0, -1)}B`;
+    await checkEdit(before, [lineEnd, lineEnd], 'Backspace',
+      { value: withoutClosing, caret: lineEnd - 1, source: withoutClosing }, { large });
+    await checkEdit(before, [lineEnd + 1, lineEnd + 1], 'Backspace', joined, { large, checkHistory: tag === '<br>' });
+    await checkEdit(before, [lineEnd, lineEnd], 'Delete', { value: `A${tag}\n`, caret: lineEnd, source: `A${tag}` }, { large });
+    await checkEdit(before, [1, 1], 'Delete', joined, { large });
+    await checkEdit(before, [1, lineEnd], 'Backspace', joined, { large });
+  }
+  for (const large of [false, true]) {
+    const wholeCell = { large, wholeCell: true };
+    for (const offset of [5, 6]) {
+      await checkEdit('A<br>\nB', [offset, offset], 'Backspace', { value: 'A<brB', caret: 4, source: 'A<brB' },
+        { ...wholeCell, checkHistory: offset === 5 });
+    }
+    await checkEdit('A<br>\nB', [1, 1], 'Delete', { value: 'Abr>B', caret: 1, source: 'Abr>B' }, wholeCell);
+    await checkEdit('A<br>\n👩‍💻B', [5, 5], 'Delete', { value: 'A<br>\nB', caret: 5, source: 'A<br>B' }, wholeCell);
+    await checkEdit('A<br>\nB', [1, 5], 'Delete', joined, wholeCell);
+    await checkEdit('A<br>\n<br>\nB', [5, 5], 'Delete', { value: 'A<br>\nbr>B', caret: 5, source: 'A<br>br>B' }, { large });
   }
   await checkEdit('A<br/>\nB', [5, 5], 'Backspace', { value: 'A<br>\nB', caret: 4, source: 'A<br>B' });
   await checkEdit('A<br>\nB', [3, 3], 'Backspace', { value: 'A<r>B', caret: 2, source: 'A<r>B' });
@@ -618,7 +639,7 @@ async function checkCellEditingKeys(page: import('puppeteer-core').Page, cases: 
   });
   const emptyItem = '1. First<br>\n2. <br/>\nThird';
   const tagEnd = emptyItem.indexOf('<br/>') + '<br/>'.length;
-  await checkEdit(emptyItem, [tagEnd, tagEnd], 'Backspace', {
+  await checkEdit(emptyItem, [tagEnd + 1, tagEnd + 1], 'Backspace', {
     value: '1. First<br>\n2. Third', caret: emptyItem.indexOf('<br/>'), source: '1. First<br>2. Third'
   });
   await page.evaluate(() => (window as any).__tableCellEditor.destroy());
@@ -1160,7 +1181,7 @@ async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
   }
 }
 
-async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Page) {
+async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Page, large = false) {
   const cell = 'tbody tr:first-child td:nth-child(2)';
   const preview = `${cell} .meo-md-html-table-cell-preview`;
   const sourceLine = `${preview} .meo-md-table-active-source-line`;
@@ -1169,7 +1190,9 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
   const source = '| Step | Content |\n| --- | --- |\n'
     + '| List | 1. First<BR />2. Second<br/>3. Third |\n'
     + '| Ordered | 8. First<BR />9. 第二项<br/>10. Third |\n'
-    + '| Link | First<br>[Example](https://example.test/very/long/path/for/wrapping)<br>Last |';
+    + '| Link | First<br>[Example](https://example.test/very/long/path/for/wrapping)<br>Last |'
+    + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+  assert.equal(assessLargeDocument(source).boundedEditorWork, large);
   await page.evaluate(text => {
     (window as any).__tableCellEditor?.destroy();
     const openedLinks: string[] = (window as any).__cellPointerLinks = [];
@@ -1178,6 +1201,10 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
       onOpenLink(href: string) { openedLinks.push(href); }
     });
   }, source);
+  await page.waitForFunction(large => {
+    const app = window as any;
+    return app.TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(app.__tableCellEditor.view.state) === large;
+  }, {}, large);
   const first = `${preview} li:first-child`;
   await page.waitForSelector(first, { visible: true });
   await page.click(first);
@@ -1191,20 +1218,30 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
       const index = node.textContent!.indexOf('<BR />');
       if (index < 0) continue;
       const range = document.createRange();
-      range.setStart(node, index + 2);
-      range.setEnd(node, index + 3);
-      const rect = range.getBoundingClientRect();
-      return {
-        x: rect.left + rect.width * 0.75, y: rect.top + rect.height / 2,
-        right: el.closest('td')!.getBoundingClientRect().right
+      const point = (offset: number) => {
+        range.setStart(node, index + offset);
+        range.setEnd(node, index + offset + 1);
+        const rect = range.getBoundingClientRect();
+        return { x: rect.left + rect.width * 0.75, y: rect.top + rect.height / 2, right: rect.right };
       };
+      const closing = point(5);
+      const cellRight = el.closest('td')!.getBoundingClientRect().right;
+      const blank = { x: Math.floor((closing.right + cellRight - 14) / 2), y: closing.y };
+      const target = document.elementFromPoint(blank.x, blank.y);
+      if (blank.x <= closing.right || target?.closest('td') !== el.closest('td')
+          || target?.closest('.meo-md-html-table-column-resize-handle')) throw new Error('The blank click must hit the cell past the tag glyph');
+      return { ...point(2), closing, blank };
     }
     throw new Error('the source row must display its original break tag');
   });
   await page.mouse.click(marker.x, marker.y);
-  const caret = await page.$eval(input, textarea => textarea.selectionStart);
-  assert.equal(caret, '1. First'.length, 'a click on the displayed line ending goes before the break tag');
-  await page.mouse.click(marker.right - 4, marker.y);
+  const caret = '1. First'.length;
+  assert.equal(await page.$eval(input, textarea => textarea.selectionStart), caret + 3,
+    'a click inside the displayed break tag places the caret inside the source');
+  await page.mouse.click(marker.closing.x, marker.closing.y);
+  assert.equal(await page.$eval(input, textarea => textarea.selectionStart), caret + '<BR />'.length,
+    'the right side of the closing glyph still places the caret on the tag line');
+  await page.mouse.click(marker.blank.x, marker.blank.y);
   assert.equal(await page.$eval(input, textarea => textarea.selectionStart), caret,
     'blank space after the displayed break has the same line-end caret');
   const assertCaretAtBodyEnd = async () => {
@@ -1896,6 +1933,7 @@ async function main() {
     }
     if (process.argv.includes('--source-pointer-geometry-only')) {
       await checkCellSourcePointerGeometry(page);
+      await checkCellSourcePointerGeometry(page, true);
       return;
     }
     if (process.argv.includes('--line-geometry-only')) {

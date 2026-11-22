@@ -52,7 +52,7 @@ import { formatSourceLineNumber, sourceLineNumberModeFacet } from './editor/sour
 import { flushEditorLayout } from './editor/layoutMeasurement';
 import { assessLargeDocument } from '../../src/foundation/largeDocument';
 import { uiLanguageFacet } from './editor/uiLanguage';
-import { isLiveListItemAt, liveModeExtensions, preserveLiveDecorationsForSearchEffect, publishPreparedLivePresentation, refreshLiveDecorationsAfterSearchEffect, setLiveDocumentIdleEffect } from './liveMode';
+import { isLiveListItemAt, liveModeExtensions, moveLiveHtmlBreakLineEnd, preserveLiveDecorationsForSearchEffect, publishPreparedLivePresentation, refreshLiveDecorationsAfterSearchEffect, setLiveDocumentIdleEffect } from './liveMode';
 import { setLivePointerSelectionActiveEffect } from './editor/livePointerSelection';
 import { detailsBlockStateExtensions } from './helpers/detailsBlocks';
 import { insertMountedTableCellBreak } from './helpers/tables';
@@ -2395,6 +2395,7 @@ export function createEditor({
         { key: 'Shift-Tab', run: (view) => indentMermaidSource(view, true) || indentDisplayMathSource(view, true) || outdentListByTwoSpaces(view) || indentLess(view) },
         { key: 'Alt-]', run: indentListByTwoSpaces },
         { key: 'Alt-[', run: outdentListByTwoSpaces },
+        { key: 'End', run: view => moveLiveHtmlBreakLineEnd(view, false), shift: view => moveLiveHtmlBreakLineEnd(view, true) },
         { key: 'Backspace', run: deleteBackwardSmart },
         { key: 'Delete', run: view => {
           if (!isLiveMode(view)) return false;
@@ -4928,36 +4929,9 @@ function getContainedCodeBlockLineContinuation(state: EditorState, position: num
   return { prefix: state.doc.sliceString(line.from, source.prefixTo) + payloadIndent, literal };
 }
 
-function deleteTableCellLineBreakBackward(view: EditorView): boolean {
-  const { state } = view;
-  const selection = state.selection.main;
-  if (!selection.empty) {
-    return false;
-  }
-
-  const pos = selection.from;
-  if (!isInsideTableCell(state, pos)) {
-    return false;
-  }
-
-  const from = Math.max(0, pos - 8);
-  const before = state.doc.sliceString(from, pos);
-  const match = /<br\s*\/?>$/i.exec(before);
-  if (!match) {
-    return false;
-  }
-
-  const start = pos - match[0].length;
-  view.dispatch({
-    changes: { from: start, to: pos },
-    selection: { anchor: start }
-  });
-  return true;
-}
-
 function deleteBackwardSmart(view: EditorView): boolean {
   if (selectedDisplayMathBody(view.state)) return false;
-  return handleBackspaceAtListContentStart(view) || deleteTableCellLineBreakBackward(view);
+  return handleBackspaceAtListContentStart(view);
 }
 
 function isInsideTableCell(state: EditorState, position: number): boolean {

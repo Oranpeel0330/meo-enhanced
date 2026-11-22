@@ -15,7 +15,7 @@ import { blockStickyHeaderExtension } from './helpers/blockStickyHeader';
 import { livePointerSelectionActiveField, setLivePointerSelectionActiveEffect, sourcePresentationSelection } from './editor/livePointerSelection';
 import { blockReadingFocusAt, enterBlockSource, isBlockInteractionEffect } from './editor/blockInteraction';
 import { bindWidgetClick, disposeWidgetClick } from './editor/widgetPointer';
-import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, EditorSelection, type Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type SelectionRange } from '@codemirror/state';
+import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, EditorSelection, type Transaction, type ChangeDesc, type ChangeSet, type ChangeSpec, type Range, type RangeSet, type Extension, type SelectionRange } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { Language, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
@@ -544,21 +544,34 @@ function addHtmlBreakDecoration(
   builder.push((needsVisualBreak ? hiddenHtmlBreakDeco : hiddenTrailingHtmlBreakDeco).range(node.from, node.to));
 }
 
-function htmlBreakTailPosition(view: EditorView, event: MouseEvent, hit: { pos: number; assoc: number }): number | null {
-  if (hit.assoc > 0) return null;
-  const decorations = view.state.field(liveDecorationField, false);
-  if (!decorations) return null;
-
-  const line = view.state.doc.lineAt(hit.pos);
-  const end = hit.pos === line.to ? line.from + line.text.trimEnd().length : hit.pos;
-  let start = end;
-  decorations.between(end, end, (from, to, decoration) => {
-    if (to !== end || from === to) return;
+function liveHtmlBreakAtBoundary(state: EditorState, position: number, edge: 'from' | 'to'): InlineEditRange | null {
+  let range: InlineEditRange | null = null;
+  state.field(liveDecorationField, false)?.between(position, position, (from, to, decoration) => {
+    if ((edge === 'from' ? from : to) !== position || from === to) return;
     if (decoration !== htmlBreakSourceDeco && decoration !== hiddenHtmlBreakDeco && decoration !== hiddenTrailingHtmlBreakDeco) return;
-    start = from;
+    if (!htmlBreakTagRegex.test(state.sliceDoc(from, to))) return;
+    range = { from, to };
     return false;
   });
-  if (start === end) return null;
+  return range;
+}
+
+function liveHtmlBreakAtRowTail(state: EditorState, head: number): InlineEditRange | null {
+  const line = state.doc.lineAt(head);
+  const end = head === line.to ? line.from + line.text.trimEnd().length : head;
+  return liveHtmlBreakAtBoundary(state, end, 'to');
+}
+
+function liveHtmlBreakContentEnd(state: EditorState, from: number): { pos: number; assoc: -1 | 1 } {
+  // Adjacent tags share an offset. The blank row starts on the right side of
+  // the previous break even when its own source tag is still hidden.
+  return { pos: from, assoc: liveHtmlBreakAtBoundary(state, from, 'to') ? 1 : -1 };
+}
+
+function htmlBreakTailPosition(view: EditorView, event: MouseEvent, hit: { pos: number; assoc: number }): { pos: number; assoc: -1 | 1 } | null {
+  if (hit.assoc > 0) return null;
+  const range = liveHtmlBreakAtRowTail(view.state, hit.pos);
+  if (!range) return null;
 
   // A blank row tail hits the end of CodeMirror's break replacement. Reserve
   // that miss for the preceding text, while clicks on the tag stay editable.
@@ -566,28 +579,102 @@ function htmlBreakTailPosition(view: EditorView, event: MouseEvent, hit: { pos: 
   if (!tail) return null;
   const padding = Math.max(0, (view.defaultLineHeight - (tail.bottom - tail.top)) / 2);
   if (event.clientY < tail.top - padding || event.clientY >= tail.bottom + padding
-    || (view.textDirectionAt(end) === Direction.LTR ? event.clientX < tail.right : event.clientX > tail.left)) return null;
-  return start;
+    || (view.textDirectionAt(range.to) === Direction.LTR ? event.clientX < tail.right : event.clientX > tail.left)) return null;
+  return liveHtmlBreakContentEnd(view.state, range.from);
 }
 
 const htmlBreakMouseSelection = EditorView.mouseSelectionStyle.of((view, event) => {
   if (event.button !== 0 || event.detail !== 1 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return null;
   const hit = view.posAndSideAtCoords({ x: event.clientX, y: event.clientY });
-  const startPosition = hit && htmlBreakTailPosition(view, event, hit);
-  if (startPosition === null) return null;
+  const tail = hit && htmlBreakTailPosition(view, event, hit);
+  if (!tail) return null;
 
-  let start = startPosition;
+  let start = tail.pos;
   return {
     update(update) {
       if (update.docChanged) start = update.changes.mapPos(start, -1);
     },
     get(current) {
-      if (current === event) return EditorSelection.create([EditorSelection.cursor(start, -1)]);
+      if (current === event) return EditorSelection.create([EditorSelection.cursor(start, tail.assoc)]);
       const hit = view.posAndSideAtCoords({ x: current.clientX, y: current.clientY }, false);
-      const head = htmlBreakTailPosition(view, current, hit) ?? hit.pos;
-      return EditorSelection.create([head === start ? EditorSelection.cursor(head, hit.assoc) : EditorSelection.range(start, head)]);
+      const head = htmlBreakTailPosition(view, current, hit) ?? hit;
+      return EditorSelection.create([head.pos === start ? EditorSelection.cursor(head.pos, head.assoc) : EditorSelection.range(start, head.pos)]);
     }
   };
+});
+
+export function moveLiveHtmlBreakLineEnd(view: EditorView, extend: boolean): boolean {
+  const { state } = view;
+  if (view.composing || !state.field(liveDecorationField, false)) return false;
+  let matched = false;
+  const ranges = state.selection.ranges.map(range => {
+    let end = view.moveToLineBoundary(range, true);
+    const blockEnd = view.lineBlockAt(range.head).to;
+    const tag = end.assoc <= 0 || end.head === blockEnd ? liveHtmlBreakAtRowTail(state, end.head) : null;
+    if (tag && range.head <= tag.from) {
+      const { pos, assoc } = liveHtmlBreakContentEnd(state, tag.from);
+      end = EditorSelection.cursor(pos, assoc);
+      matched = true;
+    } else if (end.head === range.head && end.head !== blockEnd) {
+      end = view.moveToLineBoundary(range, true, false);
+    }
+    return extend ? EditorSelection.range(range.anchor, end.head, end.goalColumn, end.bidiLevel ?? undefined, end.assoc) : end;
+  });
+  if (!matched) return false;
+  const selection = EditorSelection.create(ranges, state.selection.mainIndex);
+  if (!selection.eq(state.selection, true)) view.dispatch({ selection, scrollIntoView: true, userEvent: 'select' });
+  return true;
+}
+
+const liveHtmlBreakDeletion = EditorState.transactionFilter.of(transaction => {
+  if (!transaction.docChanged) return transaction;
+  const backward = transaction.isUserEvent('delete.backward');
+  if (!backward && !transaction.isUserEvent('delete.forward')) return transaction;
+  const { startState: state, changes } = transaction;
+  const ranges = state.selection.ranges;
+  const extra: ChangeSpec[] = [];
+  let rangeIndex = 0;
+  const deleteRemaining = (from: number, to: number) => {
+    const start = changes.mapPos(from, 1), end = changes.mapPos(to, -1);
+    if (start < end) extra.push({ from: start, to: end });
+  };
+
+  changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    if (to !== from + 1 || inserted.length) return;
+    const char = state.sliceDoc(from, to);
+    if (backward ? char !== '>' && char !== '\n' : char !== '<') return;
+    const head = backward ? to : from;
+    while (ranges[rangeIndex] && ranges[rangeIndex]!.from < head) rangeIndex++;
+    const caret = ranges[rangeIndex];
+    if (!caret?.empty || caret.head !== head) return;
+
+    if (backward) {
+      if (char === '\n') {
+        const previous = state.doc.lineAt(from);
+        const range = liveHtmlBreakAtBoundary(state, previous.from + previous.text.trimEnd().length, 'to');
+        if (range) deleteRemaining(range.from, range.to);
+      } else if (caret.assoc >= 0) {
+        const range = liveHtmlBreakAtBoundary(state, head, 'to');
+        if (range) {
+          const line = state.doc.lineAt(head);
+          if (head < line.from + line.text.trimEnd().length) deleteRemaining(range.from, from);
+        }
+      }
+    } else {
+      const range = liveHtmlBreakAtBoundary(state, head, 'from');
+      if (!range) return;
+      if (caret.assoc < 0 && liveHtmlBreakAtBoundary(state, head, 'to')) return;
+      const line = state.doc.lineAt(head);
+      const hasPhysicalBreak = range.to === line.from + line.text.trimEnd().length;
+      if (hasPhysicalBreak && line.number === state.doc.lines) return;
+      deleteRemaining(to, range.to);
+      if (hasPhysicalBreak) deleteRemaining(line.to, line.to + 1);
+    }
+  }, true);
+
+  // Extend the original deletion so selection, history and layout accept a
+  // single edit. A selected range still deletes exactly its source text.
+  return extra.length ? [transaction, { changes: extra, sequential: true }] : transaction;
 });
 
 function isMergeConflictMarkerLine(state: EditorState, pos: number): boolean {
@@ -5262,6 +5349,7 @@ export function liveModeExtensions(options: { readonly largeDocument?: boolean; 
     markdownTagField,
     livePointerSelectionActiveField,
     htmlBreakMouseSelection,
+    liveHtmlBreakDeletion,
     liveDocumentIdleField,
     mermaidEditingStateField,
     mermaidEditingReadiness,

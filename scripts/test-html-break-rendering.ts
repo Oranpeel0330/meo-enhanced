@@ -17,6 +17,106 @@ async function waitForFrames(page: Page, count = 8): Promise<void> {
   }, count);
 }
 
+async function checkBreakDeletion(page: Page, large: boolean): Promise<void> {
+  const table = '| A | B |\n| --- | --- |\n| Alpha<br>Beta | Z |';
+  const padding = large ? '\n\n' + 'Padding\n'.repeat(8_100) : '';
+  const cases: Array<{
+    mode: 'source' | 'live'; before: string; after: string; offset: number; key: 'Backspace' | 'Delete';
+    click?: 'closing' | 'next' | 'blank'; navigate?: 'Home' | 'End' | 'Shift+End';
+    selectThrough?: number; secondCaret?: boolean; history?: boolean;
+  }> = [
+    { mode: 'source', before: table, offset: 4, key: 'Backspace', after: table.replace('<br>', '<br'), history: true },
+    { mode: 'source', before: table, offset: 0, key: 'Delete', after: table.replace('<br>', 'br>') },
+    { mode: 'source', before: 'Alpha<br>Beta', offset: 4, key: 'Backspace', after: 'Alpha<brBeta' },
+    { mode: 'live', before: 'Alpha<br>Beta', offset: 4, click: 'next', key: 'Backspace', after: 'AlphaBeta', history: true },
+    { mode: 'live', before: 'Alpha<br>Beta', offset: 4, click: 'closing', key: 'Backspace', after: 'Alpha<brBeta', history: true },
+    { mode: 'live', before: 'Alpha<br>Beta', offset: 4, click: 'closing', key: 'Delete', after: 'Alpha<br>eta' },
+    { mode: 'live', before: 'Alpha<br><br>Beta', offset: 4, click: 'closing', key: 'Delete', after: 'Alpha<br>br>Beta' },
+    { mode: 'live', before: 'Alpha<br><br>Beta', offset: 4, click: 'blank', key: 'Delete', after: 'Alpha<br>Beta' },
+    { mode: 'live', before: 'Alpha<br/>Beta', offset: 4, key: 'Backspace', after: 'Alpha<br>Beta' },
+    { mode: 'live', before: 'Alpha<br/>Beta', offset: 3, selectThrough: 4, key: 'Delete', after: 'Alpha<br>Beta' },
+    { mode: 'live', before: 'Alpha<BR />Beta', offset: 0, key: 'Delete', after: 'AlphaBeta' },
+    { mode: 'live', before: 'Alpha<br>Beta', offset: 0, navigate: 'End', key: 'Delete', after: 'AlphaBeta' },
+    { mode: 'live', before: 'Alpha<br>Beta', offset: 0, navigate: 'Shift+End', key: 'Delete', after: '<br>Beta' },
+    { mode: 'live', before: 'Alpha<br>Beta', offset: 4, navigate: 'Home', key: 'Backspace', after: 'AlphaBeta' },
+    { mode: 'live', before: 'Alpha<br>\nBeta', offset: 5, key: 'Backspace', after: 'AlphaBeta' },
+    { mode: 'live', before: 'Alpha<br>  \nBeta', offset: 0, key: 'Delete', after: 'Alpha  Beta' },
+    { mode: 'live', before: '`Alpha<br>Beta`', offset: 4, key: 'Backspace', after: '`Alpha<brBeta`' },
+    { mode: 'live', before: 'Alpha<br>Beta\n\nOther!', offset: 4, secondCaret: true, key: 'Backspace', after: 'AlphaBeta\n\nOther', history: true }
+  ];
+  for (const test of cases) {
+    const source = test.before + padding;
+    const tag = test.before.indexOf('<');
+    const anchor = tag + test.offset;
+    const head = test.selectThrough === undefined ? anchor : tag + test.selectThrough;
+    const initialHead = test.click === 'closing' ? head - 1 : test.click === 'blank' || test.navigate?.endsWith('End') ? 0
+      : test.navigate === 'Home' ? head + 2 : head;
+    assert.equal(assessLargeDocument(source).boundedEditorWork, large);
+    await page.evaluate(({ source, mode, anchor, head, extraHead }) => {
+      const fixture = window as any;
+      const harness = fixture.HtmlBreakRenderingHarness;
+      fixture.__htmlBreakEditor.destroy();
+      fixture.__htmlBreakEditor = harness.createEditor({
+        parent: document.getElementById('app')!, text: source, initialMode: mode, onApplyChanges() {}
+      });
+      const view = fixture.__htmlBreakEditor.view;
+      view.focus();
+      const { range, cursor, create } = harness.EditorSelection;
+      const ranges = [anchor === head ? cursor(head) : range(anchor, head)];
+      if (extraHead !== null) ranges.push(cursor(extraHead));
+      view.dispatch({ selection: create(ranges) });
+    }, { source, mode: test.mode, anchor: test.selectThrough === undefined ? initialHead : anchor,
+      head: initialHead, extraHead: test.secondCaret ? test.before.length : null });
+    await page.waitForFunction(large => {
+      const fixture = window as any;
+      return fixture.HtmlBreakRenderingHarness.usesLargeDocumentDerivedWorkBudget(fixture.__htmlBreakEditor.view.state) === large;
+    }, {}, large);
+    await waitForFrames(page, 3);
+    if (test.click) {
+      const point = await page.evaluate(({ head, click }) => {
+        const view = (window as any).__htmlBreakEditor.view;
+        if (click === 'blank') {
+          const first = view.coordsForChar(0);
+          const third = view.coordsForChar(head + 4);
+          return { x: first.right + 120, y: (first.top + first.bottom + third.top + third.bottom) / 4 };
+        }
+        const box = view.coordsForChar(click === 'closing' ? head - 1 : head);
+        if (!box) throw new Error('The break boundary has no rendered glyph');
+        return { x: box.left + (box.right - box.left) * (click === 'closing' ? 0.75 : 0.25), y: (box.top + box.bottom) / 2 };
+      }, { head, click: test.click });
+      await page.mouse.click(point.x, point.y);
+      await waitForFrames(page, 3);
+    }
+    if (test.navigate === 'Shift+End') {
+      await page.keyboard.down('Shift');
+      await page.keyboard.press('End');
+      await page.keyboard.up('Shift');
+    } else if (test.navigate) await page.keyboard.press(test.navigate);
+    const before = await page.evaluate(() => {
+      const { state } = (window as any).__htmlBreakEditor.view;
+      return [state.selection.main.head, state.selection.main.assoc];
+    });
+    const context = `${large ? 'large' : 'ordinary'}/${test.mode}/${test.key} at ${before} in ${JSON.stringify(test.before)}`;
+    assert.equal(before[0], head, context);
+    if (test.click) assert.equal(before[1], test.click === 'closing' ? -1 : 1, `${context}/break affinity`);
+    await page.keyboard.press(test.key);
+    const actual = await page.evaluate(() => (window as any).__htmlBreakEditor.getText());
+    assert.equal(actual.slice(0, actual.length - padding.length), test.after, context);
+    assert.equal(actual.slice(actual.length - padding.length), padding);
+    if (test.history) {
+      const history = await page.evaluate(async original => {
+        const editor = (window as any).__htmlBreakEditor;
+        const restored = await editor.undo() && editor.getText() === original;
+        const selection = editor.view.state.selection;
+        return { restored, head: selection.main.head, assoc: selection.main.assoc, count: selection.ranges.length,
+          redone: await editor.redo(), text: editor.getText() };
+      }, source);
+      assert.deepEqual(history, { restored: true, head, assoc: before[1], count: test.secondCaret ? 2 : 1,
+        redone: true, text: actual }, `${context}/history`);
+    }
+  }
+}
+
 async function checkBreakPointerGeometry(page: Page, large: boolean): Promise<void> {
   const label = large ? 'large' : 'ordinary';
   const padding = Array.from({ length: 40 }, (_, index) => `Paragraph ${index + 1}`);
@@ -286,7 +386,10 @@ async function main() {
       }
     }
 
-    for (const large of [false, true]) await checkBreakPointerGeometry(page, large);
+    for (const large of [false, true]) {
+      await checkBreakPointerGeometry(page, large);
+      await checkBreakDeletion(page, large);
+    }
     console.log('HTML break rendering browser tests passed');
   } finally {
     await browser.close();

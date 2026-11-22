@@ -1241,6 +1241,18 @@ function tableCellEditorBreakStart(value: string, newline: number, maxStart = ne
     : null;
 }
 
+function tableCellBreakDeletionRange(value: string, caret: number, backward: boolean, projected: boolean): TableCellRange | null {
+  const beforeTag = !backward && projected && value[caret] === '<';
+  const newline = backward ? caret - 1 : beforeTag ? value.indexOf('\n', caret) : caret;
+  const start = tableCellEditorBreakStart(value, newline);
+  if (start === null || beforeTag && start !== caret) return null;
+  // The textarea's newline only lays out the tag. In whole-cell source, both
+  // sides of that newline refer to the same insertion point after `>`.
+  if (backward) return { from: projected ? start : newline - 1, to: newline + 1 };
+  if (beforeTag) return { from: start, to: newline + 1 };
+  return { from: newline + 1, to: findClusterBreak(value, newline + 1) };
+}
+
 function normalizeTableCellEditorInput(input: HTMLTextAreaElement, breakSuffix: string | null) {
   // An edit can change the tag and leave its display-only newline in the
   // untouched suffix. Drop that newline before converting real input to source.
@@ -3888,19 +3900,26 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     }
     const presentation = this.linePresentation;
     if (presentation?.input === input && presentation.breakElement) {
-      const sourceEnd = presentation.line.from + presentation.line.text.length;
-      const sourceOffset = resolution.sourceOffset;
+      const { breakElement, line, valueFrom } = presentation;
+      const sourceEnd = line.from + line.text.length;
+      const tagEnd = sourceEnd + line.breakText.length;
+      const { sourceOffset } = resolution;
+      const onTag = Array.from(breakElement.getClientRects()).some(rect =>
+        clientX >= rect.left && clientX < rect.right && clientY >= rect.top && clientY < rect.bottom
+      );
+      if (onTag && sourceOffset !== null && sourceOffset >= sourceEnd && sourceOffset <= tagEnd) {
+        // The last glyph still belongs to this source line. The general offset
+        // mapper would move its end past the textarea's display-only newline.
+        return { domCaret: resolution.domCaret, editorOffset: valueFrom + sourceOffset - line.from };
+      }
       const pointedNode = resolution.domCaret?.node;
       const bounds = presentation.textElement.getBoundingClientRect();
       const inSourceLine = pointedNode
         ? presentation.textElement.contains(pointedNode)
         : clientY >= bounds.top && clientY < bounds.bottom;
-      const bodyEnd = this.projectedCaretRect(input, presentation.valueFrom + presentation.line.text.length);
+      const bodyEnd = this.projectedCaretRect(input, valueFrom + line.text.length);
       const pastBodyEnd = bodyEnd && clientX >= bodyEnd.left && clientY >= bodyEnd.top && clientY < bodyEnd.bottom;
-      // At the end of visible content the mouse can land on the displayed
-      // break spelling. A pointer gesture treats it as one logical boundary.
-      if (inSourceLine && (pastBodyEnd || (sourceOffset !== null && sourceOffset >= sourceEnd
-          && sourceOffset <= sourceEnd + presentation.line.breakText.length))) {
+      if (inSourceLine && (pastBodyEnd || (sourceOffset !== null && sourceOffset >= sourceEnd && sourceOffset <= tagEnd))) {
         const text = presentation.bodyRuns.at(-1)?.node;
         resolution = {
           sourceOffset: sourceEnd,
@@ -6080,13 +6099,13 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       scrollTopBeforeInput = caretIsVisible ? view.scrollDOM.scrollTop : null;
       revealCaretAfterInput = !caretIsVisible;
     };
-    const captureBeforeInput = (isComposing: boolean) => {
+    const captureBeforeInput = (isComposing: boolean, editEnd = input.selectionEnd) => {
       captureInputViewportIntent();
-      const { value, selectionEnd } = input;
-      const newline = value.indexOf('\n', selectionEnd);
+      const { value } = input;
+      const newline = value.indexOf('\n', editEnd);
       breakSuffixBeforeInput =
         !isComposing && this.composingInput !== input
-        && tableCellEditorBreakStart(value, newline, selectionEnd) !== null
+        && tableCellEditorBreakStart(value, newline, editEnd) !== null
           ? value.slice(newline)
           : null;
     };
@@ -6278,15 +6297,15 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         && input.selectionStart === input.selectionEnd
       ) {
         const { value, selectionStart: caret } = input;
-        const newline = event.key === 'Backspace' && value[caret - 1] === '\n' ? caret - 1
-          : event.key === 'Delete' && value[caret] === '<' ? value.indexOf('\n', caret) : caret;
-        const breakStart = tableCellEditorBreakStart(value, newline);
-        if (breakStart !== null && (newline <= caret || breakStart === caret)) {
+        const deletion = tableCellBreakDeletionRange(value, caret, event.key === 'Backspace', this.linePresentation?.input === input);
+        if (deletion) {
           event.preventDefault();
           event.stopPropagation();
-          captureInputViewportIntent();
-          input.setSelectionRange(breakStart, newline + 1);
-          replaceTableCellEditorSelection(input, '');
+          if (deletion.from < deletion.to) {
+            captureBeforeInput(false, deletion.to);
+            input.setRangeText('', deletion.from, deletion.to, 'preserve');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
           return;
         }
         const state = this.view?.state;
