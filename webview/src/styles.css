@@ -3363,17 +3363,17 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-top: 4px;
+  margin-block: 0;
   margin-left: 4px;
   width: 14px;
   height: 14px;
   padding: 0;
   border: 0;
+  font: inherit;
   line-height: 0;
   color: var(--meo-muted-foreground);
   background: transparent;
   cursor: pointer;
-  vertical-align: top;
 }
 
 .cm-editor .meo-md-link-clear-btn svg,
@@ -3392,7 +3392,6 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
 .cm-editor .meo-md-link-open-btn {
   margin-left: 6px;
   margin-right: 6px;
-  transform: translateY(2px);
 }
 
 .cm-editor .meo-md-wiki-missing-icon {
@@ -3631,9 +3630,6 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
   width: 0.78em;
   height: 0.78em;
   margin: 0 0.28em 0 0.08em;
-  vertical-align: middle;
-  /* Align to the center of the HEX digits while keeping the line box height. */
-  margin-block: calc((1ex - 1cap) / 2) calc((1cap - 1ex) / 2);
   border: 1px solid color-mix(in srgb, currentColor 55%, transparent);
   border-radius: 2px;
   box-sizing: border-box;
@@ -3642,6 +3638,13 @@ html[data-editor-appearance='dark'] .meo-tooltip-shortcut { background: rgba(255
   background-position: 0 0, 3px 3px;
   background-size: 6px 6px;
   background-blend-mode: multiply;
+}
+
+.cm-editor :is(.meo-md-link-open-btn, .meo-md-link-clear-btn),
+.cm-editor.meo-mode-live .meo-md-color-swatch {
+  vertical-align: middle;
+  /* Center on the glyphs using the surrounding font without growing the line box. */
+  margin-block: calc((1ex - 1cap) / 2) calc((1cap - 1ex) / 2);
 }
 
 .cm-editor.meo-mode-live button.meo-md-color-swatch-interactive {
@@ -4796,12 +4799,6 @@ html[data-editor-appearance='light'] .cm-tooltip.meo-hex-color-adjustment {
 .cm-editor .meo-md-html-inline {
   display: inline;
   font-family: inherit;
-}
-
-.cm-editor .meo-md-html-link-button,
-.cm-editor .meo-md-html-inline-link-button {
-  margin-top: 0;
-  vertical-align: -2px;
 }
 
 .cm-editor.meo-mode-live .cm-line.meo-md-code-line-numbered {
@@ -8190,9 +8187,7 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 }
 
 .cm-editor.meo-mode-live .cm-line.meo-md-frontmatter-content .meo-md-link-open-btn {
-  margin: 0 0 0 6px;
-  transform: translateY(-2px);
-  vertical-align: middle;
+  margin-right: 0;
 }
 
 .cm-editor.meo-mode-live .cm-line.meo-md-frontmatter-content .meo-md-frontmatter-block-value {

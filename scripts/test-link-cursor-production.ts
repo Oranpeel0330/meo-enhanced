@@ -30,19 +30,19 @@ async function cursor(page: import('puppeteer-core').Page, point: { x: number; y
   }, point);
 }
 
-async function mount(page: import('puppeteer-core').Page, source: string, active = false): Promise<void> {
-  await page.evaluate(({ source, active }) => {
+async function mount(page: import('puppeteer-core').Page, source: string, active = false, { documentStart = false } = {}): Promise<void> {
+  await page.evaluate(({ source, active, documentStart }) => {
     (window as any).__linkEditor?.destroy();
     document.getElementById('app')!.replaceChildren();
     (window as any).__openedLinks = [];
     const editor = (window as any).HtmlContentHarness.createEditor({
-      parent: document.getElementById('app'), text: `caret\n\n${source}\n\n# target`, initialMode: 'live',
+      parent: document.getElementById('app'), text: `${documentStart ? '' : 'caret\n\n'}${source}\n\n# target`, initialMode: 'live',
       onApplyChanges() {}, onOpenLink(href: string) { (window as any).__openedLinks.push(href); }
     });
     (window as any).__linkEditor = editor;
     if (active) editor.view.dispatch({ selection: { anchor: 9 } });
     editor.view.focus();
-  }, { source, active });
+  }, { source, active, documentStart });
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 
@@ -55,17 +55,104 @@ async function linkPoint(page: import('puppeteer-core').Page): Promise<{ x: numb
   });
 }
 
-const browser = await launchTestBrowser();
-try {
-  const build = await Bun.build({ entrypoints: [path.join(repoRoot, 'scripts/test-html-content-entry.ts')],
-    outdir: tempDir, target: 'browser', format: 'iife', naming: 'bundle.js' });
-  if (!build.success) throw new Error(build.logs.map(String).join('\n'));
-  const page = await browser.newPage();
-  await page.setViewport({ width: 800, height: 700 });
-  await page.setContent('<!doctype html><style>html,body{height:100%;margin:0}#app{height:600px}</style><div id="app"></div><input id="outside">');
-  await page.addStyleTag({ path: path.join(repoRoot, 'webview/src/styles.css') });
-  await page.addStyleTag({ content: ':root{--meo-background:#fff;--meo-foreground:#222;--meo-font-live:Arial;--meo-font-live-size:16px;--meo-font-live-weight:400;--meo-font-source:monospace;--meo-font-source-size:14px;--vscode-editor-font-family:monospace;--vscode-editor-font-size:14px;--vscode-editor-line-height:20px}' });
-  await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+async function checkInlineActionAlignment(page: import('puppeteer-core').Page): Promise<void> {
+  const href = 'https://example.com/alignment';
+  const clear = '.meo-md-link-clear-btn';
+  const control = `.meo-md-link-open-btn[data-tooltip="${href}"]`;
+  const link = `.meo-md-link[data-meo-link-href="${href}"]`;
+  const tall = '![Tall](fixture-tall.svg) ';
+  const measurements: Array<{ fixture: string; large: boolean; tall: boolean; delta: number; height: number }> = [];
+  await page.evaluate(() => {
+    const harness = (window as any).HtmlContentHarness;
+    document.body.className = 'vscode-light';
+    document.documentElement.dataset.editorAppearance = 'light';
+    harness.setImageSrcResolver(() => 'data:image/svg+xml,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="46" height="120"><rect width="46" height="120" fill="teal"/></svg>'
+    ));
+  });
+  try {
+    for (const large of [false, true]) for (const image of ['', tall]) {
+      const markdownLink = `[Alignment](${href})`;
+      for (const [fixture, sample] of [
+        ['prose list', `- *start ${image}${markdownLink} end*`],
+        ['table', `| Link |\n| --- |\n| start ${image}[链接文字](${href}) end |`],
+        ['inline HTML', `start ${image}<a href="${href}">Alignment</a> end`],
+        ['frontmatter', `---\nsite: ${href}\n---`]
+      ]) {
+        if (fixture === 'frontmatter' && image) continue;
+        const source = sample + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+        await page.evaluate(large => {
+          const style = document.documentElement.style;
+          style.setProperty('--meo-font-live', large ? 'Consolas, monospace' : 'Arial');
+          style.setProperty('--meo-font-live-size', large ? '24px' : '16px');
+        }, large);
+        await mount(page, source, false, { documentStart: fixture === 'frontmatter' });
+        await page.waitForFunction(({ large, hasImage, control }) => {
+          const { HtmlContentHarness, __linkEditor } = window as any;
+          const image = document.querySelector<HTMLImageElement>('.meo-md-image-img');
+          return HtmlContentHarness.usesLargeDocumentDerivedWorkBudget(__linkEditor.view.state) === large
+            && !!document.querySelector(control) && (!hasImage || image?.complete && image.naturalHeight === 120
+              && image.getBoundingClientRect().height >= 110);
+        }, {}, { large, hasImage: !!image, control });
+        const metrics = await page.$eval(link, (label, control) => {
+          const icon = document.querySelector(`${control} svg`)!.getBoundingClientRect();
+          const wholeLine = label.closest('.meo-md-html-table-cell-line, .cm-line')!;
+          const range = document.createRange();
+          range.selectNodeContents(label);
+          const ink = range.getBoundingClientRect();
+          return { delta: (icon.top + icon.bottom - ink.top - ink.bottom) / 2,
+            height: wholeLine.getBoundingClientRect().height };
+        }, control);
+        measurements.push({ fixture, large, tall: !!image, ...metrics });
+        if (!large && image && process.env.MEO_TEST_SCREENSHOTS && (fixture === 'prose list' || fixture === 'table')) {
+          fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+          await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `inline-action-${fixture.split(' ')[0]}.png`) });
+        }
+        if (fixture === 'table' && image) {
+          await page.click(control);
+          assert.deepEqual(await page.evaluate(() => (window as any).__openedLinks), [href], 'the aligned table button opens its link');
+        }
+        if (fixture === 'prose list') {
+          await page.evaluate(href => {
+            const editor = (window as any).__linkEditor;
+            editor.view.dispatch({ selection: { anchor: editor.getText().indexOf(href) + href.length - 1 } });
+          }, href);
+          await page.waitForSelector(clear, { visible: true });
+          const metrics = await page.$eval(clear, button => {
+            const view = (window as any).__linkEditor.view;
+            const ink = view.coordsForChar(view.state.selection.main.head)!;
+            const icon = button.querySelector('svg')!.getBoundingClientRect();
+            return { delta: (icon.top + icon.bottom - ink.top - ink.bottom) / 2,
+              height: button.closest('.cm-line')!.getBoundingClientRect().height };
+          });
+          measurements.push({ fixture: 'clear link', large, tall: !!image, ...metrics });
+          if (!large && image) {
+            await page.click(clear);
+            assert.ok(await page.evaluate(href => !(window as any).__linkEditor.getText().includes(href), href),
+              'the aligned clear button clears the URL');
+          }
+        }
+      }
+    }
+  } finally {
+    await page.evaluate(() => {
+      const style = document.documentElement.style;
+      style.removeProperty('--meo-font-live');
+      style.removeProperty('--meo-font-live-size');
+      (window as any).HtmlContentHarness.setImageSrcResolver(null);
+    });
+  }
+  for (const sample of measurements.filter(sample => sample.tall)) {
+    const plain = measurements.find(other => other.fixture === sample.fixture && other.large === sample.large && !other.tall)!;
+    assert.ok(sample.height > plain.height + 60, `${sample.fixture} really contains a tall inline row`);
+    assert.ok(Math.abs(sample.delta - plain.delta) <= 0.5, `${sample.fixture} keeps the same text alignment in the tall row`);
+  }
+  assert.ok(measurements.every(sample => Math.abs(sample.delta) <= 2),
+    `Inline action centers must follow the text: ${JSON.stringify(measurements)}`);
+  console.log('Live inline action alignment passed in ordinary and optimized documents');
+}
+
+async function checkLinkCursor(page: import('puppeteer-core').Page): Promise<void> {
   for (const theme of ['light', 'dark']) {
     await page.evaluate((theme) => { document.body.className = `vscode-${theme}`; document.documentElement.dataset.editorAppearance = theme; }, theme);
     for (const fixture of fixtures) {
@@ -222,6 +309,21 @@ try {
   await reference.click();
   assert.equal(await page.evaluate(() => (window as any).__linkEditor.view.state.selection.main.head), 7 + footnoteSource.indexOf('[^n]:'));
   console.log('Production link cursors and modifier activation passed in light/dark themes; Source, prose and direct-action buttons passed');
+}
+
+const browser = await launchTestBrowser();
+try {
+  const build = await Bun.build({ entrypoints: [path.join(repoRoot, 'scripts/test-html-content-entry.ts')],
+    outdir: tempDir, target: 'browser', format: 'iife', naming: 'bundle.js' });
+  if (!build.success) throw new Error(build.logs.map(String).join('\n'));
+  const page = await browser.newPage();
+  await page.setViewport({ width: 800, height: 700 });
+  await page.setContent('<!doctype html><style>html,body{height:100%;margin:0}#app{height:600px}</style><div id="app"></div><input id="outside">');
+  await page.addStyleTag({ path: path.join(repoRoot, 'webview/src/styles.css') });
+  await page.addStyleTag({ content: ':root{--meo-background:#fff;--meo-foreground:#222;--meo-font-live:Arial;--meo-font-live-size:16px;--meo-font-live-weight:400;--meo-font-source:monospace;--meo-font-source-size:14px;--vscode-editor-font-family:monospace;--vscode-editor-font-size:14px;--vscode-editor-line-height:20px}' });
+  await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+  await checkInlineActionAlignment(page);
+  if (!process.argv.includes('--alignment-only')) await checkLinkCursor(page);
 } finally {
   await browser.close();
   fs.rmSync(tempDir, { recursive: true, force: true });

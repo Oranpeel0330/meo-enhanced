@@ -690,18 +690,21 @@ try {
     const tableInput = '.meo-md-html-table-shell tbody textarea';
     await page.click(`.meo-md-html-table-cell-preview .meo-md-link[data-meo-link-href="${encodedHref}"]`);
     await page.waitForSelector(tableInput, { visible: true });
-    const inputPoint = async (offset: number) => page.$eval(tableInput, (element, offset) => {
-      const input = element as HTMLTextAreaElement, computed = getComputedStyle(input), rect = input.getBoundingClientRect();
-      const mirror = document.createElement('div');
-      for (const property of ['box-sizing', 'padding', 'border', 'font', 'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'tab-size']) mirror.style.setProperty(property, computed.getPropertyValue(property));
-      Object.assign(mirror.style, { position: 'fixed', left: rect.left + 'px', top: rect.top + 'px', width: rect.width + 'px', whiteSpace: 'pre-wrap', overflowWrap: 'break-word', visibility: 'hidden' });
-      const marker = document.createElement('span'); marker.textContent = input.value[offset]!;
-      mirror.append(document.createTextNode(input.value.slice(0, offset)), marker, document.createTextNode(input.value.slice(offset + 1)));
-      document.body.append(mirror);
-      const bounds = marker.getBoundingClientRect(); mirror.remove();
-      return { x: bounds.left + bounds.width / 2 - input.scrollLeft, y: bounds.top + bounds.height / 2 - input.scrollTop };
-    }, offset);
-    const labelPoint = await inputPoint(2);
+    const paintedPoint = (part: 'label' | 'marker') => page.$eval(tableInput, (input, part) => {
+      const line = input.parentElement!.querySelector('.meo-md-table-active-source-line');
+      const element = line?.querySelector(part === 'label' ? '.meo-md-link' : '.meo-md-table-inline-marker');
+      const text = element && document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode();
+      if (!(text instanceof Text)) throw new Error(`Missing painted table link ${part}`);
+      const offset = part === 'label' ? 1 : 0;
+      const range = document.createRange();
+      range.setStart(text, offset);
+      range.setEnd(text, offset + 1);
+      const bounds = range.getBoundingClientRect();
+      const x = Math.ceil(bounds.left + bounds.width / 5), y = (bounds.top + bounds.bottom) / 2;
+      if (x >= bounds.right || document.elementFromPoint(x, y) !== input) throw new Error(`Cannot hover the painted table link ${part}`);
+      return { x, y };
+    }, part);
+    const labelPoint = await paintedPoint('label');
     await page.mouse.move(labelPoint.x, labelPoint.y);
     await new Promise(resolve => setTimeout(resolve, 260));
     assert.equal(await page.$('.meo-tooltip.is-visible'), null);
@@ -709,7 +712,7 @@ try {
     await page.waitForSelector('.meo-tooltip.is-visible');
     assert.equal(await page.$eval('.meo-tooltip.is-visible .meo-tooltip-label', element => element.textContent), prefix + '#安装说明');
     assert.equal(await page.$eval(tableInput, element => getComputedStyle(element).cursor), 'pointer');
-    const markerPoint = await inputPoint(0);
+    const markerPoint = await paintedPoint('marker');
     await page.mouse.move(markerPoint.x, markerPoint.y);
     assert.equal(await page.$('.meo-tooltip.is-visible'), null, 'Markdown delimiters are not link targets');
     assert.equal(await page.$eval(tableInput, element => getComputedStyle(element).cursor), 'text');
@@ -721,7 +724,7 @@ try {
         (element as HTMLTextAreaElement).value = '[Table link](#changed) plain';
         element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
       });
-      const draftPoint = await inputPoint(2);
+      const draftPoint = await paintedPoint('label');
       await page.mouse.move(draftPoint.x, draftPoint.y);
       await page.keyboard.down('Control');
       await page.waitForSelector('.meo-tooltip.is-visible');
@@ -732,7 +735,7 @@ try {
         element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
       }, original);
     }
-    const clickPoint = await inputPoint(2);
+    const clickPoint = await paintedPoint('label');
     await page.mouse.move(clickPoint.x, clickPoint.y);
     await page.keyboard.down('Control');
     await page.mouse.click(clickPoint.x, clickPoint.y);
