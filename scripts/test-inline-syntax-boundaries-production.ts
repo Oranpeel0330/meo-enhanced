@@ -62,13 +62,19 @@ async function checkLocalSource(page: Page) {
     ['^upper^', 'upper'], ['[Label](https://example.test/target "title")', 'Label'],
     ['[[Wiki]]', 'Wiki'], ['<kbd>Tab</kbd>', 'Tab'], ['$x+1$', 'x+1'],
     ['$y+2$', 'y+2'], ['![Figure](fixture.svg)', 'Figure'], ['<code>HtmlCode</code>', 'HtmlCode'],
-    ['[RefLabel][ref]', 'RefLabel'], ['[^note]', 'note'], ['<https://auto.test>', 'auto'],
+    ['**RefLabel**', 'RefLabel', '[**RefLabel**][ref]'], ['[^note]', 'note'], ['<https://auto.test>', 'auto'],
+    ['**LinkedBold**', 'LinkedBold', '[**LinkedBold**](https://example.test/wrapped-label "title")'],
+    ['**PairedLabel**', 'PairedLabel', '[**PairedLabel** ![LabelImage](fixture.svg)](https://example.test/with-image)'],
+    ['`PathCode`', 'PathCode', '**Tool `PathCode` and _SiblingWitness_**'],
     ['_Inner_', 'Inner', '**Parent _Inner_ tail**']
   ];
-  const text = fragments.map(([raw, , markup]) => markup ?? raw).join(' and ');
-  for (const table of [false, true]) {
-    const suffix = '\n\n[ref]: https://example.test/reference\n\n[^note]: Footnote body.\n\nAfter.';
+  const text = fragments.map(([raw, , markup]) => markup ?? raw).join(' and ')
+    + ' then **LeftEdge**`RightEdge` afterward<br>Break witness<BR />Last witness';
+  for (const large of [false, true]) for (const table of [false, true]) {
+    const suffix = '\n\n[ref]: https://example.test/reference\n\n[^note]: Footnote body.\n\nAfter.'
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
     const source = (table ? `| Header |\n| --- |\n| ${text} |` : `> ## ${text}`) + suffix;
+    const root = table ? 'tbody .meo-md-html-table-cell-preview' : '.cm-content';
     await page.evaluate(source => {
       const harness = (window as any).InlineCodeLayoutHarness;
       (window as any).boundaryEditor?.destroy();
@@ -78,20 +84,24 @@ async function checkLocalSource(page: Page) {
       const editor = (window as any).boundaryEditor = harness.createEditor({
         parent: document.getElementById('app'), text: source, initialMode: 'live', onApplyChanges() {}
       });
-      editor.view.dispatch({ selection: { anchor: source.length } });
+      editor.view.dispatch({ selection: { anchor: source.indexOf('After.') } });
     }, source);
+    await page.waitForFunction(large => (window as any).InlineCodeLayoutHarness
+      .usesLargeDocumentDerivedWorkBudget((window as any).boundaryEditor.view.state) === large, {}, large);
     await page.waitForSelector('.cm-content .meo-md-image-img');
-    const boldPoint = await page.$eval(table ? 'tbody .meo-md-html-table-cell-preview strong' : '.cm-content .meo-md-strong', element => {
+    const pointIn = (selector: string, word: string) => page.$eval(selector, (element, word) => {
       const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
       let text = walker.nextNode();
-      while (text && !text.textContent!.includes('Alpha')) text = walker.nextNode();
-      const start = text!.textContent!.indexOf('Alpha');
+      while (text && !text.textContent?.includes(word)) text = walker.nextNode();
+      if (!text) throw new Error(`Missing click target ${word}`);
+      const start = text.textContent!.indexOf(word);
       const range = document.createRange();
-      range.setStart(text!, start + 2);
-      range.setEnd(text!, start + 3);
+      range.setStart(text, start + 2);
+      range.setEnd(text, start + 3);
       const rect = range.getBoundingClientRect();
       return { x: rect.left + rect.width / 5, y: rect.top + rect.height / 2 };
-    });
+    }, word);
+    const boldPoint = await pointIn(`${root} ${table ? 'strong' : '.meo-md-strong'}`, 'Alpha');
     const reading = table ? await page.$eval('tbody tr', row => row.getBoundingClientRect().height) : 0;
     await page.mouse.move(boldPoint.x, boldPoint.y);
     await settle(page);
@@ -105,47 +115,104 @@ async function checkLocalSource(page: Page) {
       assert.equal(await page.evaluate(() => (window as any).boundaryEditor.view.state.selection.main.head),
         source.indexOf('Alpha') + 2, 'prose click maps through the hidden markers');
     }
+    const placeCaret = (raw: string, offset: number) => page.evaluate(({ raw, offset, table }) => {
+      if (table) {
+        const input = document.querySelector<HTMLTextAreaElement>('tbody textarea')!;
+        const pos = input.value.indexOf(raw) + offset;
+        input.setSelectionRange(pos, pos);
+        input.dispatchEvent(new Event('selectionchange'));
+      } else {
+        const view = (window as any).boundaryEditor.view;
+        const pos = view.state.doc.toString().indexOf(raw) + offset;
+        view.focus();
+        view.dispatch({ selection: { anchor: pos } });
+      }
+    }, { raw, offset, table });
+    const visibleText = () => page.$eval(root, root => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let result = '';
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (node.parentElement?.closest('button, .katex')) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        if (Array.from(range.getClientRects()).some(rect => rect.width > .5 && rect.height > .5)) result += node.textContent;
+      }
+      return result;
+    });
     for (const [raw, word] of fragments) {
-      await page.evaluate(({ raw, word, table }) => {
-        if (table) {
-          const input = document.querySelector<HTMLTextAreaElement>('tbody textarea')!;
-          const pos = input.value.indexOf(raw) + raw.indexOf(word) + 1;
-          input.setSelectionRange(pos, pos);
-          input.dispatchEvent(new Event('selectionchange'));
-        } else {
-          const view = (window as any).boundaryEditor.view;
-          const pos = view.state.doc.toString().indexOf(raw) + raw.indexOf(word) + 1;
-          view.focus();
-          view.dispatch({ selection: { anchor: pos } });
-        }
-      }, { raw, word, table });
+      await placeCaret(raw, raw.indexOf(word) + 1);
       await settle(page);
-      const visible = await page.evaluate(table => {
-        const root = document.querySelector(table ? 'tbody .meo-md-html-table-cell-preview' : '.cm-content')!;
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        let result = '';
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          if (node.parentElement?.closest('button, .katex')) continue;
-          const range = document.createRange();
-          range.selectNodeContents(node);
-          if (Array.from(range.getClientRects()).some(rect => rect.width > .5 && rect.height > .5)) result += node.textContent;
-        }
-        return result;
-      }, table);
+      const visible = await visibleText();
       assert.ok(visible.includes(raw), `${table ? 'table' : 'prose'} reveals ${raw}: ${visible}`);
       for (const [neighbor] of fragments) if (neighbor !== raw)
         assert.ok(!visible.includes(neighbor), `${raw} leaves ${neighbor} rendered: ${visible}`);
-      if (raw === '_Inner_') assert.ok(visible.includes('Parent _Inner_ tail') && !visible.includes('**Parent'));
+      if (raw === '_Inner_') assert.ok(visible.includes('**Parent _Inner_ tail**'));
+      if (raw === '`PathCode`') assert.ok(visible.includes('**Tool `PathCode` and SiblingWitness**'), 'other children of an active ancestor stay rendered');
+      if (raw === '**LinkedBold**') assert.ok(visible.includes('[**LinkedBold**](https://example.test/wrapped-label "title")'));
+      if (raw === '**RefLabel**') assert.ok(visible.includes('[**RefLabel**][ref]'));
+      if (raw === '**PairedLabel**') {
+        assert.ok(visible.includes('](https://example.test/with-image)'));
+        assert.ok(await page.$(`${root} img[alt="LabelImage"]`), 'an image next to the active label fragment stays rendered');
+      }
       if (table) {
         assert.ok(await page.$eval('tbody tr', row => row.getBoundingClientRect().height) >= reading - 1,
           `${raw} retains its row's reading height`);
       } else {
         assert.ok(visible.includes('>') && visible.includes('##'), 'the current quote and heading prefixes remain editable');
       }
-      if (raw === '**Alpha**' && process.env.MEO_TEST_SCREENSHOTS) {
-        fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
-        await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `local-source-${table ? 'table' : 'prose'}.png`) });
-      }
+    }
+    for (const [raw, offset] of [['**Alpha**', 0], ['**Alpha**', '**Alpha**'.length], ['`Epsilon`', 0], ['`Epsilon`', '`Epsilon`'.length]] as const) {
+      await placeCaret(raw, offset);
+      await settle(page);
+      assert.ok((await visibleText()).includes(raw), `${table ? 'table' : 'prose'} reveals ${raw} at endpoint ${offset}`);
+    }
+    for (const [raw, offset, key, neighbor] of [
+      ['**LeftEdge**', '**LeftEdge**'.length - 1, 'ArrowRight', '`RightEdge`'],
+      ['`RightEdge`', 1, 'ArrowLeft', '**LeftEdge**']
+    ] as const) {
+      await placeCaret(raw, offset);
+      await settle(page);
+      await page.keyboard.press(key);
+      await settle(page);
+      const visible = await visibleText();
+      assert.ok(visible.includes(raw) && !visible.includes(neighbor), `a shared boundary keeps the approached fragment: ${visible}`);
+      const atBoundary = await page.evaluate(({ raw, key, table }) => {
+        const offset = key === 'ArrowRight' ? raw.length : 0;
+        if (table) {
+          const input = document.querySelector<HTMLTextAreaElement>('tbody textarea')!;
+          return input.selectionStart === input.value.indexOf(raw) + offset;
+        }
+        const view = (window as any).boundaryEditor.view;
+        return view.state.selection.main.head === view.state.doc.toString().indexOf(raw) + offset;
+      }, { raw, key, table });
+      assert.ok(atBoundary, `${key} lands on the shared source boundary`);
+    }
+    await placeCaret('**Alpha**', '**Alpha**'.length + 1);
+    await settle(page);
+    assert.ok(!(await visibleText()).includes('**Alpha**'), 'an intervening space keeps the fragment rendered');
+    await placeCaret('https://example.test/wrapped-label', 8);
+    await settle(page);
+    const linkTarget = await visibleText();
+    assert.ok(linkTarget.includes('[LinkedBold](https://example.test/wrapped-label "title")'), 'editing the target leaves nested text formatting rendered');
+    await placeCaret('Break witness', 2);
+    await settle(page);
+    const visibleBreak = await visibleText();
+    assert.ok(visibleBreak.includes('Break witness<BR />Last witness') && !visibleBreak.includes('afterward<br>'),
+      'only the active logical line displays its terminating break');
+    const nestedPoint = await pointIn(`${root} .meo-md-link[data-meo-link-href="https://example.test/wrapped-label"]`, 'LinkedBold');
+    await page.mouse.click(nestedPoint.x, nestedPoint.y);
+    await settle(page);
+    assert.ok((await visibleText()).includes('[**LinkedBold**](https://example.test/wrapped-label "title")'));
+    if (table) {
+      assert(await page.$eval('tbody textarea', input => input === document.activeElement
+        && input.selectionStart === input.value.indexOf('LinkedBold') + 2), 'reflow keeps the clicked label offset in the cell');
+    } else {
+      assert.equal(await page.evaluate(() => (window as any).boundaryEditor.view.state.selection.main.head),
+        source.indexOf('LinkedBold') + 2, 'reflow keeps the clicked label offset in prose');
+    }
+    if (!large && process.env.MEO_TEST_SCREENSHOTS) {
+      fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `local-source-${table ? 'table' : 'prose'}.png`) });
     }
     assert.equal(await page.evaluate(() => (window as any).boundaryEditor.getText()), source);
     if (table) await page.keyboard.press('Escape');

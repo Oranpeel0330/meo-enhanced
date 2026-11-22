@@ -1243,7 +1243,7 @@ class InlineHtmlWidget extends UiLanguageSensitiveWidget {
 function addInlineHtmlDecorations(
   ranges: any[],
   state: EditorState,
-  editingInline: (from: number, to: number) => boolean,
+  editingObjects: (candidates: readonly { from: number; to: number }[]) => ReadonlySet<{ from: number; to: number }>,
   blockRanges: readonly RenderableHtmlBlock[],
   inlineRanges: Array<{ from: number; to: number }>,
   scope?: { from: number; to: number }
@@ -1262,6 +1262,7 @@ function addInlineHtmlDecorations(
     scope ? state.doc.lineAt(scope.to).number : state.doc.lines)) {
     const lineNo = line.number;
     if (overlapsBlock(line.from, line.to)) continue;
+    const candidates: Array<{ from: number; to: number; source: string }> = [];
     for (const fragment of splitHtmlBlockFragments(line.text)) {
       const source = line.text.slice(fragment.from, fragment.to);
       const tag = getHtmlRootTagName(source) ?? '';
@@ -1270,7 +1271,13 @@ function addInlineHtmlDecorations(
       const to = line.from + fragment.to;
       // Only actual HTML syntax may replace source; code, escapes, comments and scripts are literal.
       if (!tagStarts.has(from) || !tagEnds.has(to)) continue;
-      if (editingInline(from, to)) continue;
+      candidates.push({ from, to, source });
+    }
+    if (!candidates.length) continue;
+    const editing = editingObjects(candidates);
+    for (const candidate of candidates) {
+      if (editing.has(candidate)) continue;
+      const { from, to, source } = candidate;
       ranges.push(Decoration.replace({
         widget: new InlineHtmlWidget(source, from, lineNo),
         inclusive: false
@@ -1287,7 +1294,7 @@ export function addHtmlContentDecorations(
   changes?: ChangeDesc,
   inlineRanges: Array<{ from: number; to: number }> = [],
   scope?: { from: number; to: number },
-  editingInline: (from: number, to: number) => boolean = () => false
+  editingObjects: (candidates: readonly { from: number; to: number }[]) => ReadonlySet<{ from: number; to: number }> = () => new Set()
 ): RenderableHtmlBlock[] {
   const editingRange = getHtmlEditingRange(state);
   const blocks = collectRenderableHtmlBlocks(state, resolvedSyntaxTree(state), scope);
@@ -1372,7 +1379,7 @@ export function addHtmlContentDecorations(
       }).range(line.to));
     }
   });
-  addInlineHtmlDecorations(ranges, state, editingInline, blocks, inlineRanges, scope);
+  addInlineHtmlDecorations(ranges, state, editingObjects, blocks, inlineRanges, scope);
   return blocks;
 }
 

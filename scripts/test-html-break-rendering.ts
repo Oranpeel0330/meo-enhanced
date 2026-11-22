@@ -114,8 +114,8 @@ async function main() {
     await page.mouse.click(initial.clickPoint.x, initial.clickPoint.y);
     await waitForFrames(page);
     const textEditing = await collectState();
-    if (textEditing.sourceBreaks.length !== 0 || textEditing.breakCount !== 3) {
-      throw new Error(`Editing adjacent text changed the break presentation: ${JSON.stringify(textEditing)}`);
+    if (textEditing.sourceBreaks.map(tag => tag.tag).join('') !== '<br/>' || textEditing.breakCount !== 3) {
+      throw new Error(`Editing beta must show only its own terminating break: ${JSON.stringify(textEditing)}`);
     }
     await page.evaluate(() => {
       const view = (window as any).__htmlBreakEditor.view;

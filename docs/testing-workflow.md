@@ -1965,11 +1965,13 @@ Reading rows shrink with smaller line spacing. The full production table editing
 contract includes this slice.
 
 `scripts/test-inline-syntax-boundaries-production.ts --local-source-only` checks
-prose and table fragments in the same row, including paired formatting, code,
-subscript, superscript, link variants, footnotes, images, formulas and HTML
-keycaps. It measures actual visible source text, mouse-to-source mapping,
-unchanged sibling presentation, reference target updates and the table row
-height minimum. The default inline syntax suite includes this check.
+local source in ordinary and actually optimized Live prose and table cells.
+Caret interiors, endpoints and shared boundaries reveal the active fragment and
+its enclosing formatting and link syntax, while siblings remain rendered. It
+also checks mouse-to-source mapping, reference target updates and the table row
+height minimum. `test-html-break-rendering.ts` and `test-table-cell-editing-production.ts`
+check that the active logical line displays its terminating tag and retains the break.
+The default inline syntax suite includes the local source check.
 
 The same table-editing owner supports `--height-only` for rendered/source row-height transitions.
 Ordinary and actually optimized documents check compact long-link previews,

@@ -7612,10 +7612,6 @@ html[data-editor-appearance='dark'] body.vscode-dark
   white-space: pre;
 }
 
-.cm-editor .meo-md-table-source-break:not(.is-break-source) {
-  display: none;
-}
-
 .cm-editor.meo-mode-live .meo-md-table-active-list-item:has(.is-prefix-source)::marker,
 .cm-editor.meo-mode-live .is-cell-composing .meo-md-table-active-list-item::marker,
 .cm-editor .is-cell-composing .meo-md-table-source-text {

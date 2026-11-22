@@ -309,8 +309,9 @@ async function checkCellHeightTransitions(page: import('puppeteer-core').Page, s
     assert(Math.abs(await rowHeight(1) - reading) < 2, `${label}/plain neighbor does not inherit previous source height`);
     await clickCell(1, 1);
     await page.keyboard.press('Tab'); await settle();
-    assert(await page.$eval(inputAt(1, 2), input => input === document.activeElement), `${label}/Tab enters the new cell`);
-    assert(Math.abs(await rowHeight(1) - reading) < 2, `${label}/Tab lands at the fragment boundary`);
+    assert(await page.$eval(inputAt(1, 2), input => input === document.activeElement && input.selectionStart === 0),
+      `${label}/Tab lands at the new fragment boundary`);
+    assert(Math.abs(await rowHeight(1) - secondEditing) < 2, `${label}/Tab uses the height of the newly revealed source`);
     await page.keyboard.press('ArrowRight'); await settle();
     assert(Math.abs(await rowHeight(1) - secondEditing) < 2, `${label}/entering the link uses the new source height`);
     await page.keyboard.press('Escape'); await settle();
@@ -663,6 +664,8 @@ async function checkCellLinePresentation(page: import('puppeteer-core').Page) {
   assert.equal(await page.$(sourceSelector), null, 'the pressed cell retains its reading layout');
   await page.mouse.up();
   assert.equal(await activeLine(), '[Middle](https://example.test/a-long-link)<br>');
+  assert(await page.$eval(`${sourceSelector} .meo-md-table-source-break`, element => element.getBoundingClientRect().width > 0),
+    'the terminating break is visible while editing other text on its logical line');
   assert.deepEqual(await page.$$eval(`${previewSelector} strong`, elements => elements.map(element => element.textContent)),
     ['Alpha', 'Omega'], 'other lines keep their inline rendering');
 
@@ -894,8 +897,9 @@ async function checkSingleLineCellPresentation(page: import('puppeteer-core').Pa
           }
           if (index === 1) {
             await page.keyboard.type('x');
-            assert.equal(await page.$eval(`${state} ${active}`, element => element.textContent), `${prefix}x${body}`);
-            assert.ok(await page.$(`${state} ${active} strong`), 'typing before the fragment keeps its formatting');
+            assert.equal(await page.$eval(`${state} ${active}`, element => element.textContent), `${prefix}x**${body}**`,
+              'the caret stays adjacent to the revealed fragment after typing');
+            assert.equal(await page.$eval(editor, input => input.value), `${prefix}x**${body}**`, 'adjacent typing stays outside the format');
             assert.equal((await markerState()).prefix, 'hidden', 'typing in the body keeps the rendered marker');
             await page.keyboard.press('Escape');
             assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.undo()), true);
@@ -1077,13 +1081,18 @@ async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
     range.setStart(node, 0);
     range.setEnd(node, 1);
     const rect = range.getBoundingClientRect();
-    return { left: rect.left, top: rect.top, x: rect.left + rect.width / 5, y: rect.top + rect.height / 2 };
+    return { left: rect.left, top: rect.top, x: Math.ceil(rect.left + 0.5), y: Math.round(rect.top + rect.height / 2) };
   });
   const settle = () => page.evaluate(() => new Promise<void>(resolve => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   }));
   const click = async (selector: string) => {
     const { x, y } = await coords(selector);
+    const hit = await page.$eval(selector, (element, point) => {
+      const target = document.elementFromPoint(point.x, point.y);
+      return { matches: element.contains(target), target: target?.className, point };
+    }, { x, y });
+    assert.ok(hit.matches, `click must hit the rendered ${selector}: ${JSON.stringify(hit)}`);
     await page.mouse.click(x, y);
     await settle();
   };
@@ -1095,10 +1104,16 @@ async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
       });
     }, markdown);
     await page.waitForSelector(`${preview(3)} blockquote`);
-    await page.$eval(firstLine, element => {
-      const scroll = (window as any).__tableCellEditor.view.scrollDOM as HTMLElement;
-      scroll.scrollTop += element.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 80;
-    });
+    const headingLine = markdown.split('\n').findIndex(line => line.startsWith('| Test |')) + 1;
+    // Use the normal navigation owner so late editor measurement cannot
+    // invalidate a scroll offset taken from the initial table DOM.
+    await page.evaluate(line => (window as any).__tableCellEditor.scrollToLine(line, 'top'), headingLine - 3);
+    await page.waitForFunction(selector => {
+      const element = document.querySelector(selector);
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && element.contains(document.elementFromPoint(rect.left + 1, (rect.top + rect.bottom) / 2));
+    }, {}, firstLine);
     await settle();
     const prior = await coords(firstLine);
     const middle = `${preview(1)} .meo-md-html-table-cell-line:nth-child(2) .meo-md-link`;
@@ -1166,7 +1181,8 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
   const first = `${preview} li:first-child`;
   await page.waitForSelector(first, { visible: true });
   await page.click(first);
-  assert.equal(await page.$eval(`${sourceLine} .meo-md-table-source-break`, element => getComputedStyle(element).display), 'none');
+  assert(await page.$eval(`${sourceLine} .meo-md-table-source-break`, element => element.getBoundingClientRect().width > 0),
+    'entering the logical line shows its break before the caret reaches the tag');
   await page.keyboard.press('End');
   await page.keyboard.press('ArrowRight');
   const marker = await page.$eval(sourceLine, el => {
@@ -1320,7 +1336,10 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
   const linkedCell = 'tbody tr:nth-child(3) td:nth-child(2)';
   await page.click(`${linkedCell} .meo-md-link`);
   const link = await page.$eval(`${linkedCell} .meo-md-table-inline-source`, el => {
-    const text = el.firstChild!;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode();
+    while (text && !text.textContent?.includes('Example')) text = walker.nextNode();
+    if (!text) throw new Error('Missing revealed link label');
     const range = document.createRange();
     range.setStart(text, 2);
     range.setEnd(text, 3);

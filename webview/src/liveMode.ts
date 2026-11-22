@@ -15,7 +15,7 @@ import { blockStickyHeaderExtension } from './helpers/blockStickyHeader';
 import { livePointerSelectionActiveField, setLivePointerSelectionActiveEffect, sourcePresentationSelection } from './editor/livePointerSelection';
 import { blockReadingFocusAt, enterBlockSource, isBlockInteractionEffect } from './editor/blockInteraction';
 import { bindWidgetClick, disposeWidgetClick } from './editor/widgetPointer';
-import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, type Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection } from '@codemirror/state';
+import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, type Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection, type SelectionRange } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { Language, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
@@ -49,7 +49,7 @@ import { ImageGroupWidget, ImageWidget, getImageData, isImageUrl, type ImageGrou
 import { getImagePresentationFactory } from './editor/imagePresentation';
 import { liveHighlightStyle, sourceMarkdownHighlightProps } from './theme';
 import { getInlineMarkdownExtensions } from './helpers/inlineMarkdownParser';
-import { inlineSourceContains, innermostInlineSource, type InlineEditRange } from './helpers/inlineSourceEditing';
+import { inlineSourceContains, inlineSourceTarget, type InlineEditRange } from './helpers/inlineSourceEditing';
 import { latexDelimitersFacet } from './editor/mathSyntaxPreference';
 import { mathDelimiterLength } from './helpers/math';
 import { collectKbdTagRangesFromText, hasKbdTagMarker } from './helpers/kbd';
@@ -513,7 +513,7 @@ function addHtmlBreakDecoration(
   builder: DecorationCollector,
   state: EditorState,
   node: SyntaxNodeRef,
-  editing: boolean,
+  revealBreak: (line: number, range: InlineEditRange, followedByText: boolean) => boolean,
   frontmatter: FrontmatterInfo | null
 ): void {
   if (isInsideFrontmatter(frontmatter, node.from)) {
@@ -527,7 +527,7 @@ function addHtmlBreakDecoration(
 
   const line = state.doc.lineAt(node.from);
   const needsVisualBreak = state.doc.sliceString(node.to, line.to).trim().length > 0;
-  if (editing) {
+  if (revealBreak(line.number, node, needsVisualBreak)) {
     addRange(builder, node.from, node.to, htmlBreakSourceDeco);
     if (needsVisualBreak) {
       builder.push(
@@ -1516,37 +1516,65 @@ function liveInlineSource(state: EditorState, tree: Tree, math: readonly Documen
   const selections = state.field(liveDocumentIdleField) ? [] : sourcePresentationSelection(state).ranges;
   const openingBoundaries = new Set(selections.filter(range => range.empty).map(range => range.head));
   const closingBoundaries = new Set(openingBoundaries);
+  const breakSelections = new Map<number, SelectionRange[]>();
+  for (const selection of selections) {
+    const line = state.doc.lineAt(selection.head).number;
+    const list = breakSelections.get(line);
+    if (list) list.push(selection);
+    else breakSelections.set(line, [selection]);
+  }
   const active = selections.map(selection => {
     const candidates: InlineEditRange[] = [];
-    for (let node: SyntaxNode | null = tree.resolve(selection.from, 1); node; node = node.parent) {
-      if (!inlineSourceNodeNames.has(node.name)) continue;
-      if (node.name === 'Link' && !isWikiLinkNode(state, node) && !hrefFromSourceLinkNode(state, node)
-        && !node.getChild('URL')) continue;
-      candidates.push(node);
+    for (const side of selection.empty ? [-1, 1] as const : [1] as const) {
+      for (let node: SyntaxNode | null = tree.resolve(selection.from, side); node; node = node.parent) {
+        if (!inlineSourceNodeNames.has(node.name)) continue;
+        if (node.name === 'Link' && !isWikiLinkNode(state, node) && !hrefFromSourceLinkNode(state, node)
+          && !node.getChild('URL')) continue;
+        candidates.push(node);
+      }
     }
-    const mathRange = inlineRangeAt(math, selection);
-    if (mathRange && !mathRange.fencedDisplay) return mathRange;
-    const reference = inlineRangeAt(footnotes.references, selection);
-    if (reference?.definition) return reference;
+    const opaque = [
+      ...inlineRangesAt(math, selection).filter(range => !range.fencedDisplay),
+      ...inlineRangesAt(footnotes.references, selection).filter(reference => reference.definition)
+    ];
     const line = state.doc.lineAt(selection.from);
     if (hasKbdTagMarker(line.text)) candidates.push(...collectKbdTagRangesFromText(line.text, line.from));
-    return innermostInlineSource(candidates, selection);
+    return inlineSourceTarget([
+      ...opaque,
+      ...candidates.filter(candidate => !opaque.some(range => inlineSourceContains(range, candidate)))
+    ], selection, selection.assoc || -1);
   });
   return {
     editing(from: number, to: number) {
+      return active.some(range => range && inlineSourceContains({ from, to }, range));
+    },
+    targeting(from: number, to: number) {
       return active.some(range => range?.from === from && range.to === to);
     },
-    object(from: number, to: number) {
-      const candidate = { from, to };
-      let editing = false;
+    objects(candidates: readonly InlineEditRange[]) {
+      const editing = new Set<InlineEditRange>();
       selections.forEach((selection, index) => {
-        if (!inlineSourceContains(candidate, selection)) return;
-        // Opaque widgets own their complete source even if the Markdown tree
-        // parsed tokens inside the rendered object.
-        active[index] = candidate;
-        editing = true;
+        const current = active[index];
+        const target = inlineSourceTarget(current && !candidates.some(candidate => inlineSourceContains(candidate, current))
+          ? [...candidates, current] : candidates, selection, selection.assoc || -1);
+        if (target && target !== current) {
+          editing.add(target);
+          active[index] = target;
+        }
       });
       return editing;
+    },
+    lineBreak(line: number, range: InlineEditRange, followedByText: boolean) {
+      const pending = breakSelections.get(line);
+      if (!pending) return false;
+      // The first break after a caret terminates its logical line. A caret at
+      // a shared boundary can still belong to the preceding rendered line.
+      const remaining = pending.filter(selection => selection.empty
+        ? followedByText && (selection.head > range.to || selection.head === range.to && selection.assoc >= 0)
+        : !inlineSourceContains(range, selection));
+      if (!remaining.length) breakSelections.delete(line);
+      else if (remaining.length !== pending.length) breakSelections.set(line, remaining);
+      return remaining.length !== pending.length;
     },
     intersects(from: number, to: number) {
       return selections.some(selection => inlineSourceContains({ from, to }, selection));
@@ -1557,15 +1585,14 @@ function liveInlineSource(state: EditorState, tree: Tree, math: readonly Documen
   };
 }
 
-function inlineRangeAt<T extends InlineEditRange>(ranges: readonly T[], selection: InlineEditRange): T | undefined {
+function inlineRangesAt<T extends InlineEditRange>(ranges: readonly T[], selection: InlineEditRange): T[] {
   let low = 0, high = ranges.length;
   while (low < high) {
     const mid = (low + high) >>> 1;
     if (ranges[mid]!.from <= selection.from) low = mid + 1;
     else high = mid;
   }
-  const range = ranges[low - 1];
-  return range && inlineSourceContains(range, selection) ? range : undefined;
+  return ranges.slice(Math.max(0, low - 2), low).filter(range => inlineSourceContains(range, selection));
 }
 
 function collectActiveLines(state: EditorState): Set<number> {
@@ -2038,7 +2065,8 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
   for (const body of htmlCodeBodies) if (!scope || body.to >= scope.from && body.from <= scope.to) addRange(ranges, body.from, body.to, inlineStyleDecos.inlineCode);
   const inlineHtmlRanges: Array<{ from: number; to: number }> = [];
   const htmlDecorationStart = ranges.length;
-  const renderedHtmlBlocks = addHtmlContentDecorations(ranges, state, previous, changes, inlineHtmlRanges, scope, inlineSource.object);
+  const renderedHtmlBlocks = addHtmlContentDecorations(ranges, state, previous, changes, inlineHtmlRanges, scope, inlineSource.objects);
+  const insideInlineHtml = indexSourceRanges(inlineHtmlRanges);
 
   // Foundation readers can finish the parser while preparing shared context.
   // Render the completed outer Markdown tree now, rather than publishing a
@@ -2319,7 +2347,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
         }
 
         const parent = node.node.parent;
-        if (inlineSource.editing(node.from, node.to) || (parent?.name === 'Link' && inlineSource.editing(parent.from, parent.to))) {
+        if (inlineSource.editing(node.from, node.to) || (parent?.name === 'Link' && inlineSource.targeting(parent.from, parent.to))) {
           const { url, altText, linkUrl, width, height } = getImageData(state, node);
           if (url) {
             const group = activeImageGroups.get(line.number) ?? { line, items: [] };
@@ -2345,8 +2373,8 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
             }).range(node.from, node.to)
           );
         }
-      } else if ((node.name === 'HTMLTag' || node.name === 'HTMLBlock') && tableDepth === 0) {
-        addHtmlBreakDecoration(ranges, state, node, inlineSource.intersects(node.from, node.to), frontmatter);
+      } else if ((node.name === 'HTMLTag' || node.name === 'HTMLBlock') && tableDepth === 0 && !insideInlineHtml(node.from, node.to)) {
+        addHtmlBreakDecoration(ranges, state, node, inlineSource.lineBreak, frontmatter);
       }
 
       if (node.name === 'Subscript' || node.name === 'Superscript') {
@@ -2471,7 +2499,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
             return;
           }
           const link = imageNode.parent;
-          useActiveDeco ||= link?.name === 'Link' && inlineSource.editing(link.from, link.to);
+          useActiveDeco ||= link?.name === 'Link' && inlineSource.targeting(link.from, link.to);
         } else if (parentName === 'Link') {
           if (isWikiLinkNode(state, parent) || !hrefFromSourceLinkNode(state, parent)) return;
         }
@@ -4814,7 +4842,7 @@ const liveDecorationField = StateField.define<DecorationSet>({
     // structure, while other effects may refresh resources or presentation.
     // An explicit selection can end an editing/search reveal even at the same position.
     const identicalPlainSelection = usesLargeDocumentDerivedWorkBudget(transaction.state)
-      && transaction.startState.selection.eq(transaction.state.selection)
+      && transaction.startState.selection.eq(transaction.state.selection, true)
       && hasDefaultLivePresentation(transaction.startState) && hasDefaultLivePresentation(transaction.state);
     if (!transaction.docChanged && (!transaction.selection || identicalPlainSelection) && !transaction.reconfigured
       && (transaction.effects.every((effect) => effect.is(shikiRefreshEffect))
