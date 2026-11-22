@@ -52,6 +52,7 @@ type ActiveMainInput = ActiveInput & {
   scrollTopBeforeInput: number;
   viewportMoved: boolean;
   insertedContentStart: { position: number; top: number } | null;
+  appendAnchor: { position: number; top: number } | null;
 };
 
 type ActiveNestedInput = ActiveInput & {
@@ -60,6 +61,8 @@ type ActiveNestedInput = ActiveInput & {
 };
 
 type MainInputMeasurement = {
+  // Undefined uses normal input settlement. Null is an append with no scroll needed.
+  appendScrollOrigin: number | null | undefined;
   insertedContentTop: number | null;
   caretTop: number | null;
   inputLineHeight: number;
@@ -83,7 +86,8 @@ export function createEditorInteractionContinuity(input: {
   readonly view: EditorView;
   readonly viewport: InteractionContinuityViewport;
   readonly getMode: () => 'live' | 'source';
-}): EditorInteractionContinuity {
+  readonly scrollPastEndEnabled?: () => boolean;
+}): EditorInteractionContinuity & { hasAppendInputAnchor(): boolean } {
   const { view, viewport, getMode } = input;
   let nextGeneration = 0;
   let active: ActiveMainInput | null = null;
@@ -92,11 +96,13 @@ export function createEditorInteractionContinuity(input: {
   let pendingCaretVisibleBeforeInput: boolean | null = null;
   let pendingInputLineHeight: number | null = null;
   let pendingInputLineNumber: number | null = null;
+  let pendingAppendAnchor: ActiveMainInput['appendAnchor'] = null;
   let inputSessionScrollTop: number | null = null;
   let inputSessionCaretTop: number | null = null;
   let inputSessionCaretVisible: boolean | null = null;
   let inputSessionRetainingCaretTop = false;
   let inputSessionPosition: number | null = null;
+  let inputSessionAppendAnchor: ActiveMainInput['appendAnchor'] = null;
   let disposed = false;
 
   const cancelActive = (): void => {
@@ -114,11 +120,13 @@ export function createEditorInteractionContinuity(input: {
     pendingCaretVisibleBeforeInput = null;
     pendingInputLineHeight = null;
     pendingInputLineNumber = null;
+    pendingAppendAnchor = null;
     inputSessionScrollTop = null;
     inputSessionCaretTop = null;
     inputSessionCaretVisible = null;
     inputSessionRetainingCaretTop = false;
     inputSessionPosition = null;
+    inputSessionAppendAnchor = null;
   };
 
   const isCurrent = (candidate: ActiveMainInput): boolean => (
@@ -145,23 +153,63 @@ export function createEditorInteractionContinuity(input: {
           const inputLineNumber = view.state.doc.lineAt(position).number;
           const coords = view.coordsAtPos(position);
           const scroller = view.scrollDOM.getBoundingClientRect();
+          const scrollTop = view.scrollDOM.scrollTop;
+          const anchor = candidate.appendAnchor;
+          const anchorTop = anchor ? view.coordsAtPos(anchor.position, 1)?.top : undefined;
+          let appendScrollOrigin: MainInputMeasurement['appendScrollOrigin'];
+          if (anchor && anchorTop !== undefined && coords) {
+            // Measure against the unchanged text. New wrapped rows can grow
+            // below it without turning the old caret row into a scroll target.
+            const bounds = editorViewportBounds(view);
+            const shift = anchorTop - anchor.top;
+            const fits = coords.top - shift >= bounds.top && coords.bottom - shift <= bounds.bottom;
+            const origin = fits ? scrollTop + shift / view.scaleY : scrollTop;
+            appendScrollOrigin = coords.top < bounds.top || coords.bottom > bounds.bottom
+              || Math.abs(origin - scrollTop) > 0.5 ? origin : null;
+          }
           return {
+            appendScrollOrigin,
             insertedContentTop: candidate.insertedContentStart
               ? view.coordsAtPos(candidate.insertedContentStart.position)?.top ?? null : null,
             caretTop: coords?.top ?? null,
             inputLineHeight,
             inputLineNumber,
             position,
-            scrollTop: view.scrollDOM.scrollTop,
+            scrollTop,
             visible: Boolean(coords && coords.top >= scroller.top && coords.bottom <= scroller.bottom),
             viewportMoved: candidate.viewportMoved || (
-              Math.abs(view.scrollDOM.scrollTop - candidate.scrollTopBeforeInput) > 0.5
+              Math.abs(scrollTop - candidate.scrollTopBeforeInput) > 0.5
             )
           };
         },
         write: (measurement: MainInputMeasurement | null) => {
           if (!measurement || !isCurrent(candidate)) return;
           if (animationFrame) candidate.remainingFrames -= 1;
+          const continueSettlement = () => {
+            if (!animationFrame) {
+              // Only a new animation frame can satisfy the stability budget.
+              candidate.stableFrames = 0;
+              schedule(candidate);
+              return;
+            }
+            if (candidate.remainingFrames <= 0 || candidate.stableFrames >= REQUIRED_STABLE_FRAMES) {
+              // A late resource measurement may come after the input frames.
+              // Keep the anchor available without polling until a new intent.
+              if (!candidate.awaitingDerivedPresentation && !candidate.appendAnchor) active = null;
+              return;
+            }
+            schedule(candidate);
+          };
+          if (measurement.appendScrollOrigin !== undefined) {
+            if (measurement.appendScrollOrigin !== null) {
+              candidate.stableFrames = 0;
+              viewport.revealCaret(measurement.position, () => isCurrent(candidate), measurement.appendScrollOrigin);
+            } else {
+              candidate.stableFrames += 1;
+            }
+            continueSettlement();
+            return;
+          }
           candidate.viewportMoved = measurement.viewportMoved;
           // A multiline insertion can acquire a block preview before the caret
           // after the source lines have already settled. If its start stayed
@@ -248,18 +296,7 @@ export function createEditorInteractionContinuity(input: {
             candidate.stableFrames += 1;
           }
 
-          if (!animationFrame) {
-            // Transactions and completed geometry receipts can both queue
-            // several measures in one frame. Only the RAF owns this budget.
-            candidate.stableFrames = 0;
-            schedule(candidate);
-            return;
-          }
-          if (candidate.remainingFrames <= 0 || candidate.stableFrames >= REQUIRED_STABLE_FRAMES) {
-            if (!candidate.awaitingDerivedPresentation) active = null;
-            return;
-          }
-          schedule(candidate);
+          continueSettlement();
         }
       };
       if (measuredLayout) request.write(request.read());
@@ -274,7 +311,7 @@ export function createEditorInteractionContinuity(input: {
     }
   };
 
-  const beginInputSettlement = (settleInSource = false, insertedContentPosition: number | null = null): void => {
+  const beginInputSettlement = (settleInSource: boolean, insertedContentPosition: number | null, endAppend: boolean): void => {
     const scrollTopAtInput = pendingScrollTopBeforeInput ?? view.scrollDOM.scrollTop;
     // A burst of keyboard input is one viewport interaction. If an earlier
     // character triggered a delayed height-map correction, the next
@@ -299,11 +336,13 @@ export function createEditorInteractionContinuity(input: {
     inputSessionScrollTop = scrollTopBeforeInput;
     inputSessionCaretTop = caretTopBeforeInput;
     inputSessionCaretVisible = caretVisibleBeforeInput;
+    inputSessionAppendAnchor = endAppend ? inputSessionAppendAnchor ?? pendingAppendAnchor : null;
     pendingScrollTopBeforeInput = null;
     pendingCaretTopBeforeInput = null;
     pendingCaretVisibleBeforeInput = null;
     pendingInputLineHeight = null;
     pendingInputLineNumber = null;
+    pendingAppendAnchor = null;
     cancelActive();
     const position = view.state.selection.main.head;
     const insertedContentTop = insertedContentPosition !== null ? view.coordsAtPos(insertedContentPosition)?.top : null;
@@ -322,6 +361,7 @@ export function createEditorInteractionContinuity(input: {
       viewportMoved: false,
       insertedContentStart: insertedContentPosition !== null && insertedContentTop != null
         ? { position: insertedContentPosition, top: insertedContentTop } : null,
+      appendAnchor: inputSessionAppendAnchor,
       awaitingDerivedPresentation: getMode() === 'live',
       frame: null,
       remainingFrames: MAX_SETTLE_FRAMES,
@@ -357,7 +397,15 @@ export function createEditorInteractionContinuity(input: {
       ? Boolean(coords && viewport && coords.top >= viewport.top && coords.bottom <= viewport.bottom)
       : null;
     pendingInputLineHeight = canCapture ? view.lineBlockAt(position).height : null;
-    pendingInputLineNumber = canCapture ? view.state.doc.lineAt(position).number : null;
+    const line = canCapture ? view.state.doc.lineAt(position) : null;
+    pendingInputLineNumber = line?.number ?? null;
+    pendingAppendAnchor = null;
+    if (line && !inputSessionAppendAnchor && input.scrollPastEndEnabled?.() && pendingCaretVisibleBeforeInput
+      && view.state.selection.main.empty && position === view.state.doc.length) {
+      const anchor = line.from === position ? Math.max(0, line.from - 1) : line.from;
+      const top = view.coordsAtPos(anchor, 1)?.top;
+      if (top !== undefined) pendingAppendAnchor = { position: anchor, top };
+    }
   };
   const captureKeyCommandInput = (event: KeyboardEvent): void => {
     if (
@@ -382,6 +430,8 @@ export function createEditorInteractionContinuity(input: {
   view.dom.addEventListener('blur', cancelOnInteraction, true);
 
   return {
+    hasAppendInputAnchor: () => Boolean(inputSessionAppendAnchor && view.hasFocus
+      && view.state.selection.main.head === view.state.doc.length),
     observe(update) {
       if (disposed) return;
       if (update.transactions.some(transaction => transaction.docChanged && transaction.isUserEvent('input.task'))) {
@@ -405,13 +455,21 @@ export function createEditorInteractionContinuity(input: {
           view.hasFocus && view.state.selection.main.empty
         ) {
           let insertedContentPosition: number | null = null;
-          if (update.transactions.length === 1) update.changes.iterChanges((_fromA, _toA, fromB, toB, inserted) => {
+          let endAppend = input.scrollPastEndEnabled?.() === true && Boolean(pendingAppendAnchor || inputSessionAppendAnchor)
+            && view.state.selection.main.head === view.state.doc.length && update.transactions.length === 1;
+          if (update.transactions.length === 1) update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
             if (inserted.lines > 1 && toB === view.state.selection.main.head) insertedContentPosition = fromB;
+            endAppend &&= fromA === toA && fromA === update.startState.doc.length;
           });
-          beginInputSettlement(toolbarInput, insertedContentPosition);
+          beginInputSettlement(toolbarInput, insertedContentPosition, endAppend);
         } else {
           cancel();
         }
+        return;
+      }
+
+      if (update.docChanged && inputSessionAppendAnchor) {
+        cancel();
         return;
       }
 

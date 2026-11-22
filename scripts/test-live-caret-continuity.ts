@@ -36,6 +36,61 @@ function checkPendingInputLayoutOwnership(): void {
   };
   globalThis.cancelAnimationFrame = (handle) => { frames.delete(handle); };
   try {
+    for (const shifted of [false, true]) {
+      let caretTop = 160;
+      let prefixTop = 40;
+      const dom = Object.assign(new EventTarget(), { ownerDocument: new EventTarget() });
+      const scroller = Object.assign(new EventTarget(), {
+        scrollTop: 1_000, getBoundingClientRect: () => ({ top: 0, bottom: 500 })
+      });
+      const doc = { length: 100, lineAt: () => ({ number: 10, from: 10 }) };
+      const view = {
+        dom, scrollDOM: scroller, hasFocus: true, defaultLineHeight: 24, scaleY: 1,
+        state: { selection: { main: { head: 100, empty: true } }, doc },
+        coordsAtPos: (pos: number) => ({ top: pos === 10 ? prefixTop : caretTop, bottom: (pos === 10 ? prefixTop : caretTop) + 24 }),
+        lineBlockAt: () => ({ height: 144 }),
+        requestMeasure: ({ read, write }: any) => write(read())
+      };
+      const continuity = createEditorInteractionContinuity({
+        view: view as any, getMode: () => 'live', scrollPastEndEnabled: () => true,
+        viewport: {
+          retainCaretTop(_position, top) {
+            scroller.scrollTop += caretTop - top;
+            prefixTop -= caretTop - top;
+            caretTop = top;
+          },
+          revealCaret(_position, _isCurrent, origin) {
+            prefixTop += scroller.scrollTop - origin;
+            caretTop += scroller.scrollTop - origin;
+            scroller.scrollTop = origin;
+          }
+        }
+      });
+      dom.dispatchEvent(new Event('beforeinput'));
+      // The new glyphs can wrap before the cached line height is updated.
+      // Also model CodeMirror already having scrolled up by those new rows.
+      caretTop += 72;
+      if (shifted) { scroller.scrollTop += 72; prefixTop -= 72; caretTop -= 72; }
+      const startState = { doc: { length: doc.length } };
+      doc.length += 200;
+      view.state.selection.main.head = doc.length;
+      continuity.observe({
+        startState, transactions: [{ docChanged: true, isUserEvent: isOrdinaryInputEvent }],
+        changes: { iterChanges(read: Function) { read(100, 100, 100, 300, { lines: 1 }); } }, selectionSet: true
+      } as any);
+      continuity.observe({ transactions: [{ docChanged: false, effects: [{ is: () => true }] }], selectionSet: false } as any);
+      for (let i = 0; i < 8 && frames.size; i++) {
+        const callbacks = [...frames.values()];
+        frames.clear();
+        for (const callback of callbacks) callback(0);
+      }
+      scroller.scrollTop += 36; prefixTop -= 36; caretTop -= 36;
+      continuity.observe({ transactions: [], geometryChanged: true, selectionSet: false } as any);
+      continuity.dispose();
+      if (prefixTop !== 40 || caretTop !== 232 || scroller.scrollTop !== 1_000) {
+        throw new Error('A wrapped EOF input with space below must retain existing text, including while line heights catch up');
+      }
+    }
     for (const captureBeforeInput of [true, false]) {
       let caretTop = 350;
       let lineNumber = 10;
@@ -473,6 +528,62 @@ async function main(): Promise<void> {
         wrapped,
         afterFirstFrame
       })}`);
+    }
+
+    const endBefore = await page.evaluate(async () => {
+      const editor = (window as any).__editor;
+      editor.setText(Array.from({ length: 1_500 }, (_, index) => `Paragraph ${index} with **bold** text.`).join('\n\n')
+        + '\n\nEOF witness ' + '2'.repeat(310), true);
+      editor.setScrollBeyondLastLine(true);
+      const view = editor.view;
+      const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+      view.focus();
+      for (let i = 0; i < 8; i++) await frame();
+      view.scrollDOM.scrollTop = view.lineBlockAt(view.state.doc.lineAt(view.state.doc.length).from).top - 34;
+      for (let i = 0; i < 8; i++) await frame();
+      const scope = window as any;
+      scope.readEndGrowth = () => {
+        const line = (view.contentDOM as HTMLElement).querySelector('.cm-activeLine');
+        const rect = line?.getBoundingClientRect();
+        return { top: rect?.top, bottom: rect?.bottom, viewportBottom: view.scrollDOM.getBoundingClientRect().bottom };
+      };
+      scope.endGrowthFrames = [];
+      const sample = () => {
+        if (!scope.endGrowthFrames) return;
+        scope.endGrowthFrames.push(scope.readEndGrowth());
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      return scope.readEndGrowth();
+    });
+    const growthInput = await page.createCDPSession();
+    try {
+      await growthInput.send('Input.insertText', { text: '2'.repeat(220) });
+      const endAfter = await page.evaluate(async () => {
+        const scope = window as any;
+        for (let i = 0; i < 12; i++) await new Promise(requestAnimationFrame);
+        const frames = scope.endGrowthFrames as Array<{ top?: number; bottom?: number }>;
+        scope.endGrowthFrames = null;
+        return { frames, final: scope.readEndGrowth() };
+      });
+      if (endBefore.top === undefined || endBefore.bottom === undefined || endAfter.frames.length < 4
+        || endAfter.frames.some(frame => frame.top === undefined || Math.abs(frame.top - endBefore.top) > 1)
+        || endAfter.final.bottom <= endBefore.bottom + 30 || endAfter.final.bottom >= endBefore.viewportBottom) {
+        throw new Error('EOF text must grow into the space below while its existing rows stay in place');
+      }
+      await growthInput.send('Input.insertText', { text: '2'.repeat(1_480) });
+      await page.evaluate(async () => {
+        for (let i = 0; i < 10; i++) await new Promise(requestAnimationFrame);
+      });
+      const beyondSpace = await readCaret();
+      if (!beyondSpace.visible || beyondSpace.caretBottom === null
+        || beyondSpace.viewportBottom - beyondSpace.caretBottom > 3 * beyondSpace.defaultLineHeight) {
+        throw new Error(`EOF input beyond the available space must still minimally reveal its caret: ${JSON.stringify(beyondSpace)}`);
+      }
+    } finally {
+      await growthInput.detach();
+      await page.evaluate(() => (window as any).__editor.setScrollBeyondLastLine(false));
     }
 
     const verifyMainTopReveal = async (

@@ -213,10 +213,7 @@ import {
   shouldDeferLiveInputDerivedWork,
   supersedeLiveInputDerivedWork
 } from './editor/liveInputDerivedWork';
-import {
-  createEditorInteractionContinuity,
-  type EditorInteractionContinuity
-} from './editor/interactionContinuity';
+import { createEditorInteractionContinuity } from './editor/interactionContinuity';
 import { markExternalDocumentPresentation } from './editor/externalDocumentPresentation';
 import { inputAssistanceFacet, typingAssistance } from './editor/typingAssistance';
 import { defaultInputAssistance, type InputAssistance, type InputSuggestionSetting } from '../../src/foundation/editingPreferences';
@@ -417,7 +414,7 @@ export function createEditor({
   let tableSelectionChangeQueued = false;
   let onScroll: (() => void) | null = null;
   let viewportController: ViewportController;
-  let interactionContinuity: EditorInteractionContinuity | null = null;
+  let interactionContinuity: ReturnType<typeof createEditorInteractionContinuity> | null = null;
   let onWindowPointerUp: ((event: PointerEvent) => void) | null = null;
   let onWindowPointerCancel: ((event: PointerEvent) => void) | null = null;
   let onWindowLostPointerCapture: ((event: PointerEvent) => void) | null = null;
@@ -2995,6 +2992,7 @@ export function createEditor({
   viewportController = new ViewportController(view, {
     getMode: () => currentMode === 'live' ? 'live' : 'source',
     scrollPastEndEnabled: () => scrollBeyondLastLine,
+    hasAppendInputAnchor: () => interactionContinuity?.hasAppendInputAnchor() === true,
     previewSurface: previewViewportSurface
   });
   const isReadingPreparationActive = () => {
@@ -3053,7 +3051,8 @@ export function createEditor({
         }, isCurrent);
       }
     },
-    getMode: () => currentMode === 'live' ? 'live' : 'source'
+    getMode: () => currentMode === 'live' ? 'live' : 'source',
+    scrollPastEndEnabled: () => scrollBeyondLastLine
   });
   const editorHistoryApplication = createEditorHistoryApplication();
   const restoreHistorySelection = (request: EditorHistoryRestoreRequest, isCurrent: () => boolean) => {
@@ -4441,6 +4440,7 @@ export function createEditor({
     },
     setScrollBeyondLastLine(enabled: boolean) {
       if (enabled === scrollBeyondLastLine) return;
+      interactionContinuity?.cancel();
       scrollBeyondLastLine = enabled;
       view.dispatch({ effects: scrollPastEndCompartment.reconfigure(enabled ? scrollPastEnd() : []) });
       viewportController.linkedPreviewReady();

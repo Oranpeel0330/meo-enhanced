@@ -4,6 +4,7 @@ import { editorViewportBounds } from '../editor/editorViewportBounds';
 import { tableRowWindowFor } from '../editor/tableRowWindow';
 import { sourceLinePositionAtTarget } from '../editor/domSourceLine';
 import { NativeInputViewport } from '../editor/nativeInputViewport';
+import { commitObservedEditorSize } from '../editor/layoutMeasurement';
 import type { CaretRetentionReference } from '../editor/blockInteraction';
 import { EditorView } from '@codemirror/view';
 import { createLinkedViewportMap, type LinkedViewportMap, type LinkedViewportPoint } from './linkedViewportMap';
@@ -133,6 +134,7 @@ interface ViewportControllerOptions {
   attachInteractions?: boolean;
   getMode?: () => 'live' | 'source';
   scrollPastEndEnabled?: () => boolean;
+  hasAppendInputAnchor?: () => boolean;
   previewSurface?: PreviewViewportSurface;
 }
 
@@ -454,6 +456,7 @@ export class ViewportController {
   private previewPresentationDepth = 0;
   private readonly getMode: () => 'live' | 'source';
   private readonly scrollPastEndEnabled: () => boolean;
+  private readonly hasAppendInputAnchor: () => boolean;
   private readonly previewSurface: PreviewViewportSurface | null;
   private readonly anchorTokens = new WeakMap<ViewportAnchorToken, ViewportAnchorTokenRecord>();
   private pendingDocumentPresentation: {
@@ -558,6 +561,7 @@ export class ViewportController {
     this.nativeInputViewport = new NativeInputViewport(view);
     this.getMode = options.getMode ?? (() => 'live');
     this.scrollPastEndEnabled = options.scrollPastEndEnabled ?? (() => false);
+    this.hasAppendInputAnchor = options.hasAppendInputAnchor ?? (() => false);
     this.previewSurface = options.previewSurface ?? null;
     controllerByDom.set(view.dom, this);
     if (options.attachInteractions !== false) {
@@ -702,6 +706,10 @@ export class ViewportController {
       },
       write: ({ anchor, from, interactionGeneration, to }) => {
         mutate();
+        if (this.hasAppendInputAnchor()) {
+          commitObservedEditorSize(this.view);
+          return;
+        }
         if (!anchor || interactionGeneration !== this.interactionGeneration) {
           this.view.requestMeasure();
           return;
@@ -769,6 +777,8 @@ export class ViewportController {
     }
     if (this.restoreNativeScrollbarBoundary()) return;
     this.activeScrollLockCorrection?.();
+    // The measured input anchor still owns late layout while appending.
+    if (this.hasAppendInputAnchor()) this.activeLayoutAnchor = null;
     const activeAnchor = this.activeLayoutAnchor;
     if (activeAnchor) {
       if (mapPosition) activeAnchor.position = mapPosition(activeAnchor.position);
