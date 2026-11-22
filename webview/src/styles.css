@@ -8032,7 +8032,6 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
   margin-left: 0;
   border: 0;
   background-color: var(--meo-caret-color);
-  transform-origin: left;
 }
 
 .cm-editor .cm-fat-cursor {

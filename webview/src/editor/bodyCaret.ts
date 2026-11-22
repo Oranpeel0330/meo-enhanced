@@ -3,7 +3,7 @@ import { layer, RectangleMarker, type EditorView } from '@codemirror/view';
 const caretDeviceWidth = 2;
 const cursorClass = 'cm-cursor cm-cursor-primary';
 
-type CaretPosition = { readonly viewportAnchor: number; readonly viewportLayoutLeft: number };
+type CaretPosition = { readonly layerLeft: number; readonly anchor: number };
 
 function mountCaretLayer(dom: HTMLElement) {
   const win = dom.ownerDocument.defaultView!;
@@ -13,8 +13,10 @@ function mountCaretLayer(dom: HTMLElement) {
   const paint = (cursor: HTMLElement, next: CaretPosition) => {
     position = next;
     const density = win.devicePixelRatio;
-    const left = Math.round(next.viewportAnchor * density) / density;
-    cursor.style.transform = `translateX(${left - next.viewportLayoutLeft}px) scaleX(${1 / density})`;
+    const viewportLeft = Math.round((next.layerLeft + next.anchor) * density) / density;
+    // Chromium snaps the fill to physical pixels during paint when the box is not transformed.
+    cursor.style.left = `${viewportLeft - next.layerLeft}px`;
+    cursor.style.width = `${caretDeviceWidth / density}px`;
   };
   const updateResolution = () => {
     const nextRatio = win.devicePixelRatio;
@@ -45,16 +47,12 @@ class BodyCaretMarker extends RectangleMarker {
   private readonly position: CaretPosition;
 
   constructor(rect: RectangleMarker, private readonly owner: CaretLayer) {
-    // Leave subpixel placement to the paint transform so layout rounding cannot change the stroke width.
-    super(cursorClass, Math.floor(rect.left), rect.top, caretDeviceWidth, rect.height);
-    const origin = owner.dom.getBoundingClientRect().left;
-    this.position = { viewportAnchor: origin + rect.left, viewportLayoutLeft: origin + this.left };
+    super(cursorClass, rect.left, rect.top, null, rect.height);
+    this.position = { layerLeft: owner.dom.getBoundingClientRect().left, anchor: rect.left };
   }
 
   override eq(previous: BodyCaretMarker): boolean {
-    return super.eq(previous)
-      && this.position.viewportAnchor === previous.position.viewportAnchor
-      && this.position.viewportLayoutLeft === previous.position.viewportLayoutLeft;
+    return super.eq(previous) && this.position.layerLeft === previous.position.layerLeft;
   }
 
   override draw(): HTMLDivElement {

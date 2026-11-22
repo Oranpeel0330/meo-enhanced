@@ -59,7 +59,8 @@ type ProcessExitOutcome = {
 const ownedBrowserStates = new WeakMap<Browser, OwnedBrowserState>();
 
 export async function launchTestBrowser(
-  dependencies?: TestBrowserLaunchDependencies
+  dependencies?: TestBrowserLaunchDependencies,
+  deviceScaleFactor?: number,
 ): Promise<Browser> {
   let executablePath: string | undefined;
   try {
@@ -67,6 +68,7 @@ export async function launchTestBrowser(
 
     executablePath = findBrowserExecutable();
     const args = ['--no-sandbox'];
+    if (deviceScaleFactor !== undefined) args.push(`--force-device-scale-factor=${deviceScaleFactor}`);
     if (process.env.MEO_TEST_FORCE_RENDERER_ACCESSIBILITY === '1') args.push('--force-renderer-accessibility');
     // Native smooth-scroll fixtures need real intermediate frames even when
     // the host OS disables animation. Other browser fixtures keep OS policy.
@@ -77,7 +79,8 @@ export async function launchTestBrowser(
     }
     return await launchOwnedTestBrowser({
       createUserDataDir: () => fs.promises.mkdtemp(path.join(os.tmpdir(), 'meo-test-browser-profile-')),
-      launch: ({ userDataDir }) => puppeteer.launch({ executablePath, headless: true, args, userDataDir }),
+      launch: ({ userDataDir }) => puppeteer.launch({ executablePath, headless: true, args, userDataDir,
+        ...(deviceScaleFactor !== undefined && { defaultViewport: null }) }),
       cleanupUserDataDir: (userDataDir) => fs.promises.rm(userDataDir, { recursive: true, force: false })
     });
   } catch (error) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import sharp from 'sharp';
+import type { Page } from 'puppeteer-core';
 import { installEditorCaretProbe, launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
 import { createAppearanceSettingsOwner, type AppearanceSettingsStore } from '../src/host/appearanceSettings';
 import { decodeWebviewToHostMessage } from '../src/protocol/messages';
@@ -29,10 +30,10 @@ try {
     catch (error) { return { type: 'uiColorsResult', requestId: input.requestId, result: { ok: false, error: { code: 'operation-failed', message: String(error) } } }; }
   });
   await page.exposeFunction('__savedColors', () => owner.getUiColors());
-  const openFixture = async (probeResolution = false) => {
-    await page.setViewport({ width: 1100, height: 820 });
+  const openFixture = async (page: Page, caretFixture = false, emulatedResolution = false) => {
+    if (!caretFixture || emulatedResolution) await page.setViewport({ width: 1100, height: 820 });
     await page.setContent('<!doctype html><style>html,body,#app{height:100%;margin:0}</style><body class="vscode-dark"><div id="app"></div></body>');
-    if (probeResolution) await page.evaluate(() => {
+    if (emulatedResolution) await page.evaluate(() => {
       const match = window.matchMedia.bind(window);
       const resolutions: MediaQueryList[] = [];
       window.matchMedia = query => {
@@ -63,14 +64,14 @@ try {
       }});
     ` });
     await page.addScriptTag({ content: await build.outputs[0].text() });
-    await page.evaluate((colors, probeResolution) => {
+    await page.evaluate((colors, caretFixture) => {
       const global = window as any;
-      const text = '# Heading\n\nbody' + ' '.repeat(probeResolution ? 20 : 1) + 'text\n\n- List item';
+      const text = '# Heading\n\nbody' + ' '.repeat(caretFixture ? 20 : 1) + 'text\n\n- List item';
       window.dispatchEvent(new MessageEvent('message', { data: { type: 'init', documentId: 'file:///colors.md', text, version: 1, savedRevision: { version: 1, text }, diagnostics: [], mode: 'source', uiLanguage: 'zh-CN', sourceLineNumbers: 'on', previewAppearance: 'light', previewFontFamily: '', previewSourceColoring: true, editorAppearance: 'auto', uiColors: colors, gitChangesGutter: false, gitDiffLineHighlights: false, gitDiffDetailsVisible: false, diffBaselineMode: 'current-edit', fixedBaselinePinned: false, fixedBaselineActive: false, contentMaxWidthEnabled: false, findOptions: { wholeWord: false, caseSensitive: false }, outlinePosition: 'right', outlineVisible: false, outlineWidth: 260, vscodeTheme: {name: 'fixture', type: 'dark', colors: {}, tokenColors: []}, editingPreferences: {input: {...global.EditingSettingsHarness.defaultInputAssistance},shortcuts:{}} } }));
-    }, owner.getUiColors(), probeResolution);
+    }, owner.getUiColors(), caretFixture);
     await page.waitForFunction(() => !document.querySelector('.mode-toolbar')?.classList.contains('meo-preload-toolbar'));
   };
-  const openSettings = async () => { await page.click('.more-tools-wrapper > .format-button'); await page.click('.more-tools-settings-button'); await page.click('[data-tab="appearance"]'); };
+  const openSettings = async (target = page) => { await target.click('.more-tools-wrapper > .format-button'); await target.click('.more-tools-settings-button'); await target.click('[data-tab="appearance"]'); };
   const input = (key: string) => `[data-setting="${key}"] .appearance-color-hex`;
   const edit = async (key: string, color: string) => {
     await page.click(input(key), {clickCount: 3}); await page.keyboard.type(color);
@@ -124,66 +125,82 @@ try {
   };
   const resetColors = '.appearance-footer > button:first-child';
   const source = () => page.$$eval('.cm-content, .cm-line, .cm-line span, .cm-gutters', elements => elements.map(element => [element.textContent, getComputedStyle(element).color, getComputedStyle(element).backgroundColor]));
-  await openFixture(true);
-  const blink = await page.addStyleTag({ content: '.cm-cursorLayer{animation:none!important}' });
-  for (const [appearance, color] of [['dark', 'rgb(69, 209, 187)'], ['light', 'rgb(32, 32, 32)']]) {
-    await openSettings();
-    await page.click(`[data-appearance-mode="${appearance}"]`);
-    await page.click('.settings-close');
-    for (const mode of ['source', 'live']) {
-      await page.click(`[data-mode="${mode}"]`);
-      const editor = `.cm-editor.meo-mode-${mode}`;
-      await page.click(editor + ' .cm-line:nth-child(3)');
-      const cursor = editor + ' > .cm-scroller > .cm-cursorLayer .cm-cursor-primary';
-      await page.waitForSelector(cursor, { visible: true });
-      await page.keyboard.press('Home');
-      // Measure the cursor independently of subpixel antialiasing on neighboring glyphs.
-      for (let step = 0; step < 8; step++) await page.keyboard.press('ArrowRight');
-      // Exercise a density-only change, then change both density and CSS viewport as Workbench zoom does.
-      for (const [scale, viewportScale] of [[1, 1], [1.25, 1], [1.5, 1.5], [1.8, 1.8], [2, 2], [0.8, 0.8], [1, 1]] as const) {
-        await page.setViewport({ width: Math.round(1100 / viewportScale), height: Math.round(820 / viewportScale), deviceScaleFactor: scale });
-        if (scale !== viewportScale) await page.evaluate(() => (window as ResolutionProbeWindow).emitResolutionChange!());
-        for (const position of ['stationary', 'moved']) {
-          if (position === 'moved') await page.keyboard.press('ArrowRight');
-          const probe = await page.$eval(cursor, async marker => {
-            await new Promise(requestAnimationFrame);
-            await new Promise(requestAnimationFrame);
-            const box = marker.getBoundingClientRect();
-            const style = getComputedStyle(marker);
-            return { left: box.left * devicePixelRatio, middle: (box.top + box.height / 2) * devicePixelRatio,
-              width: box.width * devicePixelRatio, color: style.backgroundColor };
-          });
-          const label = `${appearance}/${mode}, ${scale}×, ${position}`;
-          assert.equal(probe.color, color, label);
-          assert.ok(Math.abs(probe.width - 2) < 0.01, `${label}: width ${probe.width} physical pixels`);
-          assert.ok(Math.abs(probe.left - Math.round(probe.left)) < 0.01, `${label}: left edge ${probe.left} physical pixels`);
-          const painted = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-          const hide = await page.addStyleTag({ content: '.cm-cursor-primary{visibility:hidden!important}' });
-          const hidden = await sharp(await page.screenshot()).removeAlpha().raw().toBuffer();
-          await hide.evaluate(style => style.remove());
-          const row = Math.floor(probe.middle) * painted.info.width;
-          const left = Math.round(probe.left);
-          const columns: number[] = [];
-          const samples: { x: number; shown: number[]; hidden: number[] }[] = [];
-          for (let x = left - 2; x < left + 4; x++) {
-            const offset = (row + x) * painted.info.channels;
-            const shown = painted.data.subarray(offset, offset + 3);
-            const background = hidden.subarray(offset, offset + 3);
-            if (!shown.equals(background)) columns.push(x);
-            samples.push({ x, shown: [...shown], hidden: [...background] });
-          }
-          assert.ok(samples.every(sample => sample.hidden.every((channel, index) => channel === samples[0]!.hidden[index])),
-            `${label}: blank caret test strip ${JSON.stringify(samples)}`);
-          assert.deepEqual(columns, [left, left + 1], `${label}: exactly two painted columns ${JSON.stringify({ probe, samples })}`);
-          const ink = channels(color);
-          assert.ok(samples.slice(2, 4).every(sample => sample.shown.every((channel, index) => channel === ink[index])),
-            `${label}: both columns are solid ${JSON.stringify(samples)}`);
-        }
-      }
+  const focusCaret = async (target: Page, mode: string) => {
+    await target.click(`[data-mode="${mode}"]`);
+    const editor = `.cm-editor.meo-mode-${mode}`;
+    await target.click(editor + ' .cm-line:nth-child(3)');
+    const cursor = editor + ' > .cm-scroller > .cm-cursorLayer .cm-cursor-primary';
+    await target.waitForSelector(cursor, { visible: true });
+    await target.keyboard.press('Home');
+    // Put the caret in a blank strip away from glyphs and the gutter.
+    for (let step = 0; step < 8; step++) await target.keyboard.press('ArrowRight');
+    return cursor;
+  };
+  const measureCaret = (target: Page, cursor: string) => target.$eval(cursor, async marker => {
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
+    const box = marker.getBoundingClientRect();
+    return { left: box.left * devicePixelRatio, middle: (box.top + box.height / 2) * devicePixelRatio,
+      width: box.width * devicePixelRatio, color: getComputedStyle(marker).backgroundColor };
+  });
+
+  await openFixture(page, true, true);
+  for (const mode of ['source', 'live']) {
+    const cursor = await focusCaret(page, mode);
+    for (const scale of [1.25, 1]) {
+      const ratio = await page.evaluate(() => devicePixelRatio);
+      await page.setViewport({ width: 1100, height: 820, deviceScaleFactor: scale });
+      await page.evaluate(() => (window as ResolutionProbeWindow).emitResolutionChange!());
+      const probe = await measureCaret(page, cursor);
+      assert.notEqual(scale, ratio);
+      assert.ok(Math.abs(probe.width - 2) <= scale / 64, `${mode}: a density-only change updates the stationary caret`);
     }
   }
-  console.log('Live and Source caret passed: 56 pixel checks, light/dark, stationary and moving at device scales 0.8–2');
-  await blink.evaluate(style => style.remove());
+
+  // A DevTools DPR override scales an already laid out surface. Exercise the browser's actual paint path.
+  for (const scale of [1, 1.25, 1.5, 1.75, 1.8, 2, 0.8]) {
+    const paintBrowser = await launchTestBrowser(undefined, scale);
+    try {
+      const target = await paintBrowser.newPage();
+      await openFixture(target, true);
+      await target.addStyleTag({ content: '.cm-cursorLayer{animation:none!important}' });
+      assert.ok(Math.abs(await target.evaluate(() => devicePixelRatio) - scale) < 0.0001);
+      for (const [appearance, color] of [['dark', 'rgb(69, 209, 187)'], ['light', 'rgb(32, 32, 32)']]) {
+        await openSettings(target);
+        await target.click(`[data-appearance-mode="${appearance}"]`);
+        await target.click('.settings-close');
+        for (const mode of ['source', 'live']) {
+          const cursor = await focusCaret(target, mode);
+          for (const position of ['initial', 'moved']) {
+            if (position === 'moved') await target.keyboard.press('ArrowRight');
+            const probe = await measureCaret(target, cursor);
+            const label = `${appearance}/${mode}, ${scale}×, ${position}`;
+            assert.equal(probe.color, color, label);
+            const layoutUnit = 1 / 64 + 0.001;
+            assert.ok(Math.abs(probe.width - 2) <= layoutUnit, `${label}: width ${probe.width} physical pixels`);
+            assert.ok(Math.abs(probe.left - Math.round(probe.left)) <= layoutUnit, `${label}: left edge ${probe.left} physical pixels`);
+            const painted = await sharp(await target.screenshot()).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+            const hide = await target.addStyleTag({ content: '.cm-cursor-primary{visibility:hidden!important}' });
+            const hidden = await sharp(await target.screenshot()).removeAlpha().raw().toBuffer();
+            await hide.evaluate(style => style.remove());
+            const row = Math.floor(probe.middle) * painted.info.width;
+            const left = Math.round(probe.left);
+            const samples = [-2, -1, 0, 1, 2, 3].map((delta) => {
+              const x = left + delta;
+              const offset = (row + x) * painted.info.channels;
+              return { x, shown: painted.data.subarray(offset, offset + 3), hidden: hidden.subarray(offset, offset + 3) };
+            });
+            const changed = samples.filter(({ shown, hidden }) => !shown.equals(hidden));
+            assert.deepEqual(changed.map(({ x }) => x), [left, left + 1], `${label}: exactly two painted columns ${JSON.stringify({ probe, samples })}`);
+            for (const { shown } of changed) assert.deepEqual([...shown], channels(color), `${label}: both columns are solid`);
+          }
+        }
+      }
+    } finally {
+      await closeTestBrowser(paintBrowser);
+    }
+  }
+  console.log('Live and Source caret passed: 56 real-scale pixel checks, light/dark, and 4 stationary density-change checks');
   await page.click('[data-mode="source"]');
   await openSettings();
   await page.click('[data-appearance-mode="auto"]');
@@ -438,7 +455,7 @@ try {
   await edit('caret', '#FFAA44');
   assert.equal(await caret(), 'rgb(255, 170, 68)', 'a custom cursor previews in Source');
   await saved('dark', 'caret', '#FFAA44');
-  await page.click('.settings-close'); await openFixture(); await openSettings();
+  await page.click('.settings-close'); await openFixture(page); await openSettings();
   assert.equal(await value('surface'), '#122739', 'reload receives persisted values');
   assert.equal(await value('textEmphasis'), '#99CCAA');
   assert.equal(await value('caret'), '#FFAA44', 'the cursor override survives a reload');
@@ -605,7 +622,7 @@ try {
     return color;
   };
   for (const appearance of ['light', 'dark']) {
-    await openFixture();
+    await openFixture(page);
     await page.evaluate(appearance => {
       document.body.className = 'vscode-' + appearance;
       const root = document.documentElement.style;
