@@ -2789,7 +2789,10 @@ export function createEditor({
   });
 
   view = new EditorView({
-    dispatchTransactions: applyPrimaryEditorTransactions,
+    dispatchTransactions: (transactions, editorView) => {
+      interactionContinuity?.captureBeforeTransactions(transactions);
+      applyPrimaryEditorTransactions(transactions, editorView);
+    },
     state,
     parent
   });

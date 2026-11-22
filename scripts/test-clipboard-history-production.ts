@@ -59,7 +59,69 @@ async function enableHtmlPaste(page: any): Promise<void> {
   await frames(page, 4);
 }
 
+async function assertLivePasteAtScrollEnd(large: boolean): Promise<void> {
+  const original = 'Earlier paragraph.\n\n'.repeat(large ? 8_200 : 100) + 'Before paste witness\n\n';
+  assert.equal(assessLargeDocument(original).boundedEditorWork, large);
+  const tableText = '\n\n| Pasted witness | Value |\n| --- | --- |\n| Text | More |\n';
+  const page = await browser.newPage();
+  const host = await open(page, original, false, 'live', { scrollBeyondLastLine: true });
+  try {
+    await page.setViewport({ width: 1050, height: 560 });
+    await setRanges(page, [{ anchor: original.length, head: original.length }], 0);
+    await frames(page, 8);
+    const point = await page.$eval('.editor-host .cm-scroller', element => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + 90, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel({ deltaY: 1_000_000 });
+    await frames(page, 10);
+    const read = () => page.evaluate(() => {
+      const content = document.querySelector('.editor-host .cm-content')!;
+      const view = (content as any).cmTile.root.view;
+      const scroll = view.scrollDOM as HTMLElement;
+      const top = scroll.getBoundingClientRect().top;
+      const caret = view.coordsAtPos(view.state.selection.main.head);
+      const witness = [...content.querySelectorAll('.cm-line')].find(line => line.textContent === 'Before paste witness');
+      const table = [...content.querySelectorAll('table')].find(el => el.textContent?.includes('Pasted witness'));
+      return { top: scroll.scrollTop, max: scroll.scrollHeight - scroll.clientHeight, height: scroll.clientHeight,
+        lineHeight: view.defaultLineHeight as number, head: view.state.selection.main.head as number,
+        witnessY: witness ? witness.getBoundingClientRect().top - top : null,
+        tableTop: table ? table.getBoundingClientRect().top - top : null,
+        tableBottom: table ? table.getBoundingClientRect().bottom - top : null,
+        caretTop: caret ? caret.top - top as number : null, caretBottom: caret ? caret.bottom - top as number : null };
+    });
+    const before = await read();
+    assert.ok(Math.abs(before.top - before.max) <= 1 && before.caretTop !== null && before.caretTop >= 0
+      && before.caretBottom !== null && before.caretBottom <= before.height);
+    await dispatchClipboard(page, 'paste', tableText);
+    await page.waitForFunction(() => [...document.querySelectorAll('.editor-host table')]
+      .some(table => table.textContent?.includes('Pasted witness')));
+    await frames(page, 12);
+    const after = await read();
+    assert.ok(before.witnessY !== null && after.witnessY !== null && Math.abs(before.witnessY - after.witnessY) <= 1
+      && after.tableTop !== null && after.tableTop >= before.caretTop - 1
+      && after.tableBottom !== null && after.caretBottom !== null && after.tableBottom <= after.caretBottom
+      && after.caretBottom <= after.height, `A table pasted at the scroll limit must grow below the old content: ${JSON.stringify({ before, after })}`);
+    assert.equal(after.head, original.length + tableText.length);
+
+    const tallText = '\n\n' + 'More pasted text.\n\n'.repeat(45) + 'End of the paste.';
+    await dispatchClipboard(page, 'paste', tallText);
+    await frames(page, 12);
+    const tall = await read();
+    assert.ok(tall.caretTop !== null && tall.caretTop >= 0 && tall.caretBottom !== null
+      && tall.caretBottom <= tall.height + 1 && tall.height - tall.caretBottom < 3 * tall.lineHeight,
+      `A paste taller than the remaining space should reveal its caret near the bottom: ${JSON.stringify(tall)}`);
+    assert.equal(tall.head, original.length + tableText.length + tallText.length);
+    assert.equal(host.readHost(), original + tableText + tallText);
+    assert.deepEqual(host.errors, []);
+    console.log(`Live clipboard paste stays below the existing content at the scroll limit (${large ? 'optimized' : 'ordinary'})`);
+  } finally { host.dispose(); await page.close(); }
+}
+
 try {
+  await assertLivePasteAtScrollEnd(false);
+  await assertLivePasteAtScrollEnd(true);
   {
     const id = receipts[0]!;
     const original = prefix + 'left word right' + suffix;

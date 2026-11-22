@@ -1,4 +1,5 @@
 import { editorViewportBounds } from './editorViewportBounds';
+import type { Transaction } from '@codemirror/state';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { isLiveInputDerivedWorkRefresh } from './liveInputDerivedWork';
 
@@ -87,7 +88,10 @@ export function createEditorInteractionContinuity(input: {
   readonly viewport: InteractionContinuityViewport;
   readonly getMode: () => 'live' | 'source';
   readonly scrollPastEndEnabled?: () => boolean;
-}): EditorInteractionContinuity & { hasAppendInputAnchor(): boolean } {
+}): EditorInteractionContinuity & {
+  captureBeforeTransactions(transactions: readonly Transaction[]): void;
+  hasAppendInputAnchor(): boolean;
+} {
   const { view, viewport, getMode } = input;
   let nextGeneration = 0;
   let active: ActiveMainInput | null = null;
@@ -430,6 +434,14 @@ export function createEditorInteractionContinuity(input: {
   view.dom.addEventListener('blur', cancelOnInteraction, true);
 
   return {
+    captureBeforeTransactions(transactions) {
+      if (disposed || getMode() !== 'live' || view.compositionStarted || !transactions.some(transaction =>
+        transaction.docChanged && transaction.isUserEvent('input.paste'))) return;
+      // CodeMirror and custom paste commands can dispatch without a native
+      // beforeinput event. In both cases capture the same pre-edit layout.
+      cancel();
+      captureScrollTopBeforeInput();
+    },
     hasAppendInputAnchor: () => Boolean(inputSessionAppendAnchor && view.hasFocus
       && view.state.selection.main.head === view.state.doc.length),
     observe(update) {
