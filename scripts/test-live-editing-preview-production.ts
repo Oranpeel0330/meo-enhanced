@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { browser, server, open, frames, captureResult } from './input-presentation-test-helpers';
 import { closeTestBrowser } from './browser-test-helpers';
 import { assessLargeDocument } from '../src/foundation/largeDocument';
+import { emptyMarkdownTable } from '../webview/src/application/delimitedTable';
 
 // Native input and the production Workers/renderers must make preview progress
 // during typing, rather than waiting for the full-document quiet window.
@@ -14,8 +15,82 @@ const cases: Array<{ kind: Kind; name: string; block: string; layout?: string; l
   { kind: 'math', name: 'math/latex', block: '\\[\nx=42\n\\]', latex: true },
   { kind: 'math', name: 'math/fence', block: '```math\nx=42\n```' }
 ];
+
+async function insertTableAtScrollEnd(large: boolean, nearViewportBottom = false): Promise<void> {
+  const text = 'Paragraph with **bold** text.\n\n'.repeat(large ? 8_200 : 100)
+    + 'Table insert witness' + (nearViewportBottom ? '' : '\n\n');
+  assert.equal(assessLargeDocument(text).boundedEditorWork, large);
+  const page = await browser.newPage();
+  const host = await open(page, text, false, 'live', { scrollBeyondLastLine: true });
+  try {
+    await page.setViewport({ width: 1180, height: 610 });
+    await page.$eval('.editor-host .cm-content', content => {
+      const view = (content as any).cmTile.root.view;
+      view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+      view.focus();
+    });
+    await frames(page, 10);
+    const point = await page.$eval('.editor-host .cm-scroller', element => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + 75, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel({ deltaY: 1_000_000 });
+    await frames(page, 10);
+    if (nearViewportBottom) {
+      const deltaY = await page.$eval('.editor-host .cm-content', content => {
+        const view = (content as any).cmTile.root.view;
+        return view.coordsAtPos(view.state.doc.length).bottom - view.scrollDOM.getBoundingClientRect().bottom + 6;
+      });
+      await page.mouse.wheel({ deltaY });
+      await frames(page, 10);
+    }
+    const read = () => page.evaluate(() => {
+      const content = document.querySelector('.editor-host .cm-content')!;
+      const scroll = content.parentElement!;
+      const viewport = scroll.getBoundingClientRect();
+      const witness = [...content.querySelectorAll('.cm-line')].find(line => line.textContent === 'Table insert witness');
+      const table = content.querySelector('.meo-md-html-table-shell')?.getBoundingClientRect();
+      const input = content.querySelector('.meo-md-html-table thead textarea');
+      const cell = input?.getBoundingClientRect();
+      return { scrollTop: scroll.scrollTop, max: scroll.scrollHeight - scroll.clientHeight,
+        height: scroll.clientHeight, witnessY: witness ? witness.getBoundingClientRect().top - viewport.top : null,
+        tableTop: table ? table.top - viewport.top : null, tableBottom: table ? table.bottom - viewport.top : null,
+        cellBottom: cell ? cell.bottom - viewport.top : null, focused: document.activeElement === input };
+    });
+    const before = await read();
+    assert.ok(before.witnessY !== null);
+    if (!nearViewportBottom) assert.ok(Math.abs(before.max - before.scrollTop) <= 1);
+    await page.hover('.table-wrapper > .format-button');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.table-dropdown-wrapper')!).opacity === '1');
+    await page.click('.table-wrapper > .format-button');
+    await page.click('.table-grid-cell[data-row="3"][data-col="3"]');
+    await frames(page, 16);
+    const after = await read();
+    assert.equal(host.readHost(), text + (nearViewportBottom ? '\n\n' : '') + emptyMarkdownTable(3, 3));
+    const details = JSON.stringify({ before, after });
+    assert.ok(after.focused, `Toolbar insertion should focus the first cell: ${details}`);
+    if (nearViewportBottom) {
+      assert.ok(after.witnessY !== null && after.witnessY < before.witnessY && after.cellBottom !== null
+        && Math.abs(after.height - after.cellBottom) <= 1, `Scroll just enough to show the first cell: ${details}`);
+    } else {
+      assert.ok(after.witnessY !== null && Math.abs(after.witnessY - before.witnessY) <= 1
+        && after.tableTop !== null && after.tableTop >= 0 && after.tableBottom !== null && after.tableBottom <= after.height,
+        `Keep the existing text and the new table visible: ${details}`);
+    }
+    await page.keyboard.type('First cell');
+    await page.waitForFunction(() => (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view
+      .state.doc.toString().endsWith('| First cell |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |\n|  |  |  |'));
+    assert.deepEqual(host.errors, []);
+    const fixture = nearViewportBottom ? 'near viewport bottom' : large ? 'optimized' : 'ordinary';
+    console.log(`Toolbar insertion and first cell input stay at the document end (${fixture})`);
+  } finally { host.dispose(); await page.close(); }
+}
+
 try {
-  for (const large of [false, true]) for (const test of cases) {
+  for (const large of [false, true]) await insertTableAtScrollEnd(large);
+  await insertTableAtScrollEnd(false, true);
+  for (const large of [false, true]) for (const test of process.argv.includes('--table-insertion-only') ? [] : cases) {
     const { kind, block } = test, label = `${test.name}/${large ? 'large' : 'ordinary'}`;
     const marker = kind === 'math' ? '42' : 'Seed42';
     const text = (large ? 'Reading paragraph.\n\n'.repeat(800) : '') + 'Before\n\n' + block + '\n\nAfter\n\n'

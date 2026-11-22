@@ -1319,18 +1319,58 @@ export function createEditor({
     return toggleHtmlComment(view, lines, () => onCommentBlocked?.());
   };
 
-  const focusInsertedTable = () => {
+  const focusInsertedTable = (beforeFocus?: () => void) => {
     if (currentMode !== 'live') return;
     view.dispatch({ effects: supersedeLiveInputDerivedWork() });
+    beforeFocus?.();
     const selection = view.state.selection.main;
     restoreTableModeSelection({ anchor: selection.anchor, head: selection.head }, true);
   };
 
   const insertTableAtSelection = (cols = 3, rows = 2) => {
     if (getActiveTableInput()) return false;
-    const inserted = insertTable(view, view.state.selection.main, inputContext, cols, rows, Transaction.userEvent.of('input.toolbar'));
-    if (inserted) focusInsertedTable();
-    return inserted;
+    const { doc, selection: { main: selection } } = view.state;
+    const appendingAtEnd = currentMode === 'live' && scrollBeyondLastLine && selection.to === doc.length;
+    const line = doc.lineAt(selection.to);
+    const position = line.text.trim() ? line.from : Math.max(0, line.from - 1);
+    const top = appendingAtEnd && doc.length > 0 && isPositionVisible(selection.to)
+      ? view.coordsAtPos(position, 1)?.top : undefined;
+    // Measure and retain the existing text before the new cell takes focus.
+    // A cell focused in a provisional table would retain the wrong viewport.
+    if (top !== undefined) viewportController.markInteraction();
+    const retention = top === undefined ? null : viewportController.retainElementTop(
+      null, () => null, viewportController.captureNavigationCurrentness(), { position, top, geometry: 'caret' }
+    );
+    let inserted = false;
+    try {
+      inserted = insertTable(view, selection, inputContext, cols, rows, Transaction.userEvent.of('input.toolbar'));
+      if (!inserted) return false;
+      focusInsertedTable(retention ? () => {
+        flushEditorLayout(view);
+        retention.correct();
+      } : undefined);
+      if (appendingAtEnd) {
+        const isCurrent = viewportController.captureNavigationCurrentness();
+        // The toolbar finishes its focus return after this command. Check the
+        // actual focused cell once its editing layer has been laid out.
+        requestAnimationFrame(() => {
+          const input = isCurrent() ? getActiveTableInput() : null;
+          if (!input) return;
+          const rect = input.getBoundingClientRect(), bounds = tableUsableViewportBounds(view, input);
+          if (rect.top >= bounds.top && rect.bottom <= bounds.bottom) return;
+          const revealIsCurrent = viewportController.beginNavigationReveal();
+          viewportController.revealVerticalBounds(
+            () => input.isConnected ? input.getBoundingClientRect() : null,
+            () => revealIsCurrent() && input === getActiveTableInput(),
+            { readViewportBounds: () => tableUsableViewportBounds(view, input) }
+          );
+        });
+      }
+      return true;
+    } finally {
+      if (inserted) retention?.finish();
+      else retention?.cancel();
+    }
   };
 
   const requestEditorHistoryReplay = async (direction: EditorHistoryDirection): Promise<boolean> => {
