@@ -76,8 +76,8 @@ export function visualLineContextMargin(
 export interface PreviewViewportSurface {
   /** Cross-pane coordinates are valid only for the current Source revision. */
   isCurrentDocument?(): boolean;
-  /** Explicit Source navigation reveals its block once, after its reading DOM is ready. */
-  revealSourcePosition?(line: number, isCurrent: () => boolean): void | Promise<void>;
+  /** Reveal after the matching reading DOM is ready. */
+  revealSourcePosition?(line: number, isCurrent: () => boolean, intent?: 'end-edit'): void | Promise<void>;
   /** A mounted unchanged glyph is more precise than an estimated source range. */
   captureVisualReadingAnchor?(viewportRatio?: number, preferredSourceLine?: number): (() => boolean) | null;
   captureTopVisiblePosition(viewportOffset?: number): {
@@ -446,7 +446,11 @@ export class ViewportController {
     point?: { sourceOffset: number; previewOffset: number };
   } | null = null;
   private linkedProjectionPending = false;
-  private pendingLinkedSourceReveal: { line: number; started?: boolean; isCurrent: () => boolean } | null = null;
+  private pendingLinkedSourceReveal: {
+    line: number; intent?: 'end-edit'; started?: boolean; isCurrent: () => boolean;
+  } | null = null;
+  private linkedPreviewInputDocument: EditorView['state']['doc'] | null = null;
+  private linkedEndEditRange: (ScrollEndRange & { measuredPreviewEnd: number | null }) | null = null;
   private previewPresentationDepth = 0;
   private readonly getMode: () => 'live' | 'source';
   private readonly scrollPastEndEnabled: () => boolean;
@@ -729,11 +733,15 @@ export class ViewportController {
   reconcileAfterEditorUpdate(
     mapPosition?: (position: number) => number,
     measuredLayout = true,
-    externalDocumentPresentation = false
+    externalDocumentPresentation = false,
+    localInput = false
   ): void {
     // Input, paste, history and external edits can all reveal/anchor the Source
     // caret. Those native scroll events are not a new cross-pane navigation.
-    if (mapPosition) this.holdLinkedPreviewAttention();
+    if (mapPosition) {
+      this.holdLinkedPreviewAttention();
+      this.linkedPreviewInputDocument = this.linkedPreviewEnabled && localInput ? this.view.state.doc : null;
+    }
     // View updates emitted from CodeMirror's measurement pass run after its
     // internal height-map anchoring and before the browser paints. Reconcile an
     // active history lock here so no intermediate anchored position is visible.
@@ -976,6 +984,8 @@ export class ViewportController {
     this.linkedSemanticOrigin = null;
     this.linkedProjectionPending = false;
     this.pendingLinkedSourceReveal = null;
+    this.linkedPreviewInputDocument = null;
+    this.linkedEndEditRange = null;
     if (!enabled) { this.linkedPreviewAttentionHeld = false; this.linkedAttentionPosition = null; }
     if (enabled) {
       this.linkedViewportPosition = null;
@@ -1013,11 +1023,11 @@ export class ViewportController {
     this.linkedProjectionGeneration += 1;
   }
 
-  locateLinkedSourcePosition(line: number): void {
+  locateLinkedSourcePosition(line: number, intent?: 'end-edit'): void {
     if (this.destroyed || !this.linkedPreviewEnabled || !this.previewSurface?.revealSourcePosition) return;
     this.holdLinkedPreviewAttention();
     const projection = this.linkedProjectionGeneration, navigation = this.navigationGeneration;
-    this.pendingLinkedSourceReveal = { line, isCurrent: () => !this.destroyed && this.linkedPreviewEnabled
+    this.pendingLinkedSourceReveal = { line, intent, isCurrent: () => !this.destroyed && this.linkedPreviewEnabled
       && projection === this.linkedProjectionGeneration && navigation === this.navigationGeneration };
     this.presentLinkedSourceReveal();
   }
@@ -1033,10 +1043,11 @@ export class ViewportController {
     const complete = () => {
       if (this.pendingLinkedSourceReveal === reveal) {
         this.pendingLinkedSourceReveal = null;
+        if (reveal.intent === 'end-edit' && reveal.isCurrent()) this.alignLinkedScrollEndAfterEdit();
         this.rememberLinkedAttentionPosition();
       }
     };
-    const completion = this.previewSurface?.revealSourcePosition?.(reveal.line, reveal.isCurrent);
+    const completion = this.previewSurface?.revealSourcePosition?.(reveal.line, reveal.isCurrent, reveal.intent);
     if (completion && typeof completion.then === 'function') void completion.then(complete, complete);
     else complete();
   }
@@ -1092,6 +1103,11 @@ export class ViewportController {
     ) return false;
     this.markInteraction(owner);
     this.linkedSemanticOrigin = null;
+    if (this.linkedEndEditRange) {
+      this.linkedEndEditRange = null;
+      this.linkedViewportMapDirty = true;
+      this.scheduleLinkedViewportMapRefresh();
+    }
     this.writeScrollPosition({
       top: 0,
       left: this.view.scrollDOM.scrollLeft
@@ -1111,6 +1127,7 @@ export class ViewportController {
   }
 
   linkedPreviewReady(project = true): void {
+    if (!this.scrollPastEndEnabled()) this.linkedEndEditRange = null;
     this.presentLinkedSourceReveal();
     if (!project && !this.linkedProjectionPending) return;
     this.linkedViewportMapDirty = true;
@@ -1159,17 +1176,18 @@ export class ViewportController {
       const head = this.view.state.selection?.main.head;
       const preferredSourceLine = !documentChange && linkedPreviewEnabled && this.linkedPreviewAttentionHeld
         && this.getMode() === 'source' && head !== undefined ? this.view.state.doc.lineAt(head).number : undefined;
-      const restoreVisualAnchor = this.previewSurface.captureVisualReadingAnchor?.(documentChange ? 0 : readingRatio, preferredSourceLine);
       const previewGestureActive = linkedPreviewEnabled && projectionDriver === 'preview' && this.isLinkedInteractionActive();
+      const changedRange = documentChange && !previewGestureActive
+        ? findChangedDocumentRange(documentChange.previousText, documentChange.nextText) : null;
+      const endEditLine = documentChange && changedRange && this.previewSurface.revealSourcePosition
+        ? this.linkedEndEditLine(documentChange.nextText, changedRange) : null;
+      const restoreVisualAnchor = endEditLine === null
+        ? this.previewSurface.captureVisualReadingAnchor?.(documentChange ? 0 : readingRatio, preferredSourceLine) : null;
       let readingAnchor: ViewportDocumentAnchor | null = null;
       // Source scrolling cannot displace an independently scrolled Preview.
-      if ((!linkedPreviewEnabled || !this.isUserScrolling()) && !previewGestureActive) {
+      if (endEditLine === null && (!linkedPreviewEnabled || !this.isUserScrolling()) && !previewGestureActive) {
         if (documentChange) {
           const topAnchor = this.capturePreviewDocumentAnchor(0, undefined, documentChange.previousText);
-          const changedRange = findChangedDocumentRange(
-            documentChange.previousText,
-            documentChange.nextText
-          );
           // Edits inside or below the visible surface should not turn typing into
           // viewport motion. Only an upstream edit can displace the current view;
           // in that case preserve the semantic element at the top edge.
@@ -1188,6 +1206,14 @@ export class ViewportController {
       }
       mutate();
       this.linkedViewportMapDirty = true;
+      if (endEditLine !== null) {
+        // Keep the current reading offset while the new body is committed.
+        // Reapplying the blank-space ratio would scroll past the new text.
+        this.previewSurface.writeScrollTop(heldPreviewTop);
+        this.locateLinkedSourcePosition(endEditLine, 'end-edit');
+        this.scheduleLinkedViewportMapRefresh();
+        return;
+      }
       // Async Preview presentation commits can change the height of content above
       // the reading point. When Source owns an idle viewport, project the semantic
       // position sampled from Preview against the committed geometry
@@ -1253,6 +1279,16 @@ export class ViewportController {
       return;
     }
     this.runAnchorTransaction(handle, 'preview', () => mutate());
+  }
+
+  private linkedEndEditLine(nextText: string, change: ChangedDocumentRange): number | null {
+    const { doc, selection } = this.view.state;
+    if (doc !== this.linkedPreviewInputDocument || !this.linkedPreviewAttentionHeld || !this.view.hasFocus
+      || this.getMode() !== 'source' || selection.main.head !== doc.length || doc.length !== nextText.length
+      || scrollEndProgress(this.editorScrollEndRange(), this.view.scrollDOM.scrollTop) === null) return null;
+    const inserted = change.insertedText.trimEnd();
+    const end = change.from + inserted.length;
+    return inserted && nextText.slice(end).trim() === '' ? doc.lineAt(end - 1).number : null;
   }
 
   private projectLinkedViewport(owner: ViewportAnchorOwner): void {
@@ -1350,11 +1386,34 @@ export class ViewportController {
       : null;
   }
 
+  private alignLinkedScrollEndAfterEdit(accepted?: LinkedViewportPoint): void {
+    const editor = this.editorScrollEndRange();
+    const progress = scrollEndProgress(editor, accepted?.source ?? this.view.scrollDOM.scrollTop);
+    const previewTop = accepted?.preview ?? this.previewSurface?.readScrollTop?.();
+    if (!editor || progress === null || previewTop === undefined) return;
+    const preview = this.previewSurface?.scrollEndRange?.();
+    const length = preview ? preview.end - preview.start : editor.end - editor.start;
+    const start = Math.max(0, previewTop - length * progress);
+    // The edited body can end before a relocated footnote appendix. The next
+    // gesture starts at the accepted pair rather than jumping to that appendix.
+    this.linkedEndEditRange = { start, end: start + length, measuredPreviewEnd: preview?.end ?? null };
+    this.linkedViewportMapDirty = true;
+  }
+
+  private linkedPreviewScrollEndRange(): ScrollEndRange | null {
+    const natural = this.previewSurface?.scrollEndRange?.() ?? null;
+    const edited = this.linkedEndEditRange;
+    if (!edited) return natural;
+    const delta = natural && edited.measuredPreviewEnd !== null ? natural.end - edited.measuredPreviewEnd : 0;
+    const start = Math.max(0, edited.start + delta), end = edited.end + delta;
+    return end > start ? { start, end } : natural;
+  }
+
   private projectLinkedScrollEnd(owner: ViewportAnchorOwner): boolean {
     const preview = this.previewSurface;
     if (!preview?.readScrollTop || !preview.writeScrollTop) return false;
     const editorRange = this.editorScrollEndRange();
-    const previewRange = preview.scrollEndRange?.();
+    const previewRange = this.linkedPreviewScrollEndRange();
     if (!editorRange || !previewRange) return false;
     const editorTop = this.view.scrollDOM.scrollTop;
     const previewTop = preview.readScrollTop();
@@ -1413,7 +1472,10 @@ export class ViewportController {
       source: owner === 'editor' && previous ? previous.source : this.view.scrollDOM.scrollTop,
       preview: owner === 'preview' && previous ? previous.preview : this.previewSurface.readScrollTop()
     } : undefined;
-    if (origin) this.linkedViewportPosition = origin;
+    if (origin) {
+      this.linkedViewportPosition = origin;
+      if (this.linkedEndEditRange) this.alignLinkedScrollEndAfterEdit(origin);
+    }
     this.rebaseLinkedSemanticOrigin(origin?.source ?? this.view.scrollDOM.scrollTop, origin?.preview);
     // An incoming owner has not claimed the pair yet. Projecting the outgoing
     // owner here would undo compositor progress before that claim can arrive.
@@ -1504,7 +1566,7 @@ export class ViewportController {
     }
     const linkedMap = createLinkedViewportMap(points, {
       sourceMaximum: sourceCoordinate(sourceMaximum),
-      previewMaximum: this.previewSurface?.scrollEndRange?.()?.start ?? Math.max(0, geometry.maximumScrollTop)
+      previewMaximum: this.linkedPreviewScrollEndRange()?.start ?? Math.max(0, geometry.maximumScrollTop)
     }, pinnedPoint ? { source: sourceCoordinate(pinnedPoint.source), preview: pinnedPoint.preview } : undefined);
     if (!sourceMode) return linkedMap;
     return {

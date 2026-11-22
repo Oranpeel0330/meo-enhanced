@@ -222,6 +222,11 @@ export function createEditorInteractionContinuity(input: {
               measurement.caretTop !== null &&
               Math.abs(measurement.caretTop - candidate.caretTopBeforeInput) <= 0.5
             ) {
+              // A later wrap or Enter releases caret retention. Its reveal
+              // must start from the offset that now paints the accepted Y.
+              candidate.scrollTopBeforeInput = measurement.scrollTop;
+              inputSessionScrollTop = measurement.scrollTop;
+              candidate.viewportMoved = false;
               candidate.stableFrames += 1;
             } else {
               candidate.stableFrames = 0;

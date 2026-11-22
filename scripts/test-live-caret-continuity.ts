@@ -38,6 +38,7 @@ function checkPendingInputLayoutOwnership(): void {
   try {
     for (const captureBeforeInput of [true, false]) {
       let caretTop = 350;
+      let lineNumber = 10;
       let pendingCorrection = false;
       const dom = Object.assign(new EventTarget(), { ownerDocument: new EventTarget() });
       const scroller = Object.assign(new EventTarget(), {
@@ -53,7 +54,7 @@ function checkPendingInputLayoutOwnership(): void {
       const view = {
         dom, scrollDOM: scroller, hasFocus: true, defaultLineHeight: 24,
         state: { selection: { main: { head: 100, empty: true } },
-          doc: { length: 1_000, lineAt: () => ({ number: 10 }) } },
+          doc: { length: 1_000, lineAt: () => ({ number: lineNumber }) } },
         coordsAtPos: () => {
           correctVirtualHeights();
           return { top: caretTop, bottom: caretTop + 24 };
@@ -89,6 +90,16 @@ function checkPendingInputLayoutOwnership(): void {
       caretTop = 700;
       continuity.observe({ transactions: [], selectionSet: false, geometryChanged: true } as any);
       if (caretTop !== 350 || retains !== 1) throw new Error('Later layout must retain the adopted physical anchor');
+      dom.dispatchEvent(new Event('beforeinput'));
+      lineNumber += 1;
+      caretTop += 24;
+      view.state.selection.main.head += 1;
+      continuity.observe({
+        transactions: [{ docChanged: true, isUserEvent: isOrdinaryInputEvent }], changes: { iterChanges() {} }, selectionSet: true
+      } as any);
+      if (reveals !== 0 || caretTop !== 374 || scroller.scrollTop !== 600) {
+        throw new Error('Enter with a visible caret must keep the accepted position after a virtual height correction');
+      }
       view.state.selection.main.head += 10;
       continuity.observe({ transactions: [], selectionSet: true } as any);
       caretTop = 700;

@@ -423,11 +423,74 @@ async function exerciseScrollBeyondLastLine(large: boolean) {
     console.log(`Linked scroll beyond last line passed (${large ? 'windowed' : 'ordinary'})`);
   } finally { host.dispose(); await page.close(); }
 }
+
+async function exerciseScrollEndEditing(large: boolean) {
+  const page = await browser.newPage();
+  const text = '# Scroll end editing\n\nReference[^item].\n\n[^item]: This appendix renders after the document body.\n\n'
+    + Array.from({ length: large ? 4_250 : 75 }, (_, index) =>
+      `Paragraph ${index} with **formatted text** and ${'some wrapping words. '.repeat(5)}\n\n`).join('')
+    + 'Existing last paragraph.\n';
+  const appended = 'New body text at the end.';
+  const host = await open(page, text, false, 'source', { scrollBeyondLastLine: true });
+  try {
+    await page.click('.source-preview-button');
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('.preview-host')?.inert
+      && !!document.querySelector<HTMLIFrameElement>('.preview-frame')?.contentDocument?.querySelector('main.meo-export-doc'));
+    const point = await page.$eval('.editor-host .cm-scroller', element => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + 48, y: rect.top + rect.height / 2 };
+    });
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel({ deltaY: 2_000_000 });
+    await page.waitForFunction(() => {
+      const editor = document.querySelector('.editor-host .cm-scroller')!;
+      const preview = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+      return Math.abs(editor.scrollHeight - editor.clientHeight - editor.scrollTop) <= 1
+        && [...preview.querySelectorAll('p')].some(paragraph => paragraph.textContent === 'Existing last paragraph.');
+    });
+    await page.$eval('.editor-host .cm-content', element => {
+      const view = (element as any).cmTile.root.view;
+      view.dispatch({ selection: { anchor: view.state.doc.length } });
+      view.focus();
+    });
+    await page.keyboard.press('Enter');
+    await page.keyboard.type(appended);
+    await page.waitForFunction(appended => document.querySelector<HTMLIFrameElement>('.preview-frame')!
+      .contentDocument!.querySelector('main')?.textContent?.includes(appended), {}, appended);
+    const position = await page.evaluate(appended => {
+      const doc = document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!;
+      const target = [...doc.querySelectorAll('p')].find(paragraph => paragraph.textContent === appended);
+      return { top: target?.getBoundingClientRect().top, bottom: target?.getBoundingClientRect().bottom,
+        height: doc.scrollingElement!.clientHeight, windowed: doc.documentElement.dataset.meoPreviewWindowed };
+    }, appended);
+    assert.equal(position.windowed, String(large));
+    assert.ok(position.top !== undefined && position.bottom !== undefined && position.top >= -1 && position.bottom <= position.height + 1,
+      `Typing in the scroll-past-end area must show the appended body text in Preview: ${JSON.stringify(position)}`);
+    const scrollTops = () => page.evaluate(() => ({
+      source: document.querySelector('.editor-host .cm-scroller')!.scrollTop,
+      preview: document.querySelector<HTMLIFrameElement>('.preview-frame')!.contentDocument!.scrollingElement!.scrollTop
+    }));
+    const before = await scrollTops();
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.wheel({ deltaY: -32 });
+    await new Promise(resolve => setTimeout(resolve, 450));
+    const after = await scrollTops();
+    assert.ok(Math.abs(before.source - after.source - 32) <= 2
+      && before.preview - after.preview > 8 && before.preview - after.preview < 55,
+      `A small wheel gesture must continue from the edited Preview position: ${JSON.stringify({ before, after })}`);
+    assert.ok(host.readHost() === text + '\n' + appended, 'The new paragraph must reach the host');
+    assert.deepEqual(host.errors, []);
+    console.log(`Appended text stays visible in split Preview (${large ? 'windowed' : 'ordinary'})`);
+  } finally { host.dispose(); await page.close(); }
+}
+
 let primaryError: unknown;
 try {
   if (!process.argv.includes('--handoff-only')) {
     await exerciseScrollBeyondLastLine(false);
     await exerciseScrollBeyondLastLine(true);
+    await exerciseScrollEndEditing(false);
+    await exerciseScrollEndEditing(true);
   }
   if (!process.argv.includes('--scroll-end-only')) {
     for (const [count, wrapped, scale] of [[180, false, 1], [5000, false, 1], [180, true, 1], [1800, true, 1.25]] as const) {

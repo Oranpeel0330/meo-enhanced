@@ -2713,7 +2713,9 @@ export function createEditor({
         viewportController?.reconcileAfterEditorUpdate(
           update.docChanged ? (position) => update.changes.mapPos(position, 1) : undefined,
           update.transactions.length === 0,
-          applyingExternal
+          applyingExternal,
+          update.docChanged && !applyingExternal && update.transactions.some(transaction =>
+            transaction.docChanged && transaction.isUserEvent('input'))
         );
         interactionContinuity?.observe(update);
         if (update.geometryChanged || update.docChanged || update.viewportChanged) {

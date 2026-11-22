@@ -3858,14 +3858,27 @@ export function createPreviewController({
       restoreTopVisiblePosition(position, isCurrent, true),
     isCurrentDocument: () => frameRenderedText !== null && isCurrentText?.(frameRenderedText) !== false
       && getFrameDocument()?.documentElement.dataset.meoPreviewLayout === previewLayout,
-    revealSourcePosition: (line: number, isCurrent: () => boolean, align: 'nearest' | 'upper' = 'nearest') => {
+    revealSourcePosition: (line: number, isCurrent: () => boolean, align: 'nearest' | 'upper' | 'end-edit' = 'nearest') => {
       if (isCurrent()) previewScrollRange?.interrupt();
       const current = previewViewport, generation = frameGeneration;
+      const endEdit = align === 'end-edit';
       const valid = () => !disposed && !host.hidden && isCurrent() && generation === frameGeneration
-        && current === previewViewport && sourcePositionMarkerState.line === line
+        && current === previewViewport && (endEdit || sourcePositionMarkerState.line === line)
         && frameRenderedText !== null && isCurrentText?.(frameRenderedText) !== false;
       const reveal = () => {
         if (!valid()) return;
+        if (endEdit) {
+          const entry = findSourceProjection(line, true)?.exact;
+          const scroll = getFrameDocument()?.scrollingElement;
+          if (!entry?.rendered || !scroll) return;
+          // Preserve what is already visible. For an overlong paragraph,
+          // bring its newly typed end into view.
+          const bottomAligned = entry.bottom - scroll.clientHeight;
+          const topAligned = Math.max(entry.top, bottomAligned);
+          const top = Math.min(topAligned, Math.max(bottomAligned, scroll.scrollTop));
+          if (Math.abs(top - scroll.scrollTop) > 0.5) scroll.scrollTop = top;
+          return;
+        }
         if (align === 'upper') {
           const scroll = getFrameDocument()?.scrollingElement;
           const offset = Math.round((scroll?.clientHeight ?? 0) * 0.3);
@@ -3889,10 +3902,10 @@ export function createPreviewController({
           restoreTopLine(line, 0, scroll.clientHeight, undefined, valid);
         }
       };
-      if (current && !current.containsLine(line)) {
+      if (current && !current.containsLine(line, endEdit)) {
         // Keep the old window painted; only the newest click may reveal the
         // destination after its source-backed block has actually mounted.
-        return current.ensure({ line, scroll: false, isCurrent: valid }).then(reveal, error => {
+        return current.ensure({ line, scroll: false, readingFlow: endEdit, isCurrent: valid }).then(reveal, error => {
           if (valid()) handleWindowError(error);
         });
       } else reveal();
