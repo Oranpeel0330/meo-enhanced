@@ -1223,7 +1223,7 @@ class InlineHtmlWidget extends UiLanguageSensitiveWidget {
       if (target?.closest(htmlReadingControls + ', .meo-md-html-comment')) return;
       event.preventDefault();
       view.focus();
-      view.dispatch({ selection: { anchor: this.from } });
+      view.dispatch({ selection: { anchor: this.from + 1 } });
     });
     return wrapper;
   }
@@ -1243,7 +1243,7 @@ class InlineHtmlWidget extends UiLanguageSensitiveWidget {
 function addInlineHtmlDecorations(
   ranges: any[],
   state: EditorState,
-  activeLines: ReadonlySet<number>,
+  editingInline: (from: number, to: number) => boolean,
   blockRanges: readonly RenderableHtmlBlock[],
   inlineRanges: Array<{ from: number; to: number }>,
   scope?: { from: number; to: number }
@@ -1261,7 +1261,6 @@ function addInlineHtmlDecorations(
   for (const line of documentLines(state.doc, scope ? state.doc.lineAt(scope.from).number : 1,
     scope ? state.doc.lineAt(scope.to).number : state.doc.lines)) {
     const lineNo = line.number;
-    if (activeLines.has(lineNo)) continue;
     if (overlapsBlock(line.from, line.to)) continue;
     for (const fragment of splitHtmlBlockFragments(line.text)) {
       const source = line.text.slice(fragment.from, fragment.to);
@@ -1271,6 +1270,7 @@ function addInlineHtmlDecorations(
       const to = line.from + fragment.to;
       // Only actual HTML syntax may replace source; code, escapes, comments and scripts are literal.
       if (!tagStarts.has(from) || !tagEnds.has(to)) continue;
+      if (editingInline(from, to)) continue;
       ranges.push(Decoration.replace({
         widget: new InlineHtmlWidget(source, from, lineNo),
         inclusive: false
@@ -1283,11 +1283,11 @@ function addInlineHtmlDecorations(
 export function addHtmlContentDecorations(
   ranges: any[],
   state: EditorState,
-  activeLines: ReadonlySet<number>,
   previousDecorations?: DecorationSet,
   changes?: ChangeDesc,
   inlineRanges: Array<{ from: number; to: number }> = [],
-  scope?: { from: number; to: number }
+  scope?: { from: number; to: number },
+  editingInline: (from: number, to: number) => boolean = () => false
 ): RenderableHtmlBlock[] {
   const editingRange = getHtmlEditingRange(state);
   const blocks = collectRenderableHtmlBlocks(state, resolvedSyntaxTree(state), scope);
@@ -1372,7 +1372,7 @@ export function addHtmlContentDecorations(
       }).range(line.to));
     }
   });
-  addInlineHtmlDecorations(ranges, state, activeLines, blocks, inlineRanges, scope);
+  addInlineHtmlDecorations(ranges, state, editingInline, blocks, inlineRanges, scope);
   return blocks;
 }
 

@@ -1,10 +1,84 @@
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { Page } from 'puppeteer-core';
 import { launchTestBrowser } from './browser-test-helpers';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-table-colors-'));
+
+async function checkSwatchesWhileEditing(page: Page): Promise<void> {
+  await page.setViewport({ width: 1100, height: 700 });
+  for (const large of [false, true]) for (const table of [false, true]) {
+    const line = 'Color #336699 and **sample #AA4411**';
+    const source = (table ? `| Color |\n| --- |\n| ${line} |` : line) + '\n\nAfter.'
+      + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+    const label = `${table ? 'table' : 'prose'}/${large ? 'optimized' : 'ordinary'}`;
+    const root = table ? 'tbody .meo-md-html-table-cell-preview' : '.cm-content';
+    await page.evaluate(source => {
+      const harness = (window as any).TableStabilityHarness;
+      const editor = (window as any).editingColorEditor = harness.createEditor({
+        parent: document.getElementById('app')!, initialMode: 'live', text: source, onApplyChanges() {}
+      });
+      editor.view.dispatch({ selection: { anchor: source.indexOf('After.') } });
+    }, source);
+    await page.waitForFunction(({ large, root }) => {
+      const { TableStabilityHarness, editingColorEditor } = window as any;
+      return TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(editingColorEditor.view.state) === large
+        && document.querySelector(`${root} [data-color-value="#AA4411"]`);
+    }, {}, { large, root });
+    const point = await page.$eval(`${root} [data-color-value="#336699"]`, (swatch, root) => {
+      const walker = document.createTreeWalker(swatch.closest(root)!, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const index = node.textContent!.indexOf('#336699');
+        if (index < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, index + 3);
+        range.setEnd(node, index + 4);
+        const rect = range.getBoundingClientRect();
+        return { x: Math.ceil(rect.left + 1), y: rect.top + rect.height / 2 };
+      }
+      throw new Error('Missing HEX text');
+    }, root);
+    const visibleSwatches = () => page.$$eval(`${root} .meo-md-color-swatch`, elements =>
+      elements.filter(element => element.getBoundingClientRect().width > 0 && getComputedStyle(element).visibility === 'visible')
+        .map(element => (element as HTMLElement).style.backgroundColor));
+    const reading = await visibleSwatches();
+    assert.deepEqual(reading, ['rgb(51, 102, 153)', 'rgb(170, 68, 17)'], `${label}: both reading swatches are visible`);
+    await page.mouse.click(point.x, point.y);
+    if (table) await page.waitForSelector(`${root} .meo-md-table-active-source-line`);
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.deepEqual(await visibleSwatches(), reading, `${label}: placing the caret in the color keeps both swatches`);
+    await page.keyboard.press('Delete');
+    await page.keyboard.type('8');
+    await page.waitForFunction(root => Array.from(document.querySelectorAll<HTMLElement>(`${root} .meo-md-color-swatch`))
+      .some(swatch => swatch.style.backgroundColor === 'rgb(51, 134, 153)' && swatch.getBoundingClientRect().width > 0), {}, root);
+    const inBold = table ? `${root} .meo-md-table-inline-source` : `${root} .meo-md-strong-marker-active`;
+    await page.keyboard.press('End');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowLeft');
+    await page.waitForSelector(inBold);
+    assert.deepEqual(await visibleSwatches(), ['rgb(51, 134, 153)', 'rgb(170, 68, 17)'],
+      `${label}: revealing emphasis keeps its nested color swatch`);
+    await page.waitForFunction(() => (window as any).editingColorEditor.getText().includes('#338699'));
+    if (!large && process.env.MEO_TEST_SCREENSHOTS) {
+      fs.mkdirSync(process.env.MEO_TEST_SCREENSHOTS, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.MEO_TEST_SCREENSHOTS, `editing-swatch-${table ? 'table' : 'prose'}.png`) });
+    }
+    const nestedControl = `${root} [data-color-value="#AA4411"]`;
+    assert(await page.$eval(nestedControl, swatch => {
+      const rect = swatch.getBoundingClientRect();
+      return document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) === swatch;
+    }), `${label}: the swatch is the pointer target during editing`);
+    await page.click(nestedControl);
+    const input = await page.waitForSelector('.meo-hex-color-adjustment-value', { timeout: 2000 });
+    assert.equal(await input?.evaluate((element: HTMLInputElement) => element.value), '#AA4411',
+      `${label}: the swatch opens the adjustment for its own color`);
+    await page.evaluate(() => (window as any).editingColorEditor.destroy());
+  }
+}
 
 async function main() {
   const build = await Bun.build({
@@ -34,6 +108,8 @@ async function main() {
       </div>`);
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+
+    await checkSwatchesWhileEditing(page);
 
     const result = await page.evaluate(async () => {
       const harness = (window as any).TableStabilityHarness;
@@ -736,7 +812,6 @@ async function main() {
       const convertedToEight = editor.getText().includes('#11223380 and');
       const undone = await editor.undo() && editor.getText().includes('#112233 and');
       const redone = await editor.redo() && editor.getText().includes('#11223380 and');
-      // History restores an editable source line, where Live hides color controls.
       editor.scrollToLine(1, 'top');
       open('#aabbcc80');
       await frame();

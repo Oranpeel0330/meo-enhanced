@@ -191,6 +191,14 @@ export function hrefFromSourceLinkNode(state: EditorState, linkNode: any, refere
   return getReferenceLinkMap(referenceState).get(referenceLabel) ?? '';
 }
 
+export function hrefFromMarkdownReference(state: EditorState, label: string): string {
+  return getReferenceLinkMap(state).get(normalizeReferenceLabel(label)) ?? '';
+}
+
+export function markdownReferenceTargetSignature(state: EditorState): string {
+  return JSON.stringify([...getReferenceLinkMap(state)]);
+}
+
 export function getEnclosingSourceLinkHref(state: EditorState, node: SyntaxNode, referenceState = state): string {
   for (let parent = node.parent; parent; parent = parent.parent) {
     if (parent.name === 'Link') return hrefFromSourceLinkNode(state, parent, referenceState);

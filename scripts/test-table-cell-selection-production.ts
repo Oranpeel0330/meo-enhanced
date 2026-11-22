@@ -384,9 +384,10 @@ async function checkSelectionOutlines(page: Page) {
 
 async function checkCrossTablePointerTransfer(page: Page) {
   const first = '.meo-md-html-table-shell[data-cross-table="0"] tbody td:first-child .meo-md-html-table-cell-preview';
+  const firstLink = `${first} .meo-md-link`;
   const second = '.meo-md-html-table-shell[data-cross-table="1"] tbody td:first-child .meo-md-html-table-cell-preview';
   for (const large of [false, true]) {
-    const text = '| A |\n| --- |\n| **bold &** <img src=x onerror=alert(1)> |\n\noutside\n\n| C |\n| --- |\n| c1 |'
+    const text = `| A |\n| --- |\n| [First](https://example.test/${'a'.repeat(55)}) |\n\noutside\n\n| C |\n| --- |\n| c1 |`
       + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
     assert.equal(assessLargeDocument(text).boundedEditorWork, large);
     await page.evaluate(text => {
@@ -399,7 +400,7 @@ async function checkCrossTablePointerTransfer(page: Page) {
       await page.evaluate(() => document.querySelectorAll<HTMLElement>('.meo-md-html-table-shell')
         .forEach((shell, index) => { shell.dataset.crossTable = String(index); }));
       const readingHeight = await page.$eval(first, preview => preview.closest('tr')!.getBoundingClientRect().height);
-      await page.click(first);
+      await page.click(firstLink);
       const editingHeight = await page.$eval(first, preview => preview.closest('tr')!.getBoundingClientRect().height);
       assert.ok(editingHeight > readingHeight + 10, 'The first cell must expand beyond its rendered reading height');
       const point = await page.$eval(second, preview => {
@@ -431,7 +432,7 @@ async function checkCrossTablePointerTransfer(page: Page) {
       assert.ok(Math.abs(retiredHeight - readingHeight) <= 1, 'The old source height must retire after the gesture');
       for (const boundary of ['cancel', 'keyboard', 'released-move'] as const) {
         await page.click('#outside');
-        await page.click(first);
+        await page.click(firstLink);
         const point = await page.$eval(second, preview => {
           const rect = preview.getBoundingClientRect();
           return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };

@@ -251,7 +251,7 @@ async function main(): Promise<void> {
             const view = (window as any).__quoteEditor.view;
             const line = view.state.doc.line(3);
             return Array.from({ length: prefixLength + 1 }, (_, offset) => ({
-              offset, x: view.coordsAtPos(line.from + offset)?.left ?? null
+              offset, x: view.coordsAtPos(line.from + offset, offset === prefixLength ? -1 : 1)?.left ?? null
             }));
           }, prefix.length);
           for (let index = 0; index < positions.length; index += 1) {
@@ -270,11 +270,13 @@ async function main(): Promise<void> {
           for (let expected = contentOffset - 1; expected >= 0; expected -= 1) {
             await page.keyboard.press('ArrowLeft');
             await settle();
-            const offset = await page.evaluate(() => {
+            const stop = await page.evaluate(() => {
               const view = (window as any).__quoteEditor.view;
-              return view.state.selection.main.head - view.state.doc.line(3).from;
+              const head = view.state.selection.main.head;
+              return { offset: head - view.state.doc.line(3).from, x: view.coordsAtPos(head)?.left ?? null };
             });
-            assert.equal(offset, expected, `${JSON.stringify(quote)}: ArrowLeft must reach each prefix character`);
+            assert.equal(stop.offset, expected, `${JSON.stringify(quote)}: ArrowLeft must reach each prefix character`);
+            assert.notEqual(stop.x, null, `${JSON.stringify(quote)}: the selected caret stop ${expected} must remain visible`);
           }
         }
         assert.equal(await page.evaluate(() => (window as any).__quoteEditor.getText()), `Before\n\n${quote}\n\nAfter`);

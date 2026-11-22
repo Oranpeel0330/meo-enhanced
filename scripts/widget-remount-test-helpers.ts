@@ -53,7 +53,7 @@ export function createWidgetRemountProbe(kind: 'mermaid' | 'image' | 'group' | '
     } });
     widget = ranges.find(range => range.value.spec.widget)?.value.spec.widget;
   } else if (kind === 'html' || kind === 'inline-html') {
-    addHtmlContentDecorations(ranges, view.state, new Set());
+    addHtmlContentDecorations(ranges, view.state);
     widget = ranges.find(range => range.to > range.from && range.value.spec.widget)?.value.spec.widget;
   } else {
     const factory = getImagePresentationFactory(view.state);

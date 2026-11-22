@@ -41,12 +41,45 @@ export function appendInlineMappedText(
   return span;
 }
 
-function readInlineSourceRange(element: Element | null): InlineSourceRange | null {
+export function readInlineSourceRange(element: Element | null): InlineSourceRange | null {
   if (!(element instanceof HTMLElement)) return null;
   const from = Number.parseInt(element.getAttribute(sourceFromAttribute) ?? '', 10);
   const to = Number.parseInt(element.getAttribute(sourceToAttribute) ?? '', 10);
   if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
   return { from, to };
+}
+
+interface InlineSourceRun extends InlineSourceRange {
+  readonly node: Text | HTMLElement;
+}
+
+export function inlineSourceRuns(root: HTMLElement): InlineSourceRun[] {
+  const result: InlineSourceRun[] = [];
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node instanceof HTMLElement && node.dataset.meoSourceAtom === 'true') {
+      const source = readInlineSourceRange(node);
+      if (source) result.push({ node, ...source });
+    }
+    if (!(node instanceof Text) || !node.length) continue;
+    const mapped = mappedElementForNode(root, node);
+    if (!mapped || mapped.closest('[data-meo-source-atom="true"]')) continue;
+    const source = readInlineSourceRange(mapped);
+    if (!source) continue;
+    if (mapped.firstChild === node && mapped.lastChild === node) {
+      result.push({ node, ...source });
+      continue;
+    }
+    const prefix = root.ownerDocument.createRange();
+    prefix.selectNodeContents(mapped);
+    prefix.setEnd(node, 0);
+    const start = prefix.toString().length;
+    const length = mapped.textContent?.length ?? 0;
+    if (!length) continue;
+    const offset = (visible: number) => source.from + Math.round(visible * (source.to - source.from) / length);
+    result.push({ node, from: offset(start), to: offset(start + node.length) });
+  }
+  return result;
 }
 
 /** Project a source selection onto rendered text, including partially selected inline labels. */

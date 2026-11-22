@@ -113,14 +113,24 @@ async function main() {
 
     await page.mouse.click(initial.clickPoint.x, initial.clickPoint.y);
     await waitForFrames(page);
+    const textEditing = await collectState();
+    if (textEditing.sourceBreaks.length !== 0 || textEditing.breakCount !== 3) {
+      throw new Error(`Editing adjacent text changed the break presentation: ${JSON.stringify(textEditing)}`);
+    }
+    await page.evaluate(() => {
+      const view = (window as any).__htmlBreakEditor.view;
+      const anchor = view.state.doc.toString().indexOf('<br/>') + 2;
+      view.dispatch({ selection: { anchor } });
+    });
+    await waitForFrames(page);
     const active = await collectState();
     if (
-      !active.firstLineText.includes('alpha<br>beta<br/>gamma<br />delta') ||
+      active.firstLineText !== 'alphabeta<br/>gammadelta' ||
       active.breakCount !== 3
     ) {
-      throw new Error(`Active HTML break line did not keep tags and visual breaks: ${JSON.stringify(active)}`);
+      throw new Error(`The selected HTML tag and its visual break must stay visible: ${JSON.stringify(active)}`);
     }
-    if (active.sourceBreaks.map(breakTag => breakTag.tag).join('') !== '<br><br/><br />' ||
+    if (active.sourceBreaks.map(breakTag => breakTag.tag).join('') !== '<br/>' ||
         active.sourceBreaks.some(breakTag => breakTag.colors.some(color => color !== 'rgb(163, 180, 197)'))) {
       throw new Error(`HTML break source tags did not use the comment color: ${JSON.stringify(active.sourceBreaks)}`);
     }
@@ -141,7 +151,7 @@ async function main() {
         document.documentElement.style.setProperty('--meo-token-comment-color', '#a3b4c5');
       }, appearance);
       const { sourceBreaks } = await collectState();
-      if (sourceBreaks.length !== 3 || sourceBreaks.some(tag => tag.colors.some(color => color !== expectedColor))) {
+      if (sourceBreaks.length !== 1 || sourceBreaks.some(tag => tag.colors.some(color => color !== expectedColor))) {
         throw new Error(`${appearance} Live break color differs from the expected comment color: ${JSON.stringify(sourceBreaks)}`);
       }
     }

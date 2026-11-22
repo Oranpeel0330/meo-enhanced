@@ -35,7 +35,7 @@ import { parseKbdTagAt } from './kbd';
 import { AlertIconWidget, type AlertType } from './alerts';
 import { parseFootnotes } from './footnotes';
 import { createLatexMathElement, parseLatexMathAt } from './math';
-import { isPrimaryModifierPointerClick } from './linkNavigation';
+import { hrefFromMarkdownReference, isPrimaryModifierPointerClick, markdownReferenceTargetSignature } from './linkNavigation';
 import { wikiLinkScheme } from './wikiLinks';
 import { isWikiImageTarget, parseWikiReference, wikiImageSrc } from '../../../src/foundation/wikiReference';
 import { normalizeSourceHref } from './rawUrls';
@@ -64,10 +64,13 @@ import {
   appendInlineMappedText,
   inlineSourceSelectionRanges,
   resolveInlineCaretAtPoint,
+  inlineSourceRuns,
+  readInlineSourceRange,
   setInlineSourceRange,
   type InlineCaretResolution,
   type InlineDomCaret
 } from './inlinePresentation';
+import { inlineSourceContains, innermostInlineSource, type InlineEditRange } from './inlineSourceEditing';
 import { updateGitDiffMarkerElement } from './gitDiffMarkerDom';
 import { gitDiffLineFlagsFacet } from './gitDiffPresentation';
 import { UiLanguageSensitiveWidget, uiLanguageFacet } from '../editor/uiLanguage';
@@ -326,6 +329,7 @@ const sourceTableHeaderLineDeco = Decoration.line({ class: 'meo-md-source-table-
 const sourceTableHeaderCellDeco = Decoration.mark({ class: 'meo-md-source-table-header-cell' });
 const tableCellSelector = 'th[data-table-row][data-table-col], td[data-table-row][data-table-col]';
 const tableCellEditMinHeight = '--meo-table-cell-edit-min-height';
+const possibleTableReferenceLink = /\[[^\]\n]+\](?!\()/;
 const tableCellCaretNavigationKeys = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const tableCellTextSelectingClass = 'meo-md-html-table-cell-text-selecting';
 const tableControlSelector = '.meo-md-html-table-context-trigger, .meo-md-html-table-context-menu, .meo-md-html-table-context-btn, .meo-md-link-open-btn, .meo-md-color-swatch-interactive, .meo-md-html-table-column-resize-handle';
@@ -961,6 +965,9 @@ interface TableCellLinePresentation {
   prefixElement: HTMLElement | null;
   prefixMarkers: TableCellRange[];
   bodyElement: HTMLElement;
+  bodyRuns: ReturnType<typeof inlineSourceRuns>;
+  inlineRanges: InlineEditRange[];
+  editingInline?: InlineEditRange;
   breakElement: HTMLElement | null;
   scrollTop: number;
   measurementKey: string;
@@ -969,7 +976,10 @@ interface TableCellLinePresentation {
   caret: { position: number; wrapStart: boolean; element: HTMLSpanElement } | null;
 }
 
-function appendTableCellSourceLine(parent: HTMLElement, line: TableCellLogicalLine, bodyFrom = line.from) {
+function appendTableCellSourceLine(
+  parent: HTMLElement, line: TableCellLogicalLine, bodyFrom: number,
+  appendBody: (parent: HTMLElement, text: string, from: number) => void
+) {
   const source = document.createElement('div');
   source.className = 'meo-md-table-active-source-line';
   const content = document.createElement('div');
@@ -981,8 +991,11 @@ function appendTableCellSourceLine(parent: HTMLElement, line: TableCellLogicalLi
       'meo-md-table-source-prefix');
   }
   const bodyEnd = line.from + line.text.length;
-  appendInlineMappedText(content, line.text.slice(bodyFrom - line.from),
-    { from: bodyFrom, to: bodyEnd }, 'meo-md-table-source-body');
+  const body = document.createElement('span');
+  body.className = 'meo-md-table-source-body';
+  setInlineSourceRange(body, { from: bodyFrom, to: bodyEnd });
+  appendBody(body, line.text.slice(bodyFrom - line.from), bodyFrom);
+  content.appendChild(body);
   if (line.breakText) {
     appendInlineMappedText(content, line.breakText, { from: bodyEnd, to: line.from + text.length },
       'meo-md-table-source-break');
@@ -1607,10 +1620,14 @@ function consumeTableInlineAngleSection(text: string, index: number) {
   };
 }
 
-function parseTableInlineMarkdownLink(text: string, index: number, syntax: ReturnType<typeof parseTableInlineSyntax> | null, offset: number, { image = false }: { image?: boolean } = {}) {
-  const link = syntax?.links.get(offset + index);
+function parseTableInlineMarkdownLink(text: string, index: number, syntax: ReturnType<typeof parseTableInlineSyntax> | null, offset: number,
+  { image = false, referenceState }: { image?: boolean; referenceState?: EditorState } = {}) {
+  const link = syntax?.links.get(offset + index) ?? (referenceState ? syntax?.references.get(offset + index) : undefined);
   if (!link || link.image !== image) return null;
-  let url = normalizeSourceHref(text.slice(link.urlFrom - offset, link.urlTo - offset).trim());
+  let url = 'referenceLabel' in link
+    ? hrefFromMarkdownReference(referenceState!, link.referenceLabel)
+    : normalizeSourceHref(text.slice(link.urlFrom - offset, link.urlTo - offset).trim());
+  if ('referenceLabel' in link && !url) return null;
   if (url.startsWith('<') && url.endsWith('>') && url.length >= 2) {
     url = url.slice(1, -1).trim();
   }
@@ -1703,17 +1720,26 @@ function appendTableInlinePreviewLink(parent: HTMLElement, label: string, href: 
   uiLanguage: UiLanguage;
   view: EditorView;
   literalLabel?: boolean;
+  editRange?: InlineEditRange;
 }) {
+  const wrapper = document.createElement('span');
+  if (options.editRange) markTableInlineSource(wrapper, options.editRange);
   const el = document.createElement('span');
   el.className = 'meo-md-link';
   if (href) el.setAttribute('data-meo-link-href', href);
   if (options.literalLabel) appendTablePlainText(el, label, options.baseOffset ?? 0, options.diagnostics ?? [], options.searchState ?? null, options.sourceRange ?? null);
   else appendTableInlinePreviewNodes(el, label, { ...options, disableLinkParsers: true, imageLinkHref: href });
   if (isMissingLocalLinkTarget(href)) {
-    parent.appendChild(createMissingLocalLinkIndicator(options.uiLanguage));
+    wrapper.appendChild(createMissingLocalLinkIndicator(options.uiLanguage));
   }
-  parent.appendChild(el);
-  if (href) parent.appendChild(createOpenLinkButton(href, options.uiLanguage));
+  wrapper.appendChild(el);
+  if (href) wrapper.appendChild(createOpenLinkButton(href, options.uiLanguage));
+  parent.appendChild(wrapper);
+}
+
+function markTableInlineSource(element: HTMLElement, range: InlineEditRange, atomic = false) {
+  element.dataset.meoEditInline = '';
+  setInlineSourceRange(element, range, { atomic });
 }
 
 export function refreshTableLocalLinkIndicators(
@@ -1764,7 +1790,7 @@ function appendTableInlinePreviewImage(
   if (dom instanceof HTMLElement) {
     tablePreviewImageIdentity.set(dom, { key, factory: presentationFactory });
     dom.setAttribute('data-meo-link-href', linkUrl || url);
-    setInlineSourceRange(dom, sourceRange, { atomic: true });
+    markTableInlineSource(dom, sourceRange, true);
   }
   parent.appendChild(dom);
 }
@@ -1808,10 +1834,10 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       const mathElement = createLatexMathElement(math.content, math.mode);
       if (mathElement) {
         flushBuffer();
-        setInlineSourceRange(
+        markTableInlineSource(
           mathElement,
           { from: baseOffset + math.from, to: baseOffset + math.to },
-          { atomic: true }
+          true
         );
         parent.appendChild(mathElement);
       } else {
@@ -1827,6 +1853,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         from: baseOffset + i,
         to: baseOffset + i + 2
       });
+      mapped.dataset.meoEditInline = '';
       if (diagnostics.length) {
         const diagnostic = diagnostics.find((candidate) => candidate.from < baseOffset + i + 2 && candidate.to > baseOffset + i);
         if (diagnostic) {
@@ -1845,7 +1872,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
     if (inlineBreak) {
       flushBuffer();
       const br = document.createElement('br');
-      setInlineSourceRange(br, { from: baseOffset + i, to: baseOffset + i + inlineBreak[0].length }, { atomic: true });
+      markTableInlineSource(br, { from: baseOffset + i, to: baseOffset + i + inlineBreak[0].length }, true);
       parent.appendChild(br);
       i += inlineBreak[0].length;
       continue;
@@ -1856,7 +1883,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       flushBuffer();
       const el = document.createElement('code');
       el.className = 'meo-md-inline-code';
-      setInlineSourceRange(el, { from: baseOffset + i, to: baseOffset + htmlCode.to });
+      markTableInlineSource(el, { from: baseOffset + i, to: baseOffset + htmlCode.to });
       appendTablePlainText(el, text.slice(htmlCode.contentFrom, htmlCode.contentTo), baseOffset + htmlCode.contentFrom, diagnostics, searchState, sourceRange);
       parent.appendChild(el);
       i = htmlCode.to;
@@ -1868,7 +1895,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       flushBuffer();
       const el = document.createElement('code');
       el.className = 'meo-md-inline-code';
-      setInlineSourceRange(el, { from: baseOffset + i, to: code.to });
+      markTableInlineSource(el, { from: baseOffset + i, to: code.to });
       const raw = text.slice(code.contentFrom - baseOffset, code.contentTo - baseOffset);
       // CommonMark strips one bounding space unless the payload is all spaces.
       const padding = raw.startsWith(' ') && raw.endsWith(' ') && /[^ ]/.test(raw) ? 1 : 0;
@@ -1897,7 +1924,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         flushBuffer();
         const el = document.createElement('kbd');
         el.className = 'meo-md-kbd';
-        setInlineSourceRange(el, { from: baseOffset + i, to: baseOffset + kbd.nextIndex });
+        markTableInlineSource(el, { from: baseOffset + i, to: baseOffset + kbd.nextIndex });
         appendTablePlainText(
           el,
           keyText,
@@ -1936,7 +1963,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       const number = document.createElement('sup');
       number.textContent = String(footnote.number);
       button.appendChild(number);
-      setInlineSourceRange(button, { from: baseOffset + i, to: baseOffset + i + footnoteMarker[0].length }, { atomic: true });
+      markTableInlineSource(button, { from: baseOffset + i, to: baseOffset + i + footnoteMarker[0].length }, true);
       button.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); });
       button.addEventListener('click', event => {
         event.preventDefault(); event.stopPropagation();
@@ -1964,7 +1991,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       continue;
     }
 
-    const image = parseTableInlineMarkdownLink(text, i, inlineSyntax, baseOffset, { image: true });
+    const image = parseTableInlineMarkdownLink(text, i, inlineSyntax, baseOffset, { image: true, referenceState: options.view.state });
     if (image) {
       flushBuffer();
       appendTableInlinePreviewImage(
@@ -1988,19 +2015,21 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         flushBuffer();
         appendTableInlinePreviewLink(parent, wiki.visibleText, tableInlineHrefFromWikiTarget(wiki.target), {
           ...options,
-          baseOffset: baseOffset + wiki.visibleTextFrom
+          baseOffset: baseOffset + wiki.visibleTextFrom,
+          editRange: { from: baseOffset + i, to: baseOffset + wiki.nextIndex }
         });
         i = wiki.nextIndex;
         continue;
       }
 
-      const link = parseTableInlineMarkdownLink(text, i, inlineSyntax, baseOffset);
+      const link = parseTableInlineMarkdownLink(text, i, inlineSyntax, baseOffset, { referenceState: options.view.state });
       if (link) {
         flushBuffer();
         if (link.url) {
           appendTableInlinePreviewLink(parent, link.label, decodeTableInlineEscapes(link.url), {
             ...options,
-            baseOffset: baseOffset + link.labelFrom
+            baseOffset: baseOffset + link.labelFrom,
+            editRange: { from: baseOffset + i, to: baseOffset + link.nextIndex }
           });
         } else {
           appendTableInlinePreviewNodes(parent, link.label, {
@@ -2018,7 +2047,8 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         appendTableInlinePreviewLink(parent, autolink.label, autolink.href, {
           ...options,
           baseOffset: baseOffset + i + 1,
-          literalLabel: true
+          literalLabel: true,
+          editRange: { from: baseOffset + i, to: baseOffset + autolink.nextIndex }
         });
         i = autolink.nextIndex;
         continue;
@@ -2030,7 +2060,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       flushBuffer();
       const el = document.createElement(script.kind === 'subscript' ? 'sub' : 'sup');
       el.className = `meo-md-${script.kind}`;
-      setInlineSourceRange(el, { from: baseOffset + i, to: baseOffset + script.to });
+      markTableInlineSource(el, { from: baseOffset + i, to: baseOffset + script.to });
       let cursor = i + 1;
       for (const escape of script.escapes) {
         appendTablePlainText(el, text.slice(cursor, escape.from), baseOffset + cursor, diagnostics, searchState, sourceRange);
@@ -2050,6 +2080,7 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       flushBuffer();
       const el = document.createElement(({ em: 'em', strong: 'strong', strike: 'span', highlight: 'mark' } as const)[span.kind]);
       el.className = `meo-md-${span.kind}`;
+      markTableInlineSource(el, { from: baseOffset + i, to: span.to });
       appendTableInlinePreviewNodes(el, text.slice(span.contentFrom - baseOffset, span.contentTo - baseOffset), { ...options, baseOffset: span.contentFrom });
       parent.appendChild(el);
       i = span.to - baseOffset;
@@ -2066,9 +2097,11 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
       const current = sourceRange && from >= sourceRange.from && to <= sourceRange.to &&
         to <= options.view.state.doc.length &&
         options.view.state.doc.sliceString(from, to) === color.value;
-      parent.appendChild(current
+      const swatch = current
         ? createInteractiveColorSwatchElement(options.view, { from, to, value: color.value })
-        : createColorSwatchElement(color.value, options.uiLanguage));
+        : createColorSwatchElement(color.value, options.uiLanguage);
+      setInlineSourceRange(swatch, { from: baseOffset + i, to: baseOffset + color.to });
+      parent.appendChild(swatch);
       appendTablePlainText(parent, color.value, baseOffset + i, diagnostics, searchState, sourceRange);
       i = color.to;
       continue;
@@ -2097,7 +2130,8 @@ function appendTableInlinePreviewNodes(parent: HTMLElement, text: string, option
         appendTableInlinePreviewLink(parent, rawUrl.label, rawUrl.href, {
           ...options,
           baseOffset: baseOffset + i,
-          literalLabel: true
+          literalLabel: true,
+          editRange: { from: baseOffset + i, to: baseOffset + rawUrl.nextIndex }
         });
         i = rawUrl.nextIndex;
         continue;
@@ -2150,7 +2184,7 @@ function hasTableCellLineStructure(text: string): boolean {
 }
 
 function canProjectTableCellLines(value: string): boolean {
-  return value.includes('\n') || hasTableCellLineStructure(value);
+  return value.includes('\n') || hasTableCellLineStructure(value) || /[*_~^=`[$<#\\]|:\/\/|mailto:|file:|www\./.test(value);
 }
 
 function tableCellPrefixMarkers(prefix: string): TableCellRange[] {
@@ -2260,7 +2294,7 @@ function appendTableCellRenderedPreview(
       row.className = 'meo-md-table-task-content';
       row.appendChild(checkbox);
       if (activeLine) {
-        appendTableCellSourceLine(row, activeLine, taskBodyFrom);
+        appendTableCellSourceLine(row, activeLine, taskBodyFrom, appendInline);
       } else {
         const body = document.createElement('div');
         appendInline(body, content.slice(task[0].length), taskBodyFrom);
@@ -2269,7 +2303,7 @@ function appendTableCellRenderedPreview(
       parent.appendChild(row);
       return;
     }
-    if (activeLine) appendTableCellSourceLine(parent, activeLine, from);
+    if (activeLine) appendTableCellSourceLine(parent, activeLine, from, appendInline);
     else appendInline(parent, content, from);
   };
 
@@ -2348,7 +2382,7 @@ function appendTableCellRenderedPreview(
       // Keep the spacer in the previous item so subsequent items stay in order.
       if (!line.text.trim() && listStack.at(-1)?.lastItem) {
         const item = listStack.at(-1)!.lastItem!;
-        if (activeLine) appendTableCellSourceLine(item, activeLine, line.from);
+        if (activeLine) appendTableCellSourceLine(item, activeLine, line.from, appendInline);
         else {
           const spacer = document.createElement('br');
           setInlineSourceRange(spacer, { from: logicalLine.from, to: logicalLine.from }, { atomic: true });
@@ -2370,7 +2404,7 @@ function appendTableCellRenderedPreview(
         }
       }
       if (contentParent === parent) listStack.length = 0;
-      if (activeLine) appendTableCellSourceLine(contentParent, activeLine, line.from);
+      if (activeLine) appendTableCellSourceLine(contentParent, activeLine, line.from, appendInline);
       else {
         const lineEl = document.createElement('div');
         lineEl.className = 'meo-md-html-table-cell-line';
@@ -2805,6 +2839,7 @@ function buildWidgetTableData(
   const diffFlagsByLine = collectTableDiffFlags(data, diffLineFlags);
   const comparison = state.facet(gitDiffLineFlagsFacet);
   const tableDiagnostics = collectTableDiagnostics(data, diagnostics);
+  const hasReferenceCandidate = [headerCells, ...rows].some(row => row.some(cell => possibleTableReferenceLink.test(cell)));
   return {
     from,
     to,
@@ -2822,6 +2857,7 @@ function buildWidgetTableData(
       normalizedAlignments,
       diagnostics: tableDiagnostics,
       diffFlagsByLine,
+      referenceTargets: hasReferenceCandidate ? markdownReferenceTargetSignature(state) : undefined,
       footnoteReferences: parseFootnotes(state).references
         .filter(reference => reference.from >= from && reference.to <= to)
         // Click handlers resolve the current definition by label. Its absolute
@@ -3277,9 +3313,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (contentChanged) {
       const values = [tableData.headerCells, ...tableData.rows];
       const previousValues = [previousData.headerCells, ...previousData.rows];
-      const footnotesChanged = JSON.stringify(JSON.parse(previousData.signature).footnoteReferences)
-        !== JSON.stringify(JSON.parse(tableData.signature).footnoteReferences);
-      const mathSyntaxChanged = JSON.parse(previousData.signature).latexDelimiters !== JSON.parse(tableData.signature).latexDelimiters;
+      const previousSignature = JSON.parse(previousData.signature), nextSignature = JSON.parse(tableData.signature);
+      const footnotesChanged = JSON.stringify(previousSignature.footnoteReferences) !== JSON.stringify(nextSignature.footnoteReferences);
+      const referenceTargetsChanged = previousSignature.referenceTargets !== nextSignature.referenceTargets;
+      const mathSyntaxChanged = previousSignature.latexDelimiters !== nextSignature.latexDelimiters;
       const { pending, editingTarget } = this.cellInteraction.snapshot();
       for (let row = 0; row < allRowInputs.length; row += 1) {
         for (let col = 0; col < allRowInputs[row].length; col += 1) {
@@ -3297,6 +3334,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
           // even when the cell's own source text has not changed.
           if (previousValues[row]?.[col] !== values[row]?.[col]
             || mathSyntaxChanged && /\\[([]/.test(values[row]?.[col] ?? '')
+            || referenceTargetsChanged && possibleTableReferenceLink.test(values[row]?.[col] ?? '')
             || JSON.stringify(previousData.diagnostics?.[row]?.[col] ?? []) !== JSON.stringify(tableData.diagnostics?.[row]?.[col] ?? [])
             || footnotesChanged && /\[\^|\^\[/.test(values[row]?.[col] ?? '')) {
             this.refreshCellPreviewFromInput(input);
@@ -3812,6 +3850,12 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       input.style.pointerEvents = 'none';
       preview.style.visibility = 'visible';
       resolution = resolveInlineCaretAtPoint(preview, clientX, clientY, { nearestFallback });
+      if (nearestFallback) {
+        const atom = preview.ownerDocument.elementFromPoint(clientX, clientY)
+          ?.closest('[data-meo-edit-inline][data-meo-source-atom="true"]') ?? null;
+        const range = atom && preview.contains(atom) ? readInlineSourceRange(atom) : null;
+        if (range && range.to > range.from + 1) resolution.sourceOffset = range.from + 1;
+      }
     } finally {
       input.style.pointerEvents = previousInputPointerEvents;
       preview.style.visibility = previousPreviewVisibility;
@@ -3831,7 +3875,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       // break spelling. A pointer gesture treats it as one logical boundary.
       if (inSourceLine && (pastBodyEnd || (sourceOffset !== null && sourceOffset >= sourceEnd
           && sourceOffset <= sourceEnd + presentation.line.breakText.length))) {
-        const text = presentation.bodyElement.firstChild;
+        const text = presentation.bodyRuns.at(-1)?.node;
         resolution = {
           sourceOffset: sourceEnd,
           domCaret: text instanceof Text ? { node: text, offset: text.length }
@@ -5661,10 +5705,17 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       dom,
       {
         row: Math.min(Math.max(focusTableRow + (direction === 'up' ? -1 : 1), 1), matrix.rows.length),
-        col: focusColumn
+        col: focusColumn,
+        caret: this.focusedCellCaret(focusTableRow, focusColumn)
       },
       { sourceRowOrder, preserveScrollPosition: true }
     );
+  }
+
+  private focusedCellCaret(row: number, col: number): number | undefined {
+    const input = this.domRefs?.allRowInputs[row]?.[col];
+    if (input && input === input.ownerDocument.activeElement) return tableCellSelectionHead(input);
+    return undefined;
   }
 
   buildInsertSourceRowTransaction(
@@ -5919,7 +5970,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     matrix.alignments = columnPermutation.map((index) => alignments[index] ?? null);
     const plan = this.buildMatrixTransaction(matrix, dom, {
       row: focusRow,
-      col: Math.min(Math.max(focusColumn + (direction === 'left' ? -1 : 1), 0), matrix.headerCells.length - 1)
+      col: Math.min(Math.max(focusColumn + (direction === 'left' ? -1 : 1), 0), matrix.headerCells.length - 1),
+      caret: this.focusedCellCaret(focusRow, focusColumn)
     });
     if (!plan.transaction || !sourceTable || !commandRoot) return plan;
     return {
@@ -6684,37 +6736,58 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.cellWrapStart?.input === input && this.cellWrapStart.position === position): DOMRect | null {
     const presentation = this.linePresentation;
     if (presentation?.input !== input || presentation.editorValue !== input.value || this.composingInput === input) return null;
-    const { sourceElement, textElement, prefixElement, bodyElement, breakElement, line, valueFrom } = presentation;
-    let offset = position - valueFrom;
+    const { sourceElement, textElement, prefixElement, bodyRuns, breakElement, line, valueFrom } = presentation;
+    const offset = position - valueFrom;
     if (offset < 0 || offset > line.text.length + line.breakText.length) return null;
     const prefixHidden = !sourceElement.classList.contains('is-prefix-source');
-    const markerEdge = prefixHidden && offset < (prefixElement?.textContent?.length ?? 0)
+    const prefixLength = prefixElement?.textContent?.length ?? 0;
+    const markerEdge = prefixHidden && offset < prefixLength
       ? sourceElement.closest('.meo-md-html-table-cell-list, .meo-md-html-table-cell-quote')?.getBoundingClientRect().left
       : undefined;
-    for (const part of [prefixElement, bodyElement, breakElement]) {
-      const text = part?.firstChild;
-      if (!(text instanceof Text)) continue;
-      const hiddenPrefix = part === prefixElement && prefixHidden;
-      if (!hiddenPrefix && offset <= text.length) {
-        const range = input.ownerDocument.createRange();
-        range.setStart(text, Math.max(0, offset));
-        range.collapse(true);
-        const rect = range.getBoundingClientRect();
-        // A collapsed DOM range chooses the previous row at a soft wrap. The
-        // next grapheme also supplies a caret position at the same source offset.
-        if (wrapStart && offset >= 0 && offset < text.length) {
-          range.setEnd(text, findClusterBreak(text.data, offset));
-          const glyph = range.getClientRects()[0];
-          if (glyph && glyph.top > rect.top + 1) {
-            range.collapse(false);
-            const after = range.getBoundingClientRect();
-            const x = after.left > glyph.left + glyph.width / 2 ? glyph.left : glyph.right;
-            return new DOMRect(x, glyph.top, 0, glyph.height);
-          }
-        }
-        if (rect.height) return markerEdge === undefined ? rect : new DOMRect(markerEdge, rect.top, 0, rect.height);
+    let text: Node | null | undefined, visibleOffset = 0;
+    if (!prefixHidden && offset < prefixLength) {
+      text = prefixElement?.firstChild;
+      visibleOffset = offset;
+    } else if (offset > line.text.length && breakElement?.classList.contains('is-break-source')) {
+      text = breakElement.firstChild;
+      visibleOffset = offset - line.text.length;
+    } else if (bodyRuns.length) {
+      const source = line.from + Math.min(offset, line.text.length);
+      let low = 0, high = bodyRuns.length - 1;
+      while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (bodyRuns[mid]!.to < source || wrapStart && bodyRuns[mid]!.to === source) low = mid + 1;
+        else high = mid;
       }
-      offset -= text.length;
+      const run = bodyRuns[low]!;
+      if (run.node instanceof HTMLElement) {
+        const rect = run.node.getBoundingClientRect();
+        const height = parseFloat(getComputedStyle(textElement).lineHeight) || rect.height;
+        return new DOMRect(source <= run.from ? rect.left : rect.right, rect.bottom - height, 0, height);
+      }
+      text = run.node;
+      visibleOffset = Math.max(0, Math.min(run.node.length, Math.round(
+        (source - run.from) * run.node.length / Math.max(1, run.to - run.from)
+      )));
+    }
+    if (text instanceof Text) {
+      const range = input.ownerDocument.createRange();
+      range.setStart(text, visibleOffset);
+      range.collapse(true);
+      const rect = range.getBoundingClientRect();
+      // A collapsed DOM range chooses the previous row at a soft wrap. The
+      // next grapheme also supplies a caret position at the same source offset.
+      if (wrapStart && visibleOffset < text.length) {
+        range.setEnd(text, findClusterBreak(text.data, visibleOffset));
+        const glyph = range.getClientRects()[0];
+        if (glyph && glyph.top > rect.top + 1) {
+          range.collapse(false);
+          const after = range.getBoundingClientRect();
+          const x = after.left > glyph.left + glyph.width / 2 ? glyph.left : glyph.right;
+          return new DOMRect(x, glyph.top, 0, glyph.height);
+        }
+      }
+      if (rect.height) return markerEdge === undefined ? rect : new DOMRect(markerEdge, rect.top, 0, rect.height);
     }
     const bounds = textElement.getBoundingClientRect();
     const style = getComputedStyle(textElement);
@@ -6827,18 +6900,18 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   projectedSourceAtPoint(input: HTMLTextAreaElement, clientX: number, clientY: number): number | null | undefined {
     const presentation = this.linePresentation;
     if (presentation?.input !== input || this.composingInput === input) return undefined;
-    const { bodyElement, line, prefixElement } = presentation;
-    const text = bodyElement.firstChild;
-    if (!(text instanceof Text)) return null;
+    const { bodyElement } = presentation;
     const previous = input.style.pointerEvents;
-    let caret: InlineDomCaret | null;
+    let resolution: InlineCaretResolution;
     try {
       input.style.pointerEvents = 'none';
-      caret = resolveInlineCaretAtPoint(bodyElement, clientX, clientY, { nearestFallback: false }).domCaret;
+      resolution = resolveInlineCaretAtPoint(bodyElement, clientX, clientY, { nearestFallback: false });
     } finally {
       input.style.pointerEvents = previous;
     }
-    if (caret?.node !== text) return null;
+    const { domCaret: caret, sourceOffset } = resolution;
+    if (!caret || !(caret.node instanceof Text)) return null;
+    const text = caret.node;
     const range = input.ownerDocument.createRange();
     for (const offset of [caret.offset, caret.offset - 1]) {
       if (offset < 0 || offset >= text.length || /\s/.test(text.data[offset]!)) continue;
@@ -6846,7 +6919,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       range.setEnd(text, offset + 1);
       if (Array.from(range.getClientRects()).some(rect =>
         clientX >= rect.left && clientX < rect.right && clientY >= rect.top && clientY < rect.bottom
-      )) return line.from + (prefixElement?.textContent?.length ?? 0) + offset;
+      )) return sourceOffset;
     }
     return null;
   }
@@ -6861,6 +6934,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       ? prefixMarkers.some(marker => selectionEditsListMarker(start, end, marker.from, marker.to))
       : !!first && !!last && selectionEditsListMarker(start, end, first.from, last.to);
     presentation.sourceElement.classList.toggle('is-prefix-source', editingPrefix);
+    const breakFrom = line.from + line.text.length;
+    presentation.breakElement?.classList.toggle('is-break-source', inlineSourceContains(
+      { from: breakFrom, to: breakFrom + line.breakText.length }, { from, to }
+    ));
     if (!CSS.highlights || typeof Highlight === 'undefined') return;
     if (from === to) {
       this.clearCellLineHighlight(presentation);
@@ -6878,7 +6955,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (!content?.classList.contains('is-editing')) return false;
     const phase = this.cellSelection.snapshot().phase;
     if (this.composingInput === input || phase === 'text-candidate' || phase === 'dragging') return !!current;
-    if (!current && (input === this.wholeCellInput || !canProjectTableCellLines(input.value))) return false;
+    const projectLine = input !== this.wholeCellInput && canProjectTableCellLines(input.value);
+    if (!current && !projectLine) return false;
     const preview = content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
     if (!preview) return false;
     const resize = () => {
@@ -6891,8 +6969,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const coords = this.parseCellCoords(input.dataset.tableRow, input.dataset.tableCol);
     const diagnostics = coords ? this.cellDiagnostics(coords.row, coords.col) : [];
     const sourceRange = coords ? this.cellSourceRange(coords.row, coords.col) : null;
-    if ((lines.length === 1 && !hasTableCellLineStructure(lines[0]!.text))
-      || input === this.wholeCellInput || shouldExpandTableCellForSearch(source, this.searchState)) {
+    if (!projectLine || shouldExpandTableCellForSearch(source, this.searchState)) {
       if (current) {
         this.clearCellLinePresentation(input);
         this.renderCellPreview(preview, source, diagnostics, sourceRange);
@@ -6910,10 +6987,13 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     let index = lines.length - 1;
     while (index > 0 && lines[index]!.from + index > nativeHead) index--;
     const line = lines[index]!;
-    if (cached && !force && cached.line === line) {
+    const editingInline = cached && innermostInlineSource(cached.inlineRanges, { from, to });
+    if (cached && !force && cached.line === line && cached.editingInline === editingInline) {
       const prefixVisible = cached.sourceElement.classList.contains('is-prefix-source');
+      const breakVisible = cached.breakElement?.classList.contains('is-break-source');
       this.paintCellLineSelection(cached, preview, from, to);
-      if (prefixVisible !== cached.sourceElement.classList.contains('is-prefix-source')) resize();
+      if (prefixVisible !== cached.sourceElement.classList.contains('is-prefix-source')
+        || breakVisible !== cached.breakElement?.classList.contains('is-break-source')) resize();
       else this.layoutCellSourceLine(cached);
       return true;
     }
@@ -6925,12 +7005,33 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const textElement = sourceElement?.querySelector<HTMLElement>('.meo-md-table-source-text');
     const bodyElement = textElement?.querySelector<HTMLElement>('.meo-md-table-source-body');
     if (!sourceElement || !textElement || !bodyElement) return false;
+    const candidates = Array.from(bodyElement.querySelectorAll<HTMLElement>('[data-meo-edit-inline]'));
+    const inlineRanges = candidates.map(element => readInlineSourceRange(element)!);
+    const revealed = innermostInlineSource(inlineRanges, { from, to });
+    if (revealed) {
+      const sourceText = bodyElement.ownerDocument.createElement('span');
+      sourceText.className = 'meo-md-table-inline-source';
+      setInlineSourceRange(sourceText, revealed);
+      const element = candidates[inlineRanges.indexOf(revealed)]!;
+      // Keep color controls at their original source offsets while revealing surrounding syntax.
+      let cursor = revealed.from;
+      for (const swatch of element.querySelectorAll<HTMLElement>('.meo-md-color-swatch')) {
+        const range = readInlineSourceRange(swatch);
+        if (!range) continue;
+        sourceText.append(source.slice(cursor, range.from), swatch);
+        cursor = range.from;
+      }
+      sourceText.append(source.slice(cursor, revealed.to));
+      disposeImagePresentations(element);
+      element.replaceWith(sourceText);
+    }
     content.classList.add('is-editing-line');
     const prefixElement = textElement.querySelector<HTMLElement>('.meo-md-table-source-prefix');
     const presentation: TableCellLinePresentation = {
       input, editorValue: input.value, source, lines, line, valueFrom: line.from + index, sourceElement, textElement,
       prefixElement, prefixMarkers: tableCellPrefixMarkers(prefixElement?.textContent ?? ''),
-      bodyElement, breakElement: textElement.querySelector('.meo-md-table-source-break'),
+      bodyElement, bodyRuns: inlineSourceRuns(bodyElement),
+      inlineRanges, editingInline: revealed, breakElement: textElement.querySelector('.meo-md-table-source-break'),
       scrollTop: 0, measurementKey: '', selection: null, highlight: null, caret: null
     };
     this.linePresentation = presentation;

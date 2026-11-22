@@ -3465,7 +3465,7 @@ export function createEditor({
     if (tableInteractionActive) {
       setTableInteractionActive(false);
     }
-    const anchor = Math.max(0, Math.min(from, view.state.doc.length));
+    const anchor = Math.max(0, Math.min(from + 1, view.state.doc.length));
     view.dispatch({ selection: { anchor } });
     view.focus();
   };

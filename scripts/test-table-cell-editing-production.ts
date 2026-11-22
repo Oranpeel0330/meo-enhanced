@@ -72,7 +72,7 @@ async function checkProjectedCellHeight(page: import('puppeteer-core').Page, siz
     await settle();
     const reading = await height();
     assert(reading >= 240, `${label}/rendered image contributes its height (${reading})`);
-    const click = await page.$eval(`${cell} li`, element => {
+    const click = await page.$eval(`${cell} img`, element => {
       const { left, top } = element.getBoundingClientRect();
       return { x: left + 18, y: top + 12 };
     });
@@ -181,6 +181,7 @@ async function checkCellHeightLayoutChanges(page: import('puppeteer-core').Page,
       const shortReading = await rowHeight(1), tallReading = await rowHeight(2);
       await edit(1);
       const shortEditing = await rowHeight(1);
+      const shortCaret = await page.$eval(inputAt(1), input => input.selectionStart);
       assert(shortEditing > shortReading + 10 && tallReading > shortEditing + 20,
         `${label}/fixture distinguishes rendered, source and neighbor heights (${[shortReading, shortEditing, tallReading]})`);
       for (const [key, row] of [['ArrowDown', 2], ['ArrowUp', 1]] as const) {
@@ -192,6 +193,8 @@ async function checkCellHeightLayoutChanges(page: import('puppeteer-core').Page,
           return input === document.activeElement && input?.value.startsWith('[link]');
         }, { timeout: 3000 }, inputAt(row));
         await settle();
+        assert.equal(await page.$eval(inputAt(row), input => input.selectionStart), shortCaret,
+          `${label}/${key} preserves the caret inside the moved fragment`);
         const moved = await rowHeight(row);
         assert(Math.abs(moved - shortEditing) < 2,
           `${label}/${key} keeps the moved row's current source height (${shortEditing} → ${moved}, neighbor ${tallReading})`);
@@ -307,7 +310,9 @@ async function checkCellHeightTransitions(page: import('puppeteer-core').Page, s
     await clickCell(1, 1);
     await page.keyboard.press('Tab'); await settle();
     assert(await page.$eval(inputAt(1, 2), input => input === document.activeElement), `${label}/Tab enters the new cell`);
-    assert(Math.abs(await rowHeight(1) - secondEditing) < 2, `${label}/Tab uses the new source height`);
+    assert(Math.abs(await rowHeight(1) - reading) < 2, `${label}/Tab lands at the fragment boundary`);
+    await page.keyboard.press('ArrowRight'); await settle();
+    assert(Math.abs(await rowHeight(1) - secondEditing) < 2, `${label}/entering the link uses the new source height`);
     await page.keyboard.press('Escape'); await settle();
     assert(Math.abs(await rowHeight(1) - reading) < 2, `${label}/editing exit restores rendered height`);
 
@@ -673,8 +678,8 @@ async function checkCellLinePresentation(page: import('puppeteer-core').Page) {
   const extended = await activeInput();
   assert.equal(extended.start, middleCaret, 'Shift-click keeps the existing anchor');
   assert.equal(extended.end, extended.value.indexOf('Omega') + 3);
-  assert.equal(await activeLine(), '**Omega**');
-  const omegaWord = await point('.meo-md-table-active-source-line', 4);
+  assert.equal(await activeLine(), 'Omega', 'a selection crossing fragments keeps their formatting');
+  const omegaWord = await point('.meo-md-table-active-source-line strong', 2);
   await page.mouse.click(omegaWord.x, omegaWord.y, { count: 2 });
   const word = await activeInput();
   assert.equal(word.value.slice(word.start, word.end), 'Omega', 'double-click selects a word inside the active line');
@@ -702,7 +707,7 @@ async function checkCellLinePresentation(page: import('puppeteer-core').Page) {
     assert.deepEqual(selection, {
       active: true, value, start: 3, end: value.indexOf('Omega') + 3, direction: backwards ? 'backward' : 'forward'
     });
-    assert.equal(await activeLine(), backwards ? '**Alpha**<br>' : '**Omega**');
+    assert.equal(await activeLine(), backwards ? 'Alpha<br>' : 'Omega', 'a drag selection keeps each fragment rendered');
     const copied = await page.$eval(inputSelector, input => {
       const clipboard = new DataTransfer();
       input.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: clipboard }));
@@ -889,7 +894,8 @@ async function checkSingleLineCellPresentation(page: import('puppeteer-core').Pa
           }
           if (index === 1) {
             await page.keyboard.type('x');
-            assert.equal(await page.$eval(`${state} ${active}`, element => element.textContent), `${prefix}x**${body}**`);
+            assert.equal(await page.$eval(`${state} ${active}`, element => element.textContent), `${prefix}x${body}`);
+            assert.ok(await page.$(`${state} ${active} strong`), 'typing before the fragment keeps its formatting');
             assert.equal((await markerState()).prefix, 'hidden', 'typing in the body keeps the rendered marker');
             await page.keyboard.press('Escape');
             assert.equal(await page.evaluate(() => (window as any).__tableCellEditor.undo()), true);
@@ -907,7 +913,8 @@ async function checkSingleLineCellPresentation(page: import('puppeteer-core').Pa
             assert.equal((await markerState()).marker, 'visible', 'releasing the text drag keeps the checkbox visible');
           }
         } else {
-          assert.equal(await page.$(`${state} ${active}`), null, `${label}: ordinary prose uses the native input`);
+          assert.equal(await page.$eval(`${state} .meo-md-table-inline-source`, element => element.textContent),
+            value, `${label}: an unprefixed formatted cell reveals the clicked fragment`);
         }
         await page.keyboard.press('Escape');
       }
@@ -1088,7 +1095,10 @@ async function checkCellLineGeometry(page: import('puppeteer-core').Page) {
       });
     }, markdown);
     await page.waitForSelector(`${preview(3)} blockquote`);
-    await page.evaluate(() => { (window as any).__tableCellEditor.view.scrollDOM.scrollTop = 600; });
+    await page.$eval(firstLine, element => {
+      const scroll = (window as any).__tableCellEditor.view.scrollDOM as HTMLElement;
+      scroll.scrollTop += element.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 80;
+    });
     await settle();
     const prior = await coords(firstLine);
     const middle = `${preview(1)} .meo-md-html-table-cell-line:nth-child(2) .meo-md-link`;
@@ -1156,6 +1166,9 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
   const first = `${preview} li:first-child`;
   await page.waitForSelector(first, { visible: true });
   await page.click(first);
+  assert.equal(await page.$eval(`${sourceLine} .meo-md-table-source-break`, element => getComputedStyle(element).display), 'none');
+  await page.keyboard.press('End');
+  await page.keyboard.press('ArrowRight');
   const marker = await page.$eval(sourceLine, el => {
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -1180,7 +1193,9 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
     'blank space after the displayed break has the same line-end caret');
   const assertCaretAtBodyEnd = async () => {
     const position = await page.$eval(sourceLine, el => {
-      const text = el.querySelector('.meo-md-table-source-body')!.firstChild!;
+      const body = el.querySelector('.meo-md-table-source-body')!;
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      const text = walker.nextNode()!;
       const range = document.createRange();
       range.setStart(text, text.textContent!.length);
       range.collapse(true);
@@ -1304,7 +1319,7 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
 
   const linkedCell = 'tbody tr:nth-child(3) td:nth-child(2)';
   await page.click(`${linkedCell} .meo-md-link`);
-  const link = await page.$eval(`${linkedCell} .meo-md-table-source-body`, el => {
+  const link = await page.$eval(`${linkedCell} .meo-md-table-inline-source`, el => {
     const text = el.firstChild!;
     const range = document.createRange();
     range.setStart(text, 2);
@@ -1465,9 +1480,10 @@ async function checkCellEditingAudit(page: import('puppeteer-core').Page) {
     assert.deepEqual(await selection(), { from: 18, to: 18 }, 'Home stops before the first glyph of a soft wrap');
     assert.ok(Math.abs(await caretTop() - wrappedTop) < 1, 'the caret stays on the wrapped row at its first glyph');
     const firstWrappedGlyph = await page.$eval(`${activeLine} .meo-md-table-source-body`, element => {
+      const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
       const range = document.createRange();
-      range.setStart(element.firstChild!, 8);
-      range.setEnd(element.firstChild!, 9);
+      range.setStart(text, 8);
+      range.setEnd(text, 9);
       const rect = range.getBoundingClientRect();
       return { x: rect.left + 1, y: rect.top + rect.height / 2 };
     });

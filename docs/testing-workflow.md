@@ -1964,7 +1964,14 @@ viewport owner. Table text and the native input follow the document line height.
 Reading rows shrink with smaller line spacing. The full production table editing
 contract includes this slice.
 
-The same owner supports `--height-only` for rendered/source row-height transitions.
+`scripts/test-inline-syntax-boundaries-production.ts --local-source-only` checks
+prose and table fragments in the same row, including paired formatting, code,
+subscript, superscript, link variants, footnotes, images, formulas and HTML
+keycaps. It measures actual visible source text, mouse-to-source mapping,
+unchanged sibling presentation, reference target updates and the table row
+height minimum. The default inline syntax suite includes this check.
+
+The same table-editing owner supports `--height-only` for rendered/source row-height transitions.
 Ordinary and actually optimized documents check compact long-link previews,
 held-pointer and Tab handoffs within one row, stable cross-cell drags, taller/shorter source editors,
 image entry baselines, deletion without a historical height maximum, and accepting

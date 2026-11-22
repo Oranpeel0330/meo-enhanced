@@ -7561,6 +7561,12 @@ html[data-editor-appearance='dark'] body.vscode-dark
   caret-color: transparent;
 }
 
+/* Keep the swatch clickable above the transparent input used for the projected line. */
+.cm-editor .meo-md-table-active-source-line .meo-md-color-swatch-interactive {
+  position: relative;
+  z-index: 1;
+}
+
 .cm-editor .meo-md-html-table-cell-content.is-editing-line > textarea::selection {
   background-color: transparent;
   color: transparent;
@@ -7602,6 +7608,10 @@ html[data-editor-appearance='dark'] body.vscode-dark
   pointer-events: none;
   width: max-content;
   white-space: pre;
+}
+
+.cm-editor .meo-md-table-source-break:not(.is-break-source) {
+  display: none;
 }
 
 .cm-editor.meo-mode-live .meo-md-table-active-list-item:has(.is-prefix-source)::marker,

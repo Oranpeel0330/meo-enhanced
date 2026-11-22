@@ -49,6 +49,7 @@ import { ImageGroupWidget, ImageWidget, getImageData, isImageUrl, type ImageGrou
 import { getImagePresentationFactory } from './editor/imagePresentation';
 import { liveHighlightStyle, sourceMarkdownHighlightProps } from './theme';
 import { getInlineMarkdownExtensions } from './helpers/inlineMarkdownParser';
+import { inlineSourceContains, innermostInlineSource, type InlineEditRange } from './helpers/inlineSourceEditing';
 import { latexDelimitersFacet } from './editor/mathSyntaxPreference';
 import { mathDelimiterLength } from './helpers/math';
 import { collectKbdTagRangesFromText, hasKbdTagMarker } from './helpers/kbd';
@@ -107,7 +108,6 @@ import { estimateBlockWidgetHeight } from './editor/blockWidgetHeight';
 import { collectInlineFootnoteMarkerRanges } from './helpers/inlineFootnotes';
 import {
   renderLatexMathToHtml,
-  type LatexMathRange,
   type LatexMathMode
 } from './helpers/math';
 import { boundedDisplayMathRange, collectDocumentMathRanges, getDisplayMathSource, type DocumentMathRange } from './helpers/displayMathBlocks';
@@ -271,6 +271,10 @@ class InlineSyntaxBoundaryWidget extends WidgetType {
 const inlineSyntaxBoundaryDeco = Decoration.widget({
   widget: new InlineSyntaxBoundaryWidget(),
   side: -1
+});
+const inlineSyntaxOpeningBoundaryDeco = Decoration.widget({
+  widget: new InlineSyntaxBoundaryWidget(),
+  side: 1
 });
 const hrMarkerDeco = Decoration.mark({ class: 'meo-md-hr-marker' });
 const hiddenLinkUrlDeco = Decoration.mark({ class: 'meo-md-link-url-hidden' });
@@ -509,7 +513,7 @@ function addHtmlBreakDecoration(
   builder: DecorationCollector,
   state: EditorState,
   node: SyntaxNodeRef,
-  activeLines: Set<number>,
+  editing: boolean,
   frontmatter: FrontmatterInfo | null
 ): void {
   if (isInsideFrontmatter(frontmatter, node.from)) {
@@ -523,7 +527,7 @@ function addHtmlBreakDecoration(
 
   const line = state.doc.lineAt(node.from);
   const needsVisualBreak = state.doc.sliceString(node.to, line.to).trim().length > 0;
-  if (activeLines.has(line.number)) {
+  if (editing) {
     addRange(builder, node.from, node.to, htmlBreakSourceDeco);
     if (needsVisualBreak) {
       builder.push(
@@ -1323,9 +1327,15 @@ class FootnoteBacklinkWidget extends UiLanguageSensitiveWidget {
   }
 }
 
-function addMarkdownLinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, activeLines: Set<number>): void {
+function addMarkdownLinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, editing: boolean): void {
   const urlNode = findChildNode(node, 'URL');
   if (!urlNode) {
+    const href = hrefFromSourceLinkNode(state, node.node);
+    if (!href) return;
+    const close = node.node.getChildren('LinkMark').find(mark => state.doc.sliceString(mark.from, mark.to) === ']');
+    if (!close || close.from <= node.from + 1) return;
+    addLinkMark(builder, node.from + 1, close.from, href, editing ? null : close.from);
+    if (!editing) addRange(builder, close.to, node.to, hiddenLinkUrlDeco);
     return;
   }
 
@@ -1341,10 +1351,8 @@ function addMarkdownLinkDecorations(builder: DecorationCollector, state: EditorS
     return;
   }
   const href = getNodeHref(state, urlNode);
-  const urlLine = state.doc.lineAt(urlNode.from);
-  const isActiveLine = activeLines.has(urlLine.number);
   const containsImage = Boolean(findChildNode(node, 'Image'));
-  addLinkMark(builder, textFrom, textTo, href, !isActiveLine && !containsImage ? textTo : null);
+  addLinkMark(builder, textFrom, textTo, href, !editing && !containsImage ? textTo : null);
 
   if (isMissingLocalLinkTarget(href)) {
     const iconPos = textFrom < textTo ? textFrom : node.from + 1;
@@ -1359,8 +1367,8 @@ function addMarkdownLinkDecorations(builder: DecorationCollector, state: EditorS
   if (!href) {
     return;
   }
-  if (!isActiveLine) {
-    addRange(builder, urlNode.from, urlNode.to, hiddenLinkUrlDeco);
+  if (!editing) {
+    addRange(builder, textTo + 1, node.to, hiddenLinkUrlDeco);
     return;
   }
 
@@ -1374,8 +1382,8 @@ function addMarkdownLinkDecorations(builder: DecorationCollector, state: EditorS
   }
 }
 
-function addFootnoteReferenceDecorations(builder: DecorationCollector, state: EditorState, reference: FootnoteReference, activeLines: Set<number>): boolean {
-  if (!shouldRenderFootnoteReference(state, reference, activeLines)) {
+function addFootnoteReferenceDecorations(builder: DecorationCollector, reference: FootnoteReference, editing: boolean): boolean {
+  if (editing || !reference.number || !reference.definition) {
     return false;
   }
 
@@ -1387,12 +1395,6 @@ function addFootnoteReferenceDecorations(builder: DecorationCollector, state: Ed
   );
 
   return true;
-}
-
-function shouldRenderFootnoteReference(state: EditorState, reference: FootnoteReference, activeLines: Set<number>): boolean {
-  const line = state.doc.lineAt(reference.from);
-  const editingReference = activeLines.has(line.number) || overlapsSelection(state, reference.from, reference.to);
-  return !editingReference && Boolean(reference.number) && Boolean(reference.definition);
 }
 
 function addInlineFootnoteMarkerSyntaxDecorations(
@@ -1435,36 +1437,33 @@ function getEmptyImageLinkUrl(state: EditorState, node: SyntaxNodeRef): string {
   return isImageUrl(url) ? url : '';
 }
 
-function addAutolinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, activeLines: Set<number>): void {
+function addAutolinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, editing: boolean): void {
   const urlNode = findChildNode(node, 'URL');
   if (!urlNode) {
     return;
   }
   const href = getNodeHref(state, urlNode);
   const rawUrl = state.doc.sliceString(urlNode.from, urlNode.to);
-  const isActiveLine = activeLines.has(state.doc.lineAt(urlNode.from).number);
-  addTrimmedUrlLinkMark(builder, urlNode.from, urlNode.to, rawUrl, href, !isActiveLine);
+  addTrimmedUrlLinkMark(builder, urlNode.from, urlNode.to, rawUrl, href, !editing);
 }
 
-function addWikiLinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, activeLines: Set<number>): boolean {
+function addWikiLinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, editing: boolean): boolean {
   const wikiLink = parseWikiLinkData(state, node);
   if (!wikiLink) {
     return false;
   }
 
   const hasVisibleText = wikiLink.textFrom >= 0 && wikiLink.textTo > wikiLink.textFrom;
-  const lineNo = state.doc.lineAt(node.from).number;
-  const isActiveLine = activeLines.has(lineNo);
   if (wikiLink.href && hasVisibleText) {
     addLinkMark(
       builder,
       wikiLink.textFrom,
       wikiLink.textTo,
       wikiLink.href,
-      isActiveLine ? null : wikiLink.textTo
+      editing ? null : wikiLink.textTo
     );
   }
-  const marker = isActiveLine
+  const marker = editing
     ? activeWikiLinkMarkerDeco
     : hasVisibleText
       ? wikiLinkMarkerDeco
@@ -1472,7 +1471,7 @@ function addWikiLinkDecorations(builder: DecorationCollector, state: EditorState
   addRange(builder, wikiLink.openFrom, wikiLink.openTo, marker);
   addRange(builder, wikiLink.closeFrom, wikiLink.closeTo, marker);
 
-  if (!isActiveLine && wikiLink.hideTo > wikiLink.hideFrom) {
+  if (!editing && wikiLink.hideTo > wikiLink.hideFrom) {
     addRange(builder, wikiLink.hideFrom, wikiLink.hideTo, hiddenLinkUrlDeco);
   }
 
@@ -1501,12 +1500,72 @@ function addLineAwareRange(builder: DecorationCollector, activeLines: Set<number
   addRange(builder, from, to, activeLines.has(lineNo) ? activeDeco : inactiveDeco);
 }
 
-function addInlineMarkerRange(builder: DecorationCollector, activeLines: Set<number>, lineNo: number, from: number, to: number, inactiveDeco: Decoration, activeDeco: Decoration, closing = false): void {
-  const active = activeLines.has(lineNo);
+function addInlineMarkerRange(builder: DecorationCollector, active: boolean, from: number, to: number, inactiveDeco: Decoration, activeDeco: Decoration, closing = false): void {
   addRange(builder, from, to, active ? activeDeco : inactiveDeco);
   if (active && closing) {
     builder.push(inlineSyntaxBoundaryDeco.range(to));
   }
+}
+
+const inlineSourceNodeNames = new Set([
+  'Emphasis', 'StrongEmphasis', 'Strikethrough', 'Highlight', 'InlineCode',
+  'Subscript', 'Superscript', 'Link', 'Image', 'Autolink'
+]);
+
+function liveInlineSource(state: EditorState, tree: Tree, math: readonly DocumentMathRange[], footnotes: ParsedFootnotes) {
+  const selections = state.field(liveDocumentIdleField) ? [] : sourcePresentationSelection(state).ranges;
+  const openingBoundaries = new Set(selections.filter(range => range.empty).map(range => range.head));
+  const closingBoundaries = new Set(openingBoundaries);
+  const active = selections.map(selection => {
+    const candidates: InlineEditRange[] = [];
+    for (let node: SyntaxNode | null = tree.resolve(selection.from, 1); node; node = node.parent) {
+      if (!inlineSourceNodeNames.has(node.name)) continue;
+      if (node.name === 'Link' && !isWikiLinkNode(state, node) && !hrefFromSourceLinkNode(state, node)
+        && !node.getChild('URL')) continue;
+      candidates.push(node);
+    }
+    const mathRange = inlineRangeAt(math, selection);
+    if (mathRange && !mathRange.fencedDisplay) return mathRange;
+    const reference = inlineRangeAt(footnotes.references, selection);
+    if (reference?.definition) return reference;
+    const line = state.doc.lineAt(selection.from);
+    if (hasKbdTagMarker(line.text)) candidates.push(...collectKbdTagRangesFromText(line.text, line.from));
+    return innermostInlineSource(candidates, selection);
+  });
+  return {
+    editing(from: number, to: number) {
+      return active.some(range => range?.from === from && range.to === to);
+    },
+    object(from: number, to: number) {
+      const candidate = { from, to };
+      let editing = false;
+      selections.forEach((selection, index) => {
+        if (!inlineSourceContains(candidate, selection)) return;
+        // Opaque widgets own their complete source even if the Markdown tree
+        // parsed tokens inside the rendered object.
+        active[index] = candidate;
+        editing = true;
+      });
+      return editing;
+    },
+    intersects(from: number, to: number) {
+      return selections.some(selection => inlineSourceContains({ from, to }, selection));
+    },
+    takeCaretBoundary(position: number, opening: boolean) {
+      return (opening ? openingBoundaries : closingBoundaries).delete(position);
+    }
+  };
+}
+
+function inlineRangeAt<T extends InlineEditRange>(ranges: readonly T[], selection: InlineEditRange): T | undefined {
+  let low = 0, high = ranges.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (ranges[mid]!.from <= selection.from) low = mid + 1;
+    else high = mid;
+  }
+  const range = ranges[low - 1];
+  return range && inlineSourceContains(range, selection) ? range : undefined;
 }
 
 function collectActiveLines(state: EditorState): Set<number> {
@@ -1957,6 +2016,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
   }
   const mathRanges = collectMathRanges(state, tree, renderedTableRanges, frontmatter, scope)
     .filter(range => !scope || range.to >= scope.from && range.from <= scope.to);
+  const inlineSource = liveInlineSource(state, tree, mathRanges, footnotes);
   const insideMath = indexSourceRanges(mathRanges);
   const insideFencedMathLine = indexSourceRanges(mathRanges.filter(math => math.fencedDisplay).map(math => ({
     from: state.doc.lineAt(math.from).from,
@@ -1978,7 +2038,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
   for (const body of htmlCodeBodies) if (!scope || body.to >= scope.from && body.from <= scope.to) addRange(ranges, body.from, body.to, inlineStyleDecos.inlineCode);
   const inlineHtmlRanges: Array<{ from: number; to: number }> = [];
   const htmlDecorationStart = ranges.length;
-  const renderedHtmlBlocks = addHtmlContentDecorations(ranges, state, activeLines, previous, changes, inlineHtmlRanges, scope);
+  const renderedHtmlBlocks = addHtmlContentDecorations(ranges, state, previous, changes, inlineHtmlRanges, scope, inlineSource.object);
 
   // Foundation readers can finish the parser while preparing shared context.
   // Render the completed outer Markdown tree now, rather than publishing a
@@ -2166,15 +2226,14 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
       } else if (node.name === 'InlineCode' || node.name === 'CodeText') {
         addRange(ranges, node.from, node.to, inlineStyleDecos.inlineCode);
       } else if (node.name === 'LinkLabel') {
-        const parentName = node.node.parent?.name ?? '';
+        const parent = node.node.parent;
         if (
-          parentName === 'Link' &&
+          parent?.name === 'Link' &&
           node.to - node.from >= 2 &&
           !isFootnoteDefinitionMarker(footnotes, node.from, node.to) &&
-          Boolean(hrefFromSourceLinkNode(state, node.node.parent))
+          Boolean(hrefFromSourceLinkNode(state, parent))
         ) {
-          const line = state.doc.lineAt(node.from);
-          const markerDecoForLine = activeLines.has(line.number) ? activeLinkLabelBracketDeco : linkLabelBracketDeco;
+          const markerDecoForLine = inlineSource.editing(parent.from, parent.to) ? activeLinkLabelBracketDeco : linkLabelBracketDeco;
           addRange(ranges, node.from, node.from + 1, markerDecoForLine);
           addRange(ranges, node.to - 1, node.to, markerDecoForLine);
         }
@@ -2191,7 +2250,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           );
           const renderedFootnoteReferences: FootnoteReference[] = [];
           for (const footnoteReference of footnoteReferences ?? []) {
-            if (addFootnoteReferenceDecorations(ranges, state, footnoteReference, activeLines)) {
+            if (addFootnoteReferenceDecorations(ranges, footnoteReference, inlineSource.editing(footnoteReference.from, footnoteReference.to))) {
               renderedFootnoteReferences.push(footnoteReference);
             }
           }
@@ -2218,7 +2277,8 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           }
           return;
         }
-        if (addWikiLinkDecorations(ranges, state, node, activeLines)) {
+        const editingLink = inlineSource.editing(node.from, node.to);
+        if (addWikiLinkDecorations(ranges, state, node, editingLink)) {
           return;
         }
         // Lezer also emits Link nodes for unresolved reference candidates such
@@ -2227,31 +2287,17 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           addRange(ranges, node.from, node.to, literalLinkDeco);
         }
         const emptyImageUrl = getEmptyImageLinkUrl(state, node);
-        if (emptyImageUrl) {
-          const line = state.doc.lineAt(node.from);
-          if (!activeLines.has(line.number)) {
-            const linkSelection = overlapsSelection(state, node.from, node.to);
-            if (!linkSelection) {
-              ranges.push(
-                Decoration.replace({
-                  widget: new ImageWidget(
-                    emptyImageUrl,
-                    '',
-                    '',
-                    node.from,
-                    getImagePresentationFactory(state),
-                    { uiLanguage: state.facet(uiLanguageFacet) }
-                  ),
-                  inclusive: false
-                }).range(node.from, node.to)
-              );
-              return;
-            }
-          }
+        if (emptyImageUrl && !editingLink) {
+          ranges.push(Decoration.replace({
+            widget: new ImageWidget(emptyImageUrl, '', '', node.from, getImagePresentationFactory(state),
+              { uiLanguage: state.facet(uiLanguageFacet) }),
+            inclusive: false
+          }).range(node.from, node.to));
+          return;
         }
-        addMarkdownLinkDecorations(ranges, state, node, activeLines);
+        addMarkdownLinkDecorations(ranges, state, node, editingLink);
       } else if (node.name === 'Autolink') {
-        addAutolinkDecorations(ranges, state, node, activeLines);
+        addAutolinkDecorations(ranges, state, node, inlineSource.editing(node.from, node.to));
       } else if (node.name === 'URL') {
         const parentName = node.node.parent?.name ?? '';
         if (parentName === 'LinkReference' && isFootnoteDefinitionContent(footnotes, node.from, node.to)) {
@@ -2262,20 +2308,18 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           if (isInsideFrontmatterContent(frontmatter, node.from)) {
             return;
           }
-          const isActiveLine = activeLines.has(state.doc.lineAt(node.from).number);
-          addTrimmedUrlLinkMark(ranges, node.from, node.to, rawUrl, href, !isActiveLine);
+          addTrimmedUrlLinkMark(ranges, node.from, node.to, rawUrl, href, !inlineSource.intersects(node.from, node.to));
         }
       } else if (node.name === 'Image') {
         // The table owns its cell previews, including the active source line.
         if (tableDepth > 0) return;
         const line = state.doc.lineAt(node.from);
-        const isActiveLine = activeLines.has(line.number);
-        const imageSelection = overlapsSelection(state, node.from, node.to);
         if (!findChildNode(node, 'URL') && !hrefFromSourceLinkNode(state, node.node)) {
           addRange(ranges, node.from, node.to, literalLinkDeco);
         }
 
-        if (isActiveLine || imageSelection) {
+        const parent = node.node.parent;
+        if (inlineSource.editing(node.from, node.to) || (parent?.name === 'Link' && inlineSource.editing(parent.from, parent.to))) {
           const { url, altText, linkUrl, width, height } = getImageData(state, node);
           if (url) {
             const group = activeImageGroups.get(line.number) ?? { line, items: [] };
@@ -2302,7 +2346,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           );
         }
       } else if ((node.name === 'HTMLTag' || node.name === 'HTMLBlock') && tableDepth === 0) {
-        addHtmlBreakDecoration(ranges, state, node, activeLines, frontmatter);
+        addHtmlBreakDecoration(ranges, state, node, inlineSource.intersects(node.from, node.to), frontmatter);
       }
 
       if (node.name === 'Subscript' || node.name === 'Superscript') {
@@ -2319,7 +2363,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
             node.to - 1,
             node.name === 'Subscript' ? subscriptContentDeco : superscriptContentDeco
           );
-          const active = activeLines.has(state.doc.lineAt(node.from).number);
+          const active = inlineSource.editing(node.from, node.to);
           for (let child = node.node.firstChild; child; child = child.nextSibling) {
             if (child.name === 'Escape') {
               addRange(ranges, child.from, child.from + 1, active ? activeLineMarkerDeco : markerDeco);
@@ -2345,6 +2389,18 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
         return;
       }
       if (node.name === 'HeaderMark' && node.node.parent?.name.startsWith('SetextHeading')) return;
+      const parent = node.node.parent;
+      const parentEditing = !!parent && inlineSource.editing(parent.from, parent.to);
+      if (!parentEditing && parent && inlineSourceNodeNames.has(parent.name)) {
+        // Hidden inline marks have no DOM rectangle. A collapsed caret on
+        // either edge still needs a position without revealing that syntax.
+        if (node.from === parent.from && inlineSource.takeCaretBoundary(node.from, true)) {
+          ranges.push(inlineSyntaxOpeningBoundaryDeco.range(node.from));
+        }
+        if (node.to === parent.to && inlineSource.takeCaretBoundary(node.to, false)) {
+          ranges.push(inlineSyntaxBoundaryDeco.range(node.to));
+        }
+      }
       if (isFenceMarker(state, node.from, node.to)) {
         const parent = node.node.parent;
         const mermaidEditing = parent?.name === 'FencedCode' && isGraphBlockLanguage(state, getFencedCodeInfo(state, { node: parent }))
@@ -2357,8 +2413,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
         const activeDeco = parentName === 'StrongEmphasis' ? activeStrongMarkerDeco : activeEmMarkerDeco;
         addInlineMarkerRange(
           ranges,
-          activeLines,
-          line.number,
+          parentEditing,
           node.from,
           node.to,
           inactiveDeco,
@@ -2368,8 +2423,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
       } else if (node.name === 'StrikethroughMark') {
         addInlineMarkerRange(
           ranges,
-          activeLines,
-          line.number,
+          parentEditing,
           node.from,
           node.to,
           strikeMarkerDeco,
@@ -2379,8 +2433,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
       } else if (node.name === 'HighlightMark') {
         addInlineMarkerRange(
           ranges,
-          activeLines,
-          line.number,
+          parentEditing,
           node.from,
           node.to,
           highlightMarkerDeco,
@@ -2390,8 +2443,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
       } else if (node.name === 'CodeMark') {
         addInlineMarkerRange(
           ranges,
-          activeLines,
-          line.number,
+          parentEditing,
           node.from,
           node.to,
           codeMarkerDeco,
@@ -2408,8 +2460,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
         ) {
           return;
         }
-        // For image links, check if the image node overlaps with selection to show markers
-        let useActiveDeco = activeLines.has(line.number);
+        let useActiveDeco = parentEditing;
         if (parentName === 'Image') {
           const imageNode = node.node.parent;
           if (!imageNode) {
@@ -2419,22 +2470,10 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           if (!url) {
             return;
           }
-          // Also show active markers if the image is selected
-          if (!useActiveDeco && overlapsSelection(state, imageNode.from, imageNode.to)) {
-            useActiveDeco = true;
-          }
+          const link = imageNode.parent;
+          useActiveDeco ||= link?.name === 'Link' && inlineSource.editing(link.from, link.to);
         } else if (parentName === 'Link') {
-          if (isWikiLinkNode(state, node.node.parent)) {
-            return;
-          }
-          const urlNode = findChildNode(node.node.parent, 'URL');
-          if (!urlNode) {
-            return;
-          }
-          const href = getNodeHref(state, urlNode);
-          if (!href) {
-            return;
-          }
+          if (isWikiLinkNode(state, parent) || !hrefFromSourceLinkNode(state, parent)) return;
         }
         addRange(ranges, node.from, node.to, useActiveDeco ? activeLinkMarkerDeco : linkMarkerDeco);
       } else if (
@@ -2447,6 +2486,9 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
         // Keep "^" visible for unresolved markers inside partially-resolved
         // adjacent footnote sequences (e.g. "[^4][^5]" where only "[^4]" resolves).
         return;
+      } else if (node.name === 'SubscriptMark' || node.name === 'SuperscriptMark') {
+        addInlineMarkerRange(ranges, parentEditing, node.from, node.to, markerDeco, activeLineMarkerDeco,
+          node.node.parent?.to === node.to);
       } else if (activeLines.has(line.number)) {
         addRange(ranges, node.from, node.to, node.name === 'QuoteMark' ? activeQuoteMarkerDeco : activeLineMarkerDeco);
       } else {
@@ -2536,7 +2578,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
   }
 
   addFallbackTableDecorations(ranges, state, tree, parsedTableRanges, diagnostics, scope);
-  addRawFileUrlDecorations(ranges, state, tree, activeLines, frontmatter, scope);
+  addRawFileUrlDecorations(ranges, state, tree, inlineSource.intersects, frontmatter, scope);
   // Source prose and rendered blocks consume the same task-marker width delta.
   for (const line of scopedDocumentLines(state, scope)) {
     const lineNo = line.number;
@@ -2569,12 +2611,11 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
     } }).range(line.from));
   }
   addListLineDecorations(ranges, state, tree, indentSelectedLines, parsedContainers, frontmatter, literalBlockLines, scope);
-  addMathDecorations(ranges, state, mathRanges, activeLines);
+  addMathDecorations(ranges, state, mathRanges, inlineSource.editing, activeLines);
   addColorSwatchDecorations(
     ranges,
     state,
     tree,
-    activeLines,
     [
       renderedTableRanges,
       mathRanges,
@@ -2582,7 +2623,8 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
     ],
     scope
   );
-  addKbdTagDecorations(ranges, state, activeLines, renderedTableRanges, mathRanges, frontmatter, codeBlockLines, scope);
+  addKbdTagDecorations(ranges, state, inlineSource.editing, renderedTableRanges,
+    [...mathRanges, ...literalRanges, ...inlineHtmlRanges], frontmatter, codeBlockLines, scope);
   addFootnoteDefinitionDecorations(ranges, state, footnotes, activeLines, literalBlockLines, scope);
   const htmlEditingRange = getHtmlEditingRange(state);
   addDetailsBlockDecorations(
@@ -2785,12 +2827,19 @@ class KbdTagWidget extends WidgetType {
     return other instanceof KbdTagWidget && other.keyText === this.keyText;
   }
 
-  toDOM(): HTMLElement {
+  toDOM(view: EditorView): HTMLElement {
     const el = document.createElement('kbd');
     el.className = 'meo-md-kbd';
     el.textContent = this.keyText;
+    bindWidgetClick(el, event => {
+      event.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(el) + 1 } });
+      view.focus();
+    });
     return el;
   }
+
+  destroy(dom: HTMLElement): void { disposeWidgetClick(dom); }
 
   ignoreEvent(): boolean {
     return true;
@@ -3115,6 +3164,7 @@ function addMathDecorations(
   builder: DecorationCollector,
   state: EditorState,
   mathRanges: ReadonlyArray<DocumentMathRange>,
+  editingInline: (from: number, to: number) => boolean,
   activeLines: Set<number>
 ): void {
   for (const mathRange of mathRanges) {
@@ -3122,10 +3172,10 @@ function addMathDecorations(
       continue;
     }
     const fencedDisplay = mathRange.mode === 'display' && mathRange.fencedDisplay === true;
-    let editingBoundary = !fencedDisplay && (
-      rangeTouchesActiveLine(state, mathRange.from, mathRange.to, activeLines) ||
-      overlapsSelection(state, mathRange.from, mathRange.to)
-    );
+    const editingBoundary = mathRange.mode === 'inline'
+      ? editingInline(mathRange.from, mathRange.to)
+      : !fencedDisplay && (rangeTouchesActiveLine(state, mathRange.from, mathRange.to, activeLines)
+        || overlapsSelection(state, mathRange.from, mathRange.to));
 
     if (fencedDisplay) {
       const openingLine = state.doc.lineAt(mathRange.from);
@@ -3201,16 +3251,16 @@ function addMathDecorations(
 function addKbdTagDecorations(
   builder: DecorationCollector,
   state: EditorState,
-  activeLines: Set<number>,
+  editingInline: (from: number, to: number) => boolean,
   renderedTableRanges: ReadonlyArray<SourceRange>,
-  mathRanges: ReadonlyArray<LatexMathRange> = [],
+  protectedRanges: ReadonlyArray<SourceRange> = [],
   frontmatter: FrontmatterInfo | null = null,
   codeBlockLines: Set<number> | null = null,
   scope?: LiveDecorationScope
 ): void {
   for (const line of scopedDocumentLines(state, scope)) {
     const lineNo = line.number;
-    if (activeLines.has(lineNo) || codeBlockLines?.has(lineNo)) {
+    if (codeBlockLines?.has(lineNo)) {
       continue;
     }
 
@@ -3228,13 +3278,13 @@ function addKbdTagDecorations(
 
     const kbdRanges = collectKbdTagRangesFromText(lineText, line.from);
     for (const kbdRange of kbdRanges) {
-      if (overlapsSelection(state, kbdRange.from, kbdRange.to)) {
+      if (editingInline(kbdRange.from, kbdRange.to)) {
         continue;
       }
       if (overlapsParsedTableRange(kbdRange.from, kbdRange.to, renderedTableRanges)) {
         continue;
       }
-      if (overlapsParsedTableRange(kbdRange.from, kbdRange.to, mathRanges)) {
+      if (overlapsParsedTableRange(kbdRange.from, kbdRange.to, protectedRanges)) {
         continue;
       }
 
@@ -3342,7 +3392,6 @@ function addColorSwatchDecorations(
   ranges: DecorationCollector,
   state: EditorState,
   tree: Tree,
-  activeLines: Set<number>,
   excludedRangeStreams: ReadonlyArray<ReadonlyArray<SourceRange>>,
   scope?: LiveDecorationScope
 ): void {
@@ -3372,10 +3421,6 @@ function addColorSwatchDecorations(
     const excludedRange = syntaxExcludedRanges[excludedIndex];
     if (excludedRange
       && rangesOverlap(colorRange.from, colorRange.to, excludedRange.from, excludedRange.to)) {
-      continue;
-    }
-    const line = state.doc.lineAt(colorRange.from);
-    if (activeLines.has(line.number) || overlapsSelection(state, colorRange.from, colorRange.to)) {
       continue;
     }
     addColorSwatchDecoration(ranges, colorRange);
@@ -4965,12 +5010,11 @@ function addRawFileUrlDecorations(
   builder: DecorationCollector,
   state: EditorState,
   tree: Tree,
-  activeLines: Set<number>,
+  editingInline: (from: number, to: number) => boolean,
   frontmatter: FrontmatterInfo | null = null,
   scope?: LiveDecorationScope
 ): void {
   for (const line of scopedDocumentLines(state, scope)) {
-    const lineNo = line.number;
     if (line.text.indexOf(fileSchemePrefix) === -1) {
       continue;
     }
@@ -4991,7 +5035,7 @@ function addRawFileUrlDecorations(
       if (hasBlockedRawFileUrlAncestor(tree, from, to)) {
         continue;
       }
-      addLinkMark(builder, from, to, match.href, activeLines.has(lineNo) ? null : to);
+      addLinkMark(builder, from, to, match.href, editingInline(from, to) ? null : to);
     }
   }
 }
