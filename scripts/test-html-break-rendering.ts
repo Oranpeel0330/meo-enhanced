@@ -1,8 +1,10 @@
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Page } from 'puppeteer-core';
 import { launchTestBrowser } from './browser-test-helpers';
+import { assessLargeDocument } from '../src/foundation/largeDocument';
 
 const repoRoot = path.resolve(import.meta.dir, '..');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-html-break-rendering-'));
@@ -13,6 +15,134 @@ async function waitForFrames(page: Page, count = 8): Promise<void> {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     }
   }, count);
+}
+
+async function checkBreakPointerGeometry(page: Page, large: boolean): Promise<void> {
+  const label = large ? 'large' : 'ordinary';
+  const padding = Array.from({ length: 40 }, (_, index) => `Paragraph ${index + 1}`);
+  const first = '甲：第一段', second = '乙：第二段', third = '丙：第三段', tail = '末尾标签';
+  const source = [...padding, `${first}<br>${second}<br/>${third}<BR />丁：最后一段`, `${tail}<br>  `,
+    '下一源文件行', ...padding, ...(large ? Array(8_100).fill('Padding') : [])].join('\n');
+  const start = source.indexOf(first);
+  const firstBreak = start + first.length;
+  const secondStart = source.indexOf(second);
+  const secondBreak = secondStart + second.length;
+  const thirdBreak = source.indexOf(third) + third.length;
+  const tailBreak = source.indexOf(tail) + tail.length;
+  assert.equal(assessLargeDocument(source).boundedEditorWork, large, `${label}/size policy`);
+  await page.evaluate(text => {
+    const fixture = window as any;
+    fixture.__htmlBreakEditor.destroy();
+    fixture.__htmlBreakEditor = fixture.HtmlBreakRenderingHarness.createEditor({
+      parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+    });
+    fixture.__htmlBreakEditor.scrollToLine(34, 'top');
+  }, source);
+  await page.waitForFunction((large, start) => {
+    const fixture = window as any;
+    const view = fixture.__htmlBreakEditor.view;
+    const row = view.coordsForChar(start);
+    return fixture.HtmlBreakRenderingHarness.usesLargeDocumentDerivedWorkBudget(view.state) === large
+      && view.scrollDOM.scrollTop > 0 && row?.top > 80 && row.bottom < 400
+      && view.contentDOM.querySelectorAll('.meo-md-html-break').length === 3;
+  }, {}, large, start);
+  await waitForFrames(page);
+
+  const point = (position: number, blank: boolean) => page.evaluate(({ position, blank }) => {
+    const view = (window as any).__htmlBreakEditor.view;
+    const box = view.coordsForChar(position);
+    if (!box) throw new Error(`Missing visible glyph at ${position}`);
+    const x = blank ? box.right + 100 : box.left + (box.right - box.left) / 4;
+    const y = (box.top + box.bottom) / 2;
+    const target = document.elementFromPoint(x, y);
+    if (!target?.closest('.cm-content')) throw new Error(`Click at ${x},${y} hit ${target?.outerHTML.slice(0, 200)}`);
+    return { x, y };
+  }, { position, blank });
+  const checkClick = async (position: number, blank: boolean, expected: number, tag: string, action: string) => {
+    const { x, y } = await point(position, blank);
+    const before = await page.evaluate(start => {
+      const fixture = window as any;
+      const view = fixture.__htmlBreakEditor.view;
+      const samples: Array<{ scroll: number; top: number }> = [];
+      const measure = () => ({ scroll: view.scrollDOM.scrollTop, top: view.coordsForChar(start)?.top });
+      let frame = requestAnimationFrame(function observe() {
+        samples.push(measure());
+        frame = requestAnimationFrame(observe);
+      });
+      fixture.__htmlBreakPointerSamples = () => {
+        cancelAnimationFrame(frame);
+        const { head, assoc } = view.state.selection.main;
+        return {
+          samples, head, caret: view.coordsAtPos(head, assoc < 0 ? -1 : 1),
+          tags: [...view.contentDOM.querySelectorAll('.meo-md-html-break-source')].map(part => part.textContent),
+          breaks: view.contentDOM.querySelectorAll('.meo-md-html-break').length
+        };
+      };
+      return measure();
+    }, start);
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await waitForFrames(page, 2);
+    const held = await page.evaluate(() => (window as any).__htmlBreakEditor.view.state.selection.main.head);
+    await page.mouse.up();
+    await waitForFrames(page);
+    const result = await page.evaluate(() => (window as any).__htmlBreakPointerSamples());
+    const context = `${label}/${action}`;
+    assert.equal(held, expected, `${context}/held source offset`);
+    assert.equal(result.head, expected, `${context}/released source offset`);
+    assert.deepEqual(result.tags, [tag], `${context}/visible tag`);
+    assert.equal(result.breaks, 3, `${context}/painted breaks`);
+    assert(result.caret?.top <= y && y <= result.caret?.bottom, `${context}/caret must stay on the clicked row`);
+    assert(result.samples.length >= 2, `${context}/frame samples`);
+    for (const sample of result.samples) {
+      assert(Math.abs(sample.scroll - before.scroll) <= 1 && Math.abs(sample.top - before.top) <= 1,
+        `${context}/document moved from ${JSON.stringify(before)} to ${JSON.stringify(sample)}`);
+    }
+  };
+
+  await checkClick(firstBreak - 1, true, firstBreak, '<br>', 'blank tail with hidden tag');
+  await checkClick(secondStart, false, secondStart, '<br/>', 'start of the row after a revealed tag');
+  await checkClick(secondBreak - 1, true, secondBreak, '<br/>', 'blank tail with revealed tag');
+  await checkClick(thirdBreak - 1, true, thirdBreak, '<BR />', 'uppercase tag');
+  await checkClick(tailBreak - 1, true, tailBreak, '<br>', 'tag before a physical newline and trailing spaces');
+
+  const dragStart = await point(firstBreak - 1, true);
+  const dragEnd = await point(secondStart + 1, false);
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 5 });
+  await page.mouse.up();
+  await waitForFrames(page);
+  const drag = await page.evaluate(() => {
+    const { state } = (window as any).__htmlBreakEditor.view;
+    const { anchor, head } = state.selection.main;
+    return { anchor, head, text: state.doc.toString() };
+  });
+  assert.deepEqual(drag, { anchor: firstBreak, head: secondStart + 1, text: source }, `${label}/drag from the blank tail`);
+
+  await page.mouse.move(dragStart.x, dragStart.y);
+  await page.mouse.down();
+  await page.mouse.move(dragEnd.x, dragEnd.y, { steps: 5 });
+  await page.mouse.move(dragStart.x, dragStart.y, { steps: 5 });
+  await page.mouse.up();
+  await waitForFrames(page);
+  const returned = await page.evaluate(() => {
+    const { anchor, head } = (window as any).__htmlBreakEditor.view.state.selection.main;
+    return { anchor, head };
+  });
+  assert.deepEqual(returned, { anchor: firstBreak, head: firstBreak }, `${label}/drag back to the blank tail`);
+
+  await checkClick(secondBreak - 1, true, secondBreak, '<br/>', 'reveal the tag for editing');
+  await checkClick(secondBreak + 3, false, secondBreak + 3, '<br/>', 'inside the tag before its slash');
+  await page.keyboard.type(' ');
+  await waitForFrames(page);
+  const edited = await page.evaluate(() => {
+    const view = (window as any).__htmlBreakEditor.view;
+    return { text: view.state.doc.toString(), breaks: view.contentDOM.querySelectorAll('.meo-md-html-break').length };
+  });
+  assert.equal(edited.text, source.slice(0, secondBreak + 3) + ' ' + source.slice(secondBreak + 3), `${label}/editing tag source`);
+  assert.equal(edited.breaks, 3, `${label}/valid tag edit preserves visual breaks`);
 }
 
 async function main() {
@@ -156,6 +286,7 @@ async function main() {
       }
     }
 
+    for (const large of [false, true]) await checkBreakPointerGeometry(page, large);
     console.log('HTML break rendering browser tests passed');
   } finally {
     await browser.close();

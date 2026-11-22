@@ -15,7 +15,7 @@ import { blockStickyHeaderExtension } from './helpers/blockStickyHeader';
 import { livePointerSelectionActiveField, setLivePointerSelectionActiveEffect, sourcePresentationSelection } from './editor/livePointerSelection';
 import { blockReadingFocusAt, enterBlockSource, isBlockInteractionEffect } from './editor/blockInteraction';
 import { bindWidgetClick, disposeWidgetClick } from './editor/widgetPointer';
-import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, type Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type EditorSelection, type SelectionRange } from '@codemirror/state';
+import { countColumn, RangeSetBuilder, StateEffect, StateField, EditorState, EditorSelection, type Transaction, type ChangeDesc, type ChangeSet, type Range, type RangeSet, type Extension, type SelectionRange } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { Language, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
@@ -24,6 +24,7 @@ import { certifyMarkdownStructure, markdownStructureAvailable, preparedMarkdownS
 import { isGraphBlockLanguage } from './editor/documentBlocks';
 import {
   Decoration,
+  Direction,
   EditorView,
   GutterMarker,
   WidgetType,
@@ -508,6 +509,11 @@ class HtmlBreakWidget extends WidgetType {
 }
 
 const htmlBreakWidget = new HtmlBreakWidget();
+const hiddenHtmlBreakDeco = Decoration.replace({ widget: htmlBreakWidget, inclusive: false });
+const hiddenTrailingHtmlBreakDeco = Decoration.replace({ inclusive: false });
+// The painted break belongs to the preceding row. The right side of this
+// source boundary must still measure the beginning of the following row.
+const revealedHtmlBreakDeco = Decoration.widget({ widget: htmlBreakWidget, side: -1 });
 
 function addHtmlBreakDecoration(
   builder: DecorationCollector,
@@ -530,20 +536,59 @@ function addHtmlBreakDecoration(
   if (revealBreak(line.number, node, needsVisualBreak)) {
     addRange(builder, node.from, node.to, htmlBreakSourceDeco);
     if (needsVisualBreak) {
-      builder.push(
-        Decoration.widget({ widget: htmlBreakWidget, side: 1 }).range(node.to)
-      );
+      builder.push(revealedHtmlBreakDeco.range(node.to));
     }
     return;
   }
 
-  builder.push(
-    Decoration.replace({
-      widget: needsVisualBreak ? htmlBreakWidget : undefined,
-      inclusive: false
-    }).range(node.from, node.to)
-  );
+  builder.push((needsVisualBreak ? hiddenHtmlBreakDeco : hiddenTrailingHtmlBreakDeco).range(node.from, node.to));
 }
+
+function htmlBreakTailPosition(view: EditorView, event: MouseEvent, hit: { pos: number; assoc: number }): number | null {
+  if (hit.assoc > 0) return null;
+  const decorations = view.state.field(liveDecorationField, false);
+  if (!decorations) return null;
+
+  const line = view.state.doc.lineAt(hit.pos);
+  const end = hit.pos === line.to ? line.from + line.text.trimEnd().length : hit.pos;
+  let start = end;
+  decorations.between(end, end, (from, to, decoration) => {
+    if (to !== end || from === to) return;
+    if (decoration !== htmlBreakSourceDeco && decoration !== hiddenHtmlBreakDeco && decoration !== hiddenTrailingHtmlBreakDeco) return;
+    start = from;
+    return false;
+  });
+  if (start === end) return null;
+
+  // A blank row tail hits the end of CodeMirror's break replacement. Reserve
+  // that miss for the preceding text, while clicks on the tag stay editable.
+  const tail = view.coordsAtPos(hit.pos, -1);
+  if (!tail) return null;
+  const padding = Math.max(0, (view.defaultLineHeight - (tail.bottom - tail.top)) / 2);
+  if (event.clientY < tail.top - padding || event.clientY >= tail.bottom + padding
+    || (view.textDirectionAt(end) === Direction.LTR ? event.clientX < tail.right : event.clientX > tail.left)) return null;
+  return start;
+}
+
+const htmlBreakMouseSelection = EditorView.mouseSelectionStyle.of((view, event) => {
+  if (event.button !== 0 || event.detail !== 1 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return null;
+  const hit = view.posAndSideAtCoords({ x: event.clientX, y: event.clientY });
+  const startPosition = hit && htmlBreakTailPosition(view, event, hit);
+  if (startPosition === null) return null;
+
+  let start = startPosition;
+  return {
+    update(update) {
+      if (update.docChanged) start = update.changes.mapPos(start, -1);
+    },
+    get(current) {
+      if (current === event) return EditorSelection.create([EditorSelection.cursor(start, -1)]);
+      const hit = view.posAndSideAtCoords({ x: current.clientX, y: current.clientY }, false);
+      const head = htmlBreakTailPosition(view, current, hit) ?? hit.pos;
+      return EditorSelection.create([head === start ? EditorSelection.cursor(head, hit.assoc) : EditorSelection.range(start, head)]);
+    }
+  };
+});
 
 function isMergeConflictMarkerLine(state: EditorState, pos: number): boolean {
   const line = state.doc.lineAt(pos);
@@ -5216,6 +5261,7 @@ export function liveModeExtensions(options: { readonly largeDocument?: boolean; 
     }) : syntaxHighlighting(liveHighlightStyle),
     markdownTagField,
     livePointerSelectionActiveField,
+    htmlBreakMouseSelection,
     liveDocumentIdleField,
     mermaidEditingStateField,
     mermaidEditingReadiness,
