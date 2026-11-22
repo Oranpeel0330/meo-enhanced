@@ -62,7 +62,7 @@ export function defaultShortcuts(platform: ShortcutPlatform): Record<EditorComma
     codeBlock: ['Ctrl + Shift + K'], deleteLine: [], strike: ['Alt + Shift + 5'],
     rowBelow: ['Ctrl + Enter'], cellBreak: ['Shift + Enter'],
     moveRowUp: ['Alt + ArrowUp'], moveRowDown: ['Alt + ArrowDown'],
-    openFileTree: ['Ctrl + Shift + 3'], resetWindowZoom: ['Ctrl + Shift + 0']
+    openFileTree: ['Ctrl + Shift + 3']
   });
   return result;
 }
@@ -119,7 +119,7 @@ export function shortcutStrokeCandidates(stroke: ShortcutStroke, secondStroke = 
 }
 
 const protectedDefaultCommands: readonly EditorCommandId[] = [
-  'saveAs', 'formatHtml', 'codeBlock', 'strike', 'rowBelow', 'moveRowUp', 'moveRowDown', 'openFileTree', 'resetWindowZoom'
+  'saveAs', 'formatHtml', 'codeBlock', 'strike', 'rowBelow', 'moveRowUp', 'moveRowDown', 'openFileTree'
 ];
 const shiftedNumberRowKeys: Readonly<Record<string, string>> = {
   'Alt + Shift + %': 'Alt + Shift + 5', 'Ctrl + Shift + #': 'Ctrl + Shift + 3', 'Ctrl + Shift + )': 'Ctrl + Shift + 0'

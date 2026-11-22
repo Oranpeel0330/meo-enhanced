@@ -222,9 +222,17 @@ try {
       const beforeWorkbenchActions = (await editorSnapshot()).content;
       await press('3', 'Control', 'Shift');
       await press('0', 'Control', 'Shift');
-      const actions = await page.evaluate(() => (window as any).__messages.filter((message: any) =>
+      const workbenchActions = () => page.evaluate(() => (window as any).__messages.filter((message: any) =>
         message.type === 'openFileTree' || message.type === 'resetWindowZoom'));
-      assert.deepEqual(actions, [{ type: 'openFileTree' }, { type: 'resetWindowZoom' }]);
+      assert.deepEqual(await workbenchActions(), [{ type: 'openFileTree' }], `${mode}: reset window zoom is unbound by default`);
+      await page.evaluate(() => {
+        const scope = window as any;
+        scope.__preferences = { ...scope.__preferences, shortcuts: { resetWindowZoom: ['Ctrl + Alt + U'] } };
+        window.dispatchEvent(new MessageEvent('message', { data: { type: 'editingPreferencesChanged',
+          preferences: scope.__preferences, revision: ++scope.__revision } }));
+      });
+      await press('u', 'Control', 'Alt');
+      assert.deepEqual(await workbenchActions(), [{ type: 'openFileTree' }, { type: 'resetWindowZoom' }]);
       assert.equal((await editorSnapshot()).content, beforeWorkbenchActions);
 
       const enterCell = (row: number, col: number, text: string) => mode === 'live'

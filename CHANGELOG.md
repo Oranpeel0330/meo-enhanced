@@ -5,7 +5,7 @@ Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
 ## 0.4.4
 - Enabled common formatting for pasted text by default. The paste options menu lets you keep formatting or switch to text for the current paste, with one step to undo it.
-- Updated default Windows editing shortcuts for code blocks, strikethrough, table rows, the Explorer, and window zoom. Existing custom bindings and cleared shortcuts are preserved.
+- Updated default Windows shortcuts for code blocks, strikethrough, table rows, and the Explorer. Reset window zoom is available as an optional binding. Existing custom bindings and cleared shortcuts are preserved.
 - Kept the caret in view when inserting or moving table rows, including from the last cell or at the viewport edge, without jumping away from the table.
 - Set the default document width limit to 1200 px and added top spacing in Live and Source. The editor caret follows the theme and can be customized in Appearance.
 - Simplified document statistics in the status bar and reduced the time and memory needed to update word counts in large documents.

@@ -53,6 +53,14 @@ assert.equal(resolveShortcut(upStroke, { moveUp: [] }, 'windows', 'table'), null
 const strikeStroke = { key: '%', code: 'Digit5', alt: true, ctrl: false, meta: false, shift: true };
 assert.equal(resolveShortcut(strikeStroke, {}, 'windows', 'editor'), 'strike');
 assert.equal(resolveShortcut(strikeStroke, { bold: ['Alt + Shift + %'] }, 'windows', 'editor'), 'bold');
+const zoomStroke = { key: ')', code: 'Digit0', alt: false, ctrl: true, meta: false, shift: true };
+for (const platform of ['windows', 'mac', 'other'] as const) {
+  assert.deepEqual(defaultShortcuts(platform).resetWindowZoom, []);
+}
+assert.equal(resolveShortcut(zoomStroke, {}, 'windows', 'global'), null);
+const savedZoom = normalizeEditingPreferences({ shortcuts: { resetWindowZoom: ['Ctrl + Shift + 0'] } });
+assert.equal(resolveShortcut(zoomStroke, savedZoom.shortcuts, 'windows', 'global'), 'resetWindowZoom');
+assert.deepEqual(shortcutConflicts('bold', ['Ctrl + Shift + )'], savedZoom.shortcuts, 'windows'), ['resetWindowZoom']);
 const legacyRule: CustomShortcut = { id: 'legacy-file-key', name: 'File key', scope: 'editor',
   strokes: ['Ctrl + Shift + #'], actions: [{ type: 'snippet', template: 'existing' }] };
 assert.deepEqual(effectiveShortcuts({}, 'windows', [legacyRule]).openFileTree, []);
