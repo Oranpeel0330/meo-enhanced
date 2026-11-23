@@ -1257,11 +1257,12 @@ async function checkCellSourcePointerGeometry(page: import('puppeteer-core').Pag
       const overlay = caret.getBoundingClientRect();
       return {
         native: getComputedStyle(el.closest('td')!.querySelector('textarea')!).caretColor,
-        x: overlay.left, y: overlay.top,
+        x: overlay.left, y: overlay.top, width: overlay.width,
         textX: textCaret.left, textY: textCaret.top, shown: getComputedStyle(caret).display !== 'none'
       };
     });
     assert.equal(position.native, 'rgba(0, 0, 0, 0)');
+    assert.equal(position.width, 1, 'the projected cell caret is one CSS pixel wide');
     assert.ok(position.shown && Math.abs(position.x - position.textX) < 1 && Math.abs(position.y - position.textY) < 1,
       `the visible caret uses the same line as the displayed text: ${JSON.stringify(position)}`);
   };

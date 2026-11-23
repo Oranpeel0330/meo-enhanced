@@ -8070,6 +8070,7 @@ html[data-meo-ui-contrast='high'] .cm-editor :is(.meo-md-html-table-context-trig
 .cm-editor > .cm-scroller > .cm-cursorLayer > .cm-cursor-primary {
   margin-left: 0;
   border: 0;
+  width: 1px;
   background-color: var(--meo-caret-color);
 }
 
