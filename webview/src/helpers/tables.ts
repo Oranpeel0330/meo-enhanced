@@ -23,7 +23,8 @@ import { defaultInputAssistance, type EditorCommandId } from '../../../src/found
 import { countColumn, findClusterBreak, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, Text as CodeMirrorText, type Annotation, type ChangeDesc, type ChangeSpec, type Range, type SelectionRange as CodeMirrorSelectionRange } from '@codemirror/state';
 import { ensureSyntaxTree, indentUnit, syntaxTree } from '@codemirror/language';
 import { deleteMarkupBackward, markdownLanguage } from '@codemirror/lang-markdown';
-import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view';
+import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
+import { formatSourceLineNumber, sourceLineNumberModeFacet } from '../editor/sourceLineNumbers';
 import type { SyntaxNode, SyntaxNodeRef, Tree } from '@lezer/common';
 import { isolateHistory } from '@codemirror/commands';
 import { disposeImagePresentations, ImageWidget } from './images';
@@ -51,7 +52,7 @@ import {
 } from './listMarkers';
 import { getViewportController, visualLineContextMargin } from './viewportController';
 import { nativeInputViewportReference } from '../editor/nativeInputViewport';
-import { flushEditorLayout } from '../editor/layoutMeasurement';
+import { commitObservedEditorSize, flushEditorLayout } from '../editor/layoutMeasurement';
 import { editorViewportBounds } from '../editor/editorViewportBounds';
 import { preserveTableColumnResizeLayout } from './tableColumnResizeViewport';
 import { changedDocumentRange, runEditorHistoryCommand } from './historyCommands';
@@ -196,7 +197,6 @@ interface DomRefs {
   container: HTMLElement;
   shell: HTMLElement;
   wrap: HTMLElement;
-  lineNumberLayer: HTMLElement;
   diffMarkerLayer: HTMLElement;
   cellGrid: HTMLTableCellElement[][];
   rowEntries: RowEntry[];
@@ -2948,6 +2948,109 @@ function buildWidgetTableData(
 const mountedTableWidgets = new WeakMap<EditorView, Set<HtmlTableController>>();
 const tableDomOwners = new WeakMap<HTMLElement, HtmlTableController>();
 
+const tableLineNumberSelector = ':scope > .cm-gutters > .cm-lineNumbers';
+
+type TableLineNumberMeasurement = {
+  gutter: HTMLElement | null;
+  gutterWidth: number;
+  rows: Map<number, { text: string; top: number; active: boolean }>;
+};
+
+/** The gutter outlives individual tables. CodeMirror may replace a table DOM
+ * while reconciling the document or its viewport. Keep the accepted labels
+ * attached until the next measurement can see the new, connected rows. */
+export const tableLineNumbers = ViewPlugin.fromClass(class {
+  private disposed = false;
+  private layer: HTMLElement | undefined;
+  private readonly labels = new Map<number, HTMLElement>();
+
+  constructor(private readonly view: EditorView) {}
+
+  private readonly measure = {
+    read: (view: EditorView): TableLineNumberMeasurement | null => {
+      if (this.disposed) return null;
+      const gutter = view.scrollDOM.querySelector<HTMLElement>(tableLineNumberSelector);
+      const rows: TableLineNumberMeasurement['rows'] = new Map();
+      let gutterWidth = 0;
+      const widgets = mountedTableWidgets.get(view);
+      if (gutter && widgets?.size) {
+        const { top, width } = gutter.getBoundingClientRect();
+        gutterWidth = width;
+        const tables = [...widgets].sort((left, right) => left.tableData.startLine - right.tableData.startLine);
+        for (const table of tables) {
+          if (!table.domRefs?.shell.isConnected) continue;
+          const anchor = table.cellSelection.snapshot().anchor?.row;
+          for (const { row, rowIndex } of table.tableRowsForGutter()) {
+            const number = Number(row.dataset.sourceLineNumber);
+            if (!number || number > view.state.doc.lines) continue;
+            const text = formatSourceLineNumber(number, view.state);
+            if (text) rows.set(number, { text, top: row.getBoundingClientRect().top - top, active: rowIndex === anchor });
+          }
+        }
+      }
+      return { gutter, gutterWidth, rows };
+    },
+    write: (measurement: TableLineNumberMeasurement | null) => {
+      if (this.disposed || !measurement) return;
+      const { gutter, gutterWidth, rows } = measurement;
+      for (const [number, label] of this.labels) {
+        if (rows.has(number)) continue;
+        label.remove();
+        this.labels.delete(number);
+      }
+      if (!gutter || !rows.size) {
+        this.layer?.remove();
+        return;
+      }
+      const doc = gutter.ownerDocument;
+      if (!this.layer) {
+        this.layer = doc.createElement('div');
+        this.layer.className = 'meo-md-html-table-line-numbers';
+      }
+      if (this.layer.parentElement !== gutter) gutter.appendChild(this.layer);
+      const width = `${gutterWidth}px`;
+      if (this.layer.style.width !== width) this.layer.style.width = width;
+      let next = this.layer.firstChild;
+      for (const [number, { text, top, active }] of rows) {
+        let label = this.labels.get(number);
+        if (!label) {
+          label = doc.createElement('div');
+          label.className = 'meo-md-html-table-line-number';
+          this.labels.set(number, label);
+        }
+        if (label === next) next = next.nextSibling;
+        else this.layer.insertBefore(label, next);
+        if (label.textContent !== text) label.textContent = text;
+        const position = `${top}px`;
+        if (label.style.top !== position) label.style.top = position;
+        label.classList.toggle('is-active', active);
+      }
+    }
+  };
+
+  request({ beforePaint = false } = {}): void {
+    if (!this.labels.size && this.view.state.facet(sourceLineNumberModeFacet) === 'off') return;
+    this.view.requestMeasure(this.measure);
+    if (beforePaint) commitObservedEditorSize(this.view);
+  }
+
+  update(update: ViewUpdate): void {
+    if (!this.labels.size && !mountedTableWidgets.get(update.view)?.size) return;
+    const mode = update.state.facet(sourceLineNumberModeFacet);
+    if (mode !== update.startState.facet(sourceLineNumberModeFacet) || update.viewportChanged
+        || !update.docChanged && update.geometryChanged
+        || mode !== 'on' && mode !== 'off' && (update.selectionSet || update.docChanged)) {
+      this.request();
+    }
+  }
+
+  destroy(): void {
+    this.disposed = true;
+    this.layer?.remove();
+    this.labels.clear();
+  }
+});
+
 export function focusMountedTableInput(input: Element | null): boolean {
   if (!(input instanceof HTMLTextAreaElement)) return false;
   const shell = input.closest<HTMLElement>('.meo-md-html-table-shell');
@@ -3332,8 +3435,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (touched) return;
     const from = changes.mapPos(previous.from, 1);
     const to = changes.mapPos(previous.to, -1);
-    if (from === previous.from && to === previous.to) return;
     const startLine = state.doc.lineAt(from).number;
+    if (from === previous.from && to === previous.to && startLine === previous.startLine) return;
     const delta = startLine - previous.startLine;
     this.adoptEquivalentTableData({
       ...previous, from, to, startLine, endLine: state.doc.lineAt(Math.max(from, to - 1)).number,
@@ -3363,10 +3466,13 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     setSourceData(table, 'tableFrom', String(tableData.from));
     setSourceData(table, 'tableTo', String(tableData.to));
     setSourceData(table, 'tableSignature', tableWidthIdentity(tableData));
-    if (previousStartLine !== tableData.startLine) rowEntries.forEach(({ row }) => {
-      const bodyIndex = row.dataset.tableBodyRow;
-      setSourceData(row, 'sourceLineNumber', String(tableData.startLine + (bodyIndex === undefined ? 0 : Number(bodyIndex) + 2)));
-    });
+    if (previousStartLine !== tableData.startLine) {
+      for (const { row } of rowEntries) {
+        const bodyIndex = row.dataset.tableBodyRow;
+        setSourceData(row, 'sourceLineNumber', String(tableData.startLine + (bodyIndex === undefined ? 0 : Number(bodyIndex) + 2)));
+      }
+      this.view?.plugin(tableLineNumbers)?.request();
+    }
     if (previousData.sourceRanges !== tableData.sourceRanges) {
       // Absolute action coordinates are metadata, not a reason to rebuild an
       // unchanged preview (and reload its images). Rebase only those controls.
@@ -3760,7 +3866,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     const col = Math.min(Math.max(target.col ?? 0, 0), Math.max(0, this.tableData.colCount - 1));
     this.activeTarget = { row, col };
     this.updateActionTargetStyles();
-    this.syncTableLineNumbers();
+    this.view?.plugin(tableLineNumbers)?.request();
   }
 
   requestTableCommand(command: TableCommand, enabled = true, target = this.currentCommandTarget()) {
@@ -4173,7 +4279,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         } else if (wrap && effect.reason !== 'pointercancel' && effect.reason !== 'lostcapture') {
           runPrimary(() => this.setTableInteractionActive(wrap, false));
         }
-        runPrimary(() => this.syncTableLineNumbers());
+        runPrimary(() => this.view?.plugin(tableLineNumbers)?.request());
         continue;
       }
       if (effect.kind === 'cells') {
@@ -6617,49 +6723,6 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     return entries.slice(first, low).map((row, index) => entry(row, first + index));
   }
 
-  syncTableLineNumbers() {
-    if (this.destroyed || !this.domRefs?.shell.isConnected) return;
-    const { lineNumberLayer } = this.domRefs;
-    const gutter = this.view?.dom.querySelector('.cm-lineNumbers');
-    if (!(gutter instanceof HTMLElement)) return;
-    if (lineNumberLayer.parentElement !== gutter) {
-      gutter.appendChild(lineNumberLayer);
-    }
-
-    const gutterRect = gutter.getBoundingClientRect();
-    const rows = this.tableRowsForGutter()
-      .map(({ row, rowIndex }) => ({ row, rowIndex, lineNumber: row.dataset.sourceLineNumber }))
-      .filter(({ lineNumber }) => Boolean(lineNumber))
-      .map(({ row, rowIndex, lineNumber }) => ({
-        rowIndex, lineNumber: lineNumber!, top: row.getBoundingClientRect().top - gutterRect.top
-      }));
-    lineNumberLayer.style.left = '0';
-    lineNumberLayer.style.width = `${gutterRect.width}px`;
-
-    const activeRow = this.cellSelection.snapshot().anchor?.row;
-    let itemIndex = 0;
-    for (const { rowIndex, lineNumber, top } of rows) {
-      const existingItem = lineNumberLayer.children.item(itemIndex);
-      let item: HTMLElement;
-      if (existingItem instanceof HTMLElement) {
-        item = existingItem;
-      } else {
-        item = document.createElement('div');
-        item.className = 'meo-md-html-table-line-number';
-        lineNumberLayer.appendChild(item);
-      }
-      item.classList.toggle('is-active', rowIndex === activeRow);
-      if (item.textContent !== lineNumber) {
-        item.textContent = lineNumber;
-      }
-      item.style.top = `${top}px`;
-      itemIndex += 1;
-    }
-    while (lineNumberLayer.children.length > itemIndex) {
-      lineNumberLayer.lastElementChild?.remove();
-    }
-  }
-
   recalcLayout() {
     const recalc = () => this.recalcTableLayout();
     if (!this.domRefs || !preserveTableColumnResizeLayout(this.domRefs.table, recalc)) recalc();
@@ -6675,8 +6738,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (this.pendingResizeRows) {
       if (!this.rowWindow) this.resizeAllRows();
       this.domRefs?.shell.style.removeProperty('min-height');
+      this.view?.plugin(tableLineNumbers)?.request();
     }
-    this.syncTableLineNumbers();
     this.syncTableDiffMarkers();
     for (const task of Array.from(this.layoutTasks)) task();
     this.updateContextControlsPosition();
@@ -6728,8 +6791,12 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     this.layoutFrame = requestAnimationFrame(() => {
       this.layoutFrame = 0;
       this.recalcLayout();
+      // The editor may already have measured in this frame. Publish row
+      // positions after the column/font relayout before its first paint.
+      if (this.pendingResizeRows) this.view?.plugin(tableLineNumbers)?.request({ beforePaint: true });
       this.pendingResizeRows = false;
     });
+    this.view?.plugin(tableLineNumbers)?.request();
   }
 
   flushPendingLayout(): boolean {
@@ -7845,7 +7912,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (typeof ResizeObserver !== 'undefined') {
       const heightObserver = new ResizeObserver(() => {
         const height = shell.getBoundingClientRect().height;
-        if (height > 0) this.measuredHeightCache.height = height;
+        const previous = this.measuredHeightCache.height;
+        if (height <= 0) return;
+        this.measuredHeightCache.height = height;
+        if (Math.abs(previous - height) > .1) view.plugin(tableLineNumbers)?.request({ beforePaint: true });
       });
       heightObserver.observe(shell);
       this.cleanupFns.push(() => heightObserver.disconnect());
@@ -7980,13 +8050,6 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     stickyHeaderViewport.appendChild(stickyTable);
     stickyChrome.append(stickyHeaderViewport);
 
-    const lineNumberLayer = document.createElement('div');
-    lineNumberLayer.className = 'meo-md-html-table-line-numbers';
-    const lineNumberGutter = view.dom.querySelector('.cm-lineNumbers');
-    if (lineNumberGutter instanceof HTMLElement) {
-      lineNumberGutter.appendChild(lineNumberLayer);
-    }
-    this.cleanupFns.push(() => lineNumberLayer.remove());
     const diffMarkerLayer = document.createElement('div');
     diffMarkerLayer.className = 'meo-md-html-table-diff-markers';
     const diffGutter = view.dom.querySelector('.meo-git-gutter');
@@ -8000,7 +8063,6 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       table,
       tbody,
       container: shell,
-      lineNumberLayer,
       diffMarkerLayer,
       rowEntries,
       headerInputs,
@@ -8091,6 +8153,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         changed: () => {
           rowEntries.sort((left, right) => Number(left.row.dataset.tableBodyRow ?? -1) - Number(right.row.dataset.tableBodyRow ?? -1));
           view.requestMeasure();
+          if (shell.isConnected) view.plugin(tableLineNumbers)?.request({ beforePaint: true });
         }
       });
       this.rowWindow.update();
@@ -8183,7 +8246,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       this.layoutFrame = 0;
     }
     this.layoutTasks.clear();
-    if (this.view) mountedTableWidgets.get(this.view)?.delete(this);
+    if (this.view && mountedTableWidgets.get(this.view)?.delete(this)) this.view.plugin(tableLineNumbers)?.request();
     this.domRefs = null;
     this.view = null;
     this.cellInteraction.accept({ type: 'dispose' });

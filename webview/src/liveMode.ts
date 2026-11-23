@@ -69,7 +69,7 @@ import {
   nextOrderedSequenceNumber
 } from './helpers/listMarkers';
 import { readMarkdownContainerPrefixes } from '../../src/foundation/markdownListPrefix';
-import { addTableDecorations, addTableDecorationsForLineRange, parseTableInfo } from './helpers/tables';
+import { addTableDecorations, addTableDecorationsForLineRange, parseTableInfo, tableLineNumbers } from './helpers/tables';
 import {
   forEachYamlFrontmatterLayoutLine,
   parseFrontmatter,
@@ -5359,6 +5359,7 @@ export function liveModeExtensions(options: { readonly largeDocument?: boolean; 
     hexColorAdjustmentExtension(),
     ...htmlContentExtensions(),
     liveDecorationField,
+    tableLineNumbers,
     renderedBlockLineNumberMarker,
     ...longCodeBlockSessionUiExtension(),
     ...blockStickyHeaderExtension(),

@@ -53,14 +53,17 @@ try {
     const result = await page.evaluate(() => {
       const scope = window as any, view = scope.editor.view;
       const rect = (element: Element) => scope.originalRect.call(element) as DOMRect;
-      const viewport = rect(view.scrollDOM), gutter = view.dom.querySelector('.cm-lineNumbers')!, gutterTop = rect(gutter).top;
+      const viewport = rect(view.scrollDOM), gutter = view.dom.querySelector('.cm-lineNumbers')!, gutterRect = rect(gutter);
+      const nativeLabel = gutter.querySelector(':scope > .cm-gutterElement')!;
+      const numberRight = gutterRect.right - parseFloat(getComputedStyle(nativeLabel).paddingRight);
       const labels = [...gutter.querySelectorAll<HTMLElement>('.meo-md-html-table-line-number')];
       const rows = [...view.dom.querySelectorAll<HTMLTableRowElement>('.meo-md-html-table:not(.meo-md-html-table-sticky-table) tr[data-source-line-number]')];
       const visible = rows.filter(row => { const bounds = rect(row); return bounds.bottom > viewport.top && bounds.top < viewport.bottom; });
       return { reads: scope.rowReads, labels: labels.length, rows: rows.length,
         visible: visible.length,
         correct: visible.every(row => labels.some(label => label.textContent === row.dataset.sourceLineNumber
-          && Math.abs(Number.parseFloat(label.style.top) - (rect(row).top - gutterTop)) < 1)),
+          && Math.abs(Number.parseFloat(label.style.top) - (rect(row).top - gutterRect.top)) < 1
+          && Math.abs(rect(label).right - numberRight) < .5)),
         source: view.state.doc.toString() };
     });
     assert.equal(result.rows, 1601, 'gutter budgeting must preserve every actual table row');
@@ -110,8 +113,62 @@ try {
   await frames();
   assert.ok(await page.evaluate(() => document.querySelector('.meo-md-html-table-line-number')?.textContent === '4'),
     'Line-number remount and source-line changes must invalidate visible table labels');
+  await page.evaluate(() => {
+    const scope = window as any;
+    scope.editor.destroy();
+    document.body.classList.remove('vscode-using-screen-reader');
+    scope.editor = scope.createBudgetEditor({ parent: document.getElementById('app'), initialMode: 'live',
+      text: 'top\n\n| A |\n| --- |\n| x |\n\n| B |\n| --- |\n| y |\n| z |\n\ntail', onApplyChanges() {} });
+  });
+  const expectLabels = async (expected: string[]) => {
+    await frames();
+    assert.deepEqual(await page.$$eval('.meo-md-html-table-line-number', labels => labels.map(label => label.textContent)), expected);
+  };
+  await expectLabels(['3', '5', '7', '9', '10']);
+  await page.evaluate(() => {
+    const { view } = (window as any).editor;
+    // A line can move when its absolute source offsets have stayed the same.
+    view.dispatch({ changes: { from: 1, to: 2, insert: '\n' } });
+  });
+  await expectLabels(['4', '6', '8', '10', '11']);
+  await page.evaluate(() => {
+    const { view } = (window as any).editor;
+    view.dispatch({ changes: { from: view.state.doc.line(6).to, insert: '\n| added |' } });
+  });
+  await expectLabels(['4', '6', '7', '9', '11', '12']);
+  assert.ok(await page.evaluate(() => (window as any).editor.undo()));
+  await expectLabels(['4', '6', '8', '10', '11']);
+  assert.ok(await page.evaluate(() => (window as any).editor.redo()));
+  await expectLabels(['4', '6', '7', '9', '11', '12']);
+  await page.evaluate(() => {
+    const { view } = (window as any).editor;
+    view.dispatch({ changes: { from: view.state.doc.line(4).from, to: view.state.doc.line(8).from } });
+  });
+  await expectLabels(['5', '7', '8']);
+  await page.evaluate(() => {
+    const editor = (window as any).editor, { view } = editor;
+    editor.setSourceLineNumbers('relative');
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+  });
+  await expectLabels(['5', '3', '2']);
+  await page.evaluate(() => {
+    const editor = (window as any).editor, { view } = editor;
+    editor.setSourceLineNumbers('interval');
+    view.dispatch({ selection: { anchor: view.state.doc.line(7).from } });
+  });
+  await expectLabels(['7']);
+  await page.evaluate(() => (window as any).editor.setSourceLineNumbers('off'));
+  await expectLabels([]);
+  await page.evaluate(() => {
+    const editor = (window as any).editor;
+    editor.setSourceLineNumbers('on');
+    editor.setMode('source');
+  });
+  await expectLabels([]);
+  await page.evaluate(() => (window as any).editor.setMode('live'));
+  await expectLabels(['5', '7', '8']);
   await page.evaluate(() => (window as any).editor.destroy());
-  console.log('Large table gutter: bounded row measurements, complete aligned visible labels, stable DOM, resize and line-number remount passed', JSON.stringify(samples));
+  console.log('Table gutter: bounded row measurements, aligned and stable labels, resize, structure/history and line-number modes passed', JSON.stringify(samples));
 } catch (error) { primary = error; throw error; }
 finally {
   if (primary === undefined) await closeTestBrowser(browser);

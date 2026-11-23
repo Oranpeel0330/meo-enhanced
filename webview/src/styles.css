@@ -6621,6 +6621,7 @@ body.outline-resizing .preview-frame {
 .cm-editor .meo-md-html-table-line-numbers {
   position: absolute;
   top: 0;
+  left: 0;
   z-index: 3;
   display: block;
   pointer-events: none;

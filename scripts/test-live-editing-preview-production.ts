@@ -50,26 +50,59 @@ async function checkLastTableCellKey(page: Page, expected: string, key: 'Enter' 
   }
   const before = await page.evaluate(() => {
     const content = document.querySelector('.editor-host .cm-content')!;
-    const readTableTop = () => [...content.querySelectorAll('.meo-md-html-table-shell')].at(-1)?.getBoundingClientRect().top ?? null;
-    const sample = { positions: [] as Array<number | null>, id: 0 };
-    const measure = () => { sample.positions.push(readTableTop()); sample.id = requestAnimationFrame(measure); };
+    const view = (content as any).cmTile.root.view;
+    const shell = [...content.querySelectorAll<HTMLElement>('.meo-md-html-table-shell')].at(-1)!;
+    const start = Number(shell.dataset.meoRenderedBlockStartLine);
+    const gutter = view.scrollDOM.querySelector(':scope > .cm-gutters > .cm-lineNumbers') as HTMLElement;
+    const read = () => {
+      const table = content.querySelector(`.meo-md-html-table-shell[data-meo-rendered-block-start-line="${start}"]`);
+      const rows = [...table?.querySelectorAll<HTMLTableRowElement>('tr[data-source-line-number]') ?? []];
+      const labels = [...gutter.querySelectorAll<HTMLElement>('.meo-md-html-table-line-number')];
+      const rendered = labels.filter(label => {
+        const number = Number(label.textContent);
+        return number >= start && number <= start + 5;
+      }).map(label => ({ line: Number(label.textContent), top: label.getBoundingClientRect().top }));
+      const offset = parseFloat(getComputedStyle(gutter).fontSize) * .25;
+      return {
+        top: table?.getBoundingClientRect().top ?? null,
+        lines: rendered.map(label => label.line),
+        aligned: rows.every(row => {
+          const matches = rendered.filter(label => label.line === Number(row.dataset.sourceLineNumber));
+          return matches.length === 1 && Math.abs(matches[0].top - offset - row.getBoundingClientRect().top) <= 1;
+        }),
+        bodyNumber: view.state.doc.lines === start + 5 && [...gutter.querySelectorAll(':scope > .cm-gutterElement')]
+          .some(label => label.textContent === String(start + 5) && getComputedStyle(label).visibility === 'visible'),
+        linesInDocument: view.state.doc.lines,
+        firstLabel: labels.find(label => label.textContent === String(start))
+      };
+    };
+    const initial = read();
+    const sample = { frames: [] as Array<Omit<ReturnType<typeof read>, 'firstLabel'> & { retained: boolean }>, id: 0, timer: 0 };
+    const measure = () => {
+      sample.timer = window.setTimeout(() => {
+        const { firstLabel, ...frame } = read();
+        sample.frames.push({ ...frame, retained: firstLabel === initial.firstLabel });
+      }, 0);
+      sample.id = requestAnimationFrame(measure);
+    };
     sample.id = requestAnimationFrame(measure);
     (window as any).tableExitSample = sample;
-    return { top: readTableTop() };
+    return { start, top: initial.top, linesInDocument: initial.linesInDocument };
   });
   await page.keyboard.press(key);
   await frames(page, 26);
   const after = await page.evaluate(({ expected, key }) => {
     const content = document.querySelector('.editor-host .cm-content')!;
     const view = (content as any).cmTile.root.view;
-    const { id, positions } = (window as any).tableExitSample;
+    const { id, timer, frames } = (window as any).tableExitSample;
     cancelAnimationFrame(id);
+    clearTimeout(timer);
     const active = document.activeElement;
     const newRow = key === 'Tab' && active instanceof HTMLTextAreaElement
       && active.dataset.tableRow === '4' && active.dataset.tableCol === '0';
     const caret = newRow ? active.getBoundingClientRect() : view.coordsAtPos(view.state.selection.main.head);
     const viewport = view.scrollDOM.getBoundingClientRect();
-    return { positions: positions as Array<number | null>,
+    return { frames: frames as Array<{ top: number | null; lines: number[]; aligned: boolean; bodyNumber: boolean; linesInDocument: number; retained: boolean }>,
       correctTarget: key === 'Tab' ? newRow : active === content && view.state.selection.main.head === view.state.doc.length,
       correctText: view.state.doc.toString().endsWith(expected),
       caretVisible: !!caret && caret.top >= viewport.top - 1 && caret.bottom <= viewport.bottom + 1 };
@@ -77,12 +110,22 @@ async function checkLastTableCellKey(page: Page, expected: string, key: 'Enter' 
   assert.ok(after.correctText && after.correctTarget && after.caretVisible,
     `${key} must continue at the adjacent editing target: ${JSON.stringify({ before, after })}`);
   const top = before.top;
-  assert.ok(top !== null && after.positions.length > 0 && after.positions.every(y => y !== null && Math.abs(y - top) <= 1.5),
+  assert.ok(top !== null && after.frames.length > 0 && after.frames.every(({ top: y }) => y !== null && Math.abs(y - top) <= 1.5),
     `The table must stay painted at the same position during ${key}: ${JSON.stringify({ before, after })}`);
+  const { start } = before;
+  const wrongFrames = after.frames.filter(frame => {
+    const added = frame.linesInDocument > before.linesInDocument;
+    const expectedLines = key === 'Tab' && added ? [start, start + 2, start + 3, start + 4, start + 5]
+      : [start, start + 2, start + 3, start + 4];
+    return !frame.aligned || !frame.retained || String(frame.lines) !== String(expectedLines)
+      || key !== 'Tab' && frame.linesInDocument === start + 5 && !frame.bodyNumber;
+  });
+  assert.ok(wrongFrames.length === 0,
+    `Every frame must retain and align the latest line numbers during ${key}: ${JSON.stringify(wrongFrames.slice(0, 3))}`);
 }
 
 async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewportBottom = false, scrollBeyondLastLine = true,
-  tableBoundary?: 'exit' | 'append-row'): Promise<void> {
+  tableBoundary?: 'blank-exit' | 'exit' | 'append-row'): Promise<void> {
   const table = test === toolbarTable || test === slashTable;
   const addBlankLines = test === toolbarTable && nearViewportBottom;
   const text = (tableBoundary ? tableExitPrefix : 'Paragraph with **bold** text.\n\n'.repeat(large ? 8_200 : 100))
@@ -90,7 +133,7 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
   assert.equal(assessLargeDocument(text).boundedEditorWork, large);
   const page = await browser.newPage();
   const host = await open(page, text, false, 'live', {
-    scrollBeyondLastLine, uiLanguage: 'zh-CN',
+    scrollBeyondLastLine, uiLanguage: 'zh-CN', outlineVisible: tableBoundary === 'blank-exit',
     saveClipboardImage: () => ({ path: 'test.png', fileName: 'test.png' }),
     resolveImageSrc: async () => {
       if (test.pasteImage) await Bun.sleep(650);
@@ -196,6 +239,13 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
       `Keep the edit target visible: ${details}`);
     if (table) {
       assert.ok(after.firstCellCaret, `A new table starts with the caret at the beginning of its first header cell: ${details}`);
+      if (tableBoundary === 'blank-exit') {
+        const expectedExit = test.markdown + '\n';
+        await checkLastTableCellKey(page, expectedExit, 'Enter');
+        assert.ok(host.readHost().endsWith(expectedExit));
+        assert.deepEqual(host.errors, []);
+        return;
+      }
       const editedTable = test.markdown.replace('|  |', '| First cell |');
       await page.keyboard.type('First cell');
       await page.waitForFunction(expected => (document.querySelector('.editor-host .cm-content') as any).cmTile.root.view
@@ -252,6 +302,7 @@ async function checkOpeningFenceCaret(): Promise<void> {
 }
 
 try {
+  await insertAtScrollEnd(true, toolbarTable, false, true, 'blank-exit');
   await insertAtScrollEnd(true, toolbarTable, false, true, 'exit');
   await insertAtScrollEnd(true, toolbarTable, false, true, 'append-row');
   const tableExitOnly = process.argv.includes('--table-exit-only');
