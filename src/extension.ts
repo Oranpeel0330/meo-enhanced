@@ -133,6 +133,7 @@ type ExportRuntimeModule = {
     outputFilePath: string;
     target: ExportFormat;
     mermaidRuntimeSrc: string;
+    mermaidRuntimeDirectory?: string;
     katexStylesHref: string;
     baseHref: string;
     title: string;
@@ -1046,6 +1047,8 @@ class MarkdownWebviewProvider implements vscode.CustomTextEditorProvider {
       outputFilePath: params.outputFileUri.fsPath,
       target: params.target,
       mermaidRuntimeSrc,
+      mermaidRuntimeDirectory: params.target === 'html'
+        ? vscode.Uri.joinPath(this.context.extensionUri, 'webview', 'dist', 'mermaid').fsPath : undefined,
       katexStylesHref,
       baseHref,
       title: path.basename(params.outputFileUri.fsPath),

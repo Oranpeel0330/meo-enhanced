@@ -1571,6 +1571,8 @@ This focused pack typically takes less than a minute.
 under the production CSP, non-executing Source prefetch without duplicate
 downloads, concurrent consumers, unchanged official geometry, worker-load
 failure/retry, and relocated offline HTML opened through ordinary `file:` URLs.
+The HTML case writes and opens a single file, blocks all external and local asset
+requests, and checks that valid diagrams render while invalid ones retain source.
 Its cancellation cases keep an un-cancelled or still-interested consumer alive
 when another waiter aborts, abandon a load only after the last cancellable
 consumer leaves, and reject a late abandoned import from overwriting a newer

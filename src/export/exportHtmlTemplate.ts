@@ -9,6 +9,7 @@ export type BuildExportHtmlDocumentOptions = {
   hasMermaid: boolean;
   hasMath: boolean;
   mermaidRuntimeSrc?: string;
+  portableMermaidPayload?: string;
   katexStylesHref?: string;
   baseHref?: string;
   githubStyle?: boolean;
@@ -24,9 +25,11 @@ export function buildExportHtmlDocument(options: BuildExportHtmlDocumentOptions)
   const katexStylesTag = options.hasMath && options.katexStylesHref
     ? `<link rel="stylesheet" href="${escapeHtmlAttr(options.katexStylesHref)}" />`
     : '';
-  const mermaidScriptTag = options.hasMermaid && options.mermaidRuntimeSrc
-    ? `<script data-meo-export-mermaid-runtime src="${escapeHtmlAttr(options.mermaidRuntimeSrc)}"></script>`
-    : '';
+  const mermaidScriptTag = !options.hasMermaid ? '' : options.portableMermaidPayload
+    ? `<script data-meo-export-mermaid-runtime>\n${buildPortableMermaidBootstrap(options.portableMermaidPayload)}\n    </script>`
+    : options.mermaidRuntimeSrc
+      ? `<script data-meo-export-mermaid-runtime src="${escapeHtmlAttr(options.mermaidRuntimeSrc)}"></script>`
+      : '';
   const mathViewportScriptTag = options.hasMath
     ? `<script data-meo-export-math-runtime>\n${buildMathViewportRuntimeScript()}\n    </script>`
     : '';
@@ -58,6 +61,33 @@ ${buildRuntimeScript(options.hasMermaid, (options.githubMermaid ?? options.githu
 
 function serializeStyleElementText(value: string): string {
   return value.replace(/<\/style/gi, '<\\/style');
+}
+
+function buildPortableMermaidBootstrap(payload: string): string {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) throw new Error('Invalid embedded Mermaid payload');
+  return `(() => {
+    window.__MEO_MERMAID_READY__ = (async () => {
+      const compressed = Uint8Array.from(atob('${payload}'), character => character.charCodeAt(0));
+      const code = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+      const url = URL.createObjectURL(new Blob([await new Response(code).arrayBuffer()], { type: 'text/javascript' }));
+      try {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = url;
+          script.onload = () => { script.remove(); resolve(); };
+          script.onerror = () => { script.remove(); reject(new Error('Embedded Mermaid runtime failed to load')); };
+          document.head.appendChild(script);
+        });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      const ready = window.__MEO_EMBEDDED_MERMAID__;
+      delete window.__MEO_EMBEDDED_MERMAID__;
+      if (!ready) throw new Error('Embedded Mermaid runtime failed to initialize');
+      return ready;
+    })();
+    window.__MEO_MERMAID_READY__.catch(() => {});
+  })();`;
 }
 
 function buildMathViewportRuntimeScript(): string {

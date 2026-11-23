@@ -17,6 +17,7 @@ import type { ResolvedWikiResources } from '../foundation/wikiReference';
 import { githubPictureMedia } from '../shared/githubPicture';
 import { assessLargeDocument } from '../foundation/largeDocument';
 import { resolveExportHtmlStyles } from './htmlStyles';
+import { buildPortableMermaidPayload } from './portableMermaidRuntime';
 
 export type ExportRuntimeBuildHtmlOptions = {
   wikiResources?: ResolvedWikiResources;
@@ -28,6 +29,7 @@ export type ExportRuntimeBuildHtmlOptions = {
   outputFilePath: string;
   target: 'html' | 'pdf' | 'docx';
   mermaidRuntimeSrc: string;
+  mermaidRuntimeDirectory?: string;
   katexStylesHref?: string;
   baseHref: string;
   title: string;
@@ -91,6 +93,8 @@ async function renderExportHtmlDocument(
     ? buildExportStyles(environment, 'light')
     : buildPresetPreviewStyles(preset, environment, exportAppearance, 'responsive', definition);
 
+  const portableMermaidPayload = hasMermaid && options.target === 'html' && options.mermaidRuntimeDirectory
+    ? await buildPortableMermaidPayload(options.mermaidRuntimeDirectory) : undefined;
   const htmlDocument = buildStandaloneExportHtmlDocument({
     title: options.title,
     bodyHtml: definition.renderer === 'github-readme'
@@ -103,6 +107,7 @@ async function renderExportHtmlDocument(
     hasMermaid,
     hasMath,
     mermaidRuntimeSrc: options.mermaidRuntimeSrc,
+    portableMermaidPayload,
     katexStylesHref: options.katexStylesHref,
     baseHref: options.baseHref
   });

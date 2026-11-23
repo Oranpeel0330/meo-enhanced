@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { launchTestBrowser, closeTestBrowser } from './browser-test-helpers';
-import { buildExportHtmlDocument } from '../src/export/exportHtmlTemplate';
+import exportRuntime from '../src/export/runtime';
 
 const dist = path.resolve('webview/dist/mermaid');
 assert.ok(fs.existsSync(path.join(dist, 'mermaidRuntime.js')), 'Build the production Webview first');
@@ -288,35 +288,73 @@ try {
   await workerTimeout.close();
   const offlineRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-mermaid-offline-'));
   try {
-    fs.cpSync(dist, path.join(offlineRoot, 'mermaid'), { recursive: true });
-    fs.copyFileSync('webview/dist/mermaid.min.js', path.join(offlineRoot, 'mermaid.min.js'));
-    fs.writeFileSync(path.join(offlineRoot, 'document.html'), buildExportHtmlDocument({
-      title: 'Offline Mermaid', target: 'html', hasMermaid: true, hasMath: false,
-      stylesCss: 'body { font: 16px Arial; }',
-      bodyHtml: samples.map(sample => `<div class="meo-export-mermaid" data-source-b64="${Buffer.from(sample).toString('base64')}"></div>`).join('\n'),
-      mermaidRuntimeSrc: pathToFileURL(path.join(offlineRoot, 'mermaid.min.js')).href
-    }));
+    const outputHtmlPath = path.join(offlineRoot, 'document.html');
+    const options = {
+      sourceDocumentPath: path.join(offlineRoot, 'source.md'), outputFilePath: outputHtmlPath,
+      title: 'Offline Mermaid', target: 'html' as const,
+      baseHref: pathToFileURL(path.join(offlineRoot, 'original-location') + path.sep).href, shikiLanguageAssetsRoot: path.dirname(dist),
+      mermaidRuntimeSrc: pathToFileURL(path.resolve('webview/dist/mermaid.min.js')).href,
+      mermaidRuntimeDirectory: dist
+    };
+    const markdown = (diagrams: readonly string[]) => diagrams.map(source => `\`\`\`mermaid\n${source}\n\`\`\``).join('\n\n');
+    const readingSnapshot = { snapshotId: 'mermaid-offline', appearance: 'light' as const, uiLanguage: 'en' as const,
+      text: markdown([...samples, 'flowchart TD\n  A[:::invalid syntax']),
+      environment: { previewFontFamily: '', previewSourceColoring: false } };
+    const { htmlDocument } = await exportRuntime.renderExportHtmlDocument({ ...options, readingSnapshot });
+    assert.doesNotMatch(htmlDocument, /data-meo-export-mermaid-runtime\s+src=/, 'HTML must not contain an installation-local runtime URL');
+    await exportRuntime.writeHtmlExport({ htmlDocument, outputHtmlPath });
+    assert.deepEqual(fs.readdirSync(offlineRoot), ['document.html'], 'The recipient gets just one file, without sidecars');
+    const invalidRuntimeDirectory = path.join(offlineRoot, 'no-assets');
+    const prose = await exportRuntime.renderExportHtmlDocument({ ...options, mermaidRuntimeDirectory: invalidRuntimeDirectory,
+      readingSnapshot: { ...readingSnapshot, text: 'Mermaid is mentioned without a diagram.' } });
+    assert.doesNotMatch(prose.htmlDocument, /data-meo-export-mermaid-runtime/, 'Plain HTML must not read or carry the rendering engine');
     const offline = await browser.newPage();
     const network: string[] = [];
     offline.on('pageerror', error => errors.push(String(error)));
     await offline.setRequestInterception(true);
+    const documentUrl = pathToFileURL(outputHtmlPath).href;
     offline.on('request', request => {
-      if (/^https?:/.test(request.url())) { network.push(request.url()); void request.abort(); }
+      if (request.url() !== documentUrl && !/^(blob|data):/.test(request.url())) {
+        network.push(new URL(request.url()).protocol); void request.abort();
+      }
       else void request.continue();
     });
-    await offline.goto(pathToFileURL(path.join(offlineRoot, 'document.html')).href);
+    await offline.goto(documentUrl);
     await offline.waitForFunction(() => (window as any).__MEO_EXPORT_READY__ === true);
     assert.deepEqual(await offline.evaluate(() => ({
       error: (window as any).__MEO_EXPORT_ERROR__,
       diagrams: document.querySelectorAll('.meo-export-mermaid.is-rendered').length,
-      failed: document.querySelectorAll('.meo-export-mermaid.is-error').length
-    })), { error: null, diagrams: samples.length, failed: 0 }, 'Relocated HTML must render every diagram through normal file URLs');
-    assert.deepEqual(network, [], 'Offline HTML must not require a server or remote assets');
+      failed: document.querySelectorAll('.meo-export-mermaid.is-error code.language-mermaid').length
+    })), { error: null, diagrams: samples.length, failed: 1 }, 'A single offline HTML must render valid diagrams and keep the source of invalid diagrams');
+    assert.deepEqual(network, [], 'Offline HTML must not require local installation paths or remote resources');
     await offline.close();
+
+    const printRoot = path.join(offlineRoot, 'print-runtime');
+    fs.mkdirSync(printRoot);
+    fs.cpSync(dist, path.join(printRoot, 'mermaid'), { recursive: true });
+    fs.copyFileSync('webview/dist/mermaid.min.js', path.join(printRoot, 'mermaid.min.js'));
+    const printHtmlPath = path.join(printRoot, 'document.html');
+    const print = await exportRuntime.renderExportHtmlDocument({ ...options, target: 'pdf', outputFilePath: printHtmlPath,
+      mermaidRuntimeSrc: pathToFileURL(path.join(printRoot, 'mermaid.min.js')).href,
+      readingSnapshot: { ...readingSnapshot, text: markdown(samples) } });
+    fs.writeFileSync(printHtmlPath, print.htmlDocument);
+    const localPrint = await browser.newPage();
+    localPrint.on('pageerror', error => errors.push(String(error)));
+    await localPrint.setRequestInterception(true);
+    localPrint.on('request', request => {
+      if (/^https?:/.test(request.url())) { network.push(new URL(request.url()).protocol); void request.abort(); }
+      else void request.continue();
+    });
+    await localPrint.goto(pathToFileURL(printHtmlPath).href);
+    await localPrint.waitForFunction(() => (window as any).__MEO_EXPORT_READY__ === true);
+    assert.equal(await localPrint.$$eval('.meo-export-mermaid.is-rendered', blocks => blocks.length), samples.length,
+      'The print path must still load the relocated lazy graph through file URLs');
+    assert.deepEqual(network, [], 'The relocated print runtime must not require remote assets');
+    await localPrint.close();
   } finally {
     assert.equal(path.dirname(offlineRoot), os.tmpdir());
     fs.rmSync(offlineRoot, { recursive: true, force: true });
   }
   assert.deepEqual(errors, []);
-  console.log(`Mermaid modules: CSP, Source prefetch without execution, shared load, ${loaded.bytes} core bytes, ${samples.length} graph geometry comparisons including ELK/math, and retry passed`);
+  console.log(`Mermaid modules: CSP, Source prefetch without execution, shared load, ${loaded.bytes} core bytes, ${samples.length} graph geometry comparisons including ELK/math, retry, and single-file offline HTML passed`);
 } finally { await closeTestBrowser(browser); server.stop(true); }

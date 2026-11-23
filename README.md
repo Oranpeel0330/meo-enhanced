@@ -39,6 +39,8 @@ When your Markdown is ready, open Preview and choose **Export as…**. All three
 | **PDF** | Sharing and printing with a fixed layout | Uses the preset with a paginated layout |
 | **Word (.docx)** | Handing the document over for further editing | Uses a fixed document format |
 
+Exported HTML includes the Mermaid runtime when it contains a diagram. Share the HTML file by itself to view those diagrams offline in a modern browser with JavaScript enabled; external links and media still depend on their original resources.
+
 ![The Preview export menu with HTML, PDF, and Word options, each available with a table of contents](docs/readme/en/export-formats.png)
 
 ## Choose a style, or make your own preset
