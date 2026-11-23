@@ -4,12 +4,16 @@ This changelog retains the release history of the original Markdown Editor
 Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
 ## 0.4.5
-- Kept the document and line numbers steady when typing, pasting, or inserting blocks at the end. Split preview follows new content. Live and Source honor the VS Code setting for scrolling beyond the last line.
+- Kept the document and line numbers steady when typing, pasting, or inserting blocks at the end. Split preview follows new content. Live and Source honor the VS Code setting for scrolling beyond the last line. (#40)
 - Improved table editing. New tables place the caret in the first cell, and adding rows at the end keeps the active cell in view. Row height and line numbers remain stable as cells switch between editing and rendered content. Path suggestions resume when the caret returns to an unfinished link in a cell.
 - Inserted tables, code fences, and other Markdown blocks at valid boundaries when the caret is in headings, lists, quotes, or inline formatting. Code comments inside fenced blocks preserve their surrounding quote and list prefixes.
 - Revealed enclosing Markdown markers together near the caret in Live, while preserving their inline formatting. Made HTML line breaks editable consistently in body text and table cells and kept the caret visible at both ends of Wiki links.
 - Kept color swatches beside their hex values on the same line and distinguished complete hex colors from hashtags. Aligned inline action icons with the text and kept hover controls accessible on small images.
 - Restored a one-pixel insertion caret in Live and Source, with the existing theme color and custom color option.
+- Kept selected text legible in high-contrast themes and aligned wrapped table selection highlights with the editor's line height while dragging and after release. (#41)
+- Made Mermaid diagrams work offline in a single exported HTML file. (#42)
+- Improved exported math layout, preserved more table and text formatting in Word, and surfaced PDF asset warnings.
+- Made the paste options menu toggle with either Ctrl or a click. The arrow points up while the menu is open.
 - Kept the rendered block index available when scrolling through large Live documents and sped up copying entire documents from Preview.
 
 ## 0.4.4
