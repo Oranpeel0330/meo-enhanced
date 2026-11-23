@@ -1,4 +1,5 @@
 import { editorScrollIntoView, isEditorScrollEffect } from './editor/scrollEffects';
+import { insertedTableLineCount } from './editor/blockInsertion';
 import { canRepairMarkdownTableDelimiter } from '../../src/shared/markdownContentRules';
 import { isCodeMirrorSyntaxPublicationEffect } from './adapters/codeMirrorSyntaxPublication';
 import { viewportSyntaxHighlighting } from './editor/viewportSyntaxHighlighting';
@@ -4408,9 +4409,8 @@ function canMapUnchangedProseDecorations(decorations: DecorationSet, transaction
   catch { return false; } // The guarded scoped builder owns unsupported projections.
 }
 
-function projectLiveTableRange(decorations: DecorationSet, transaction: Transaction, table: SourceRange): DecorationSet | undefined {
+function projectLiveTableRange(decorations: DecorationSet, transaction: Transaction, nextFrom: number, nextTo: number): DecorationSet | undefined {
   const state = transaction.state;
-  const nextFrom = transaction.changes.mapPos(table.from, -1), nextTo = transaction.changes.mapPos(table.to, 1);
   const ranges: Range<Decoration>[] = [];
   if (nextTo > nextFrom) {
     addTableDecorationsForLineRange(ranges, state, state.doc.lineAt(nextFrom).number,
@@ -4435,7 +4435,8 @@ function projectLiveTableCommand(decorations: DecorationSet, transaction: Transa
   decorations.between(from, to, (start, end, decoration) => {
     if (decoration.spec.meoTable && start <= from && end >= to) table = { from: start, to: end };
   });
-  return table ? projectLiveTableRange(decorations, transaction, table) : undefined;
+  return table ? projectLiveTableRange(decorations, transaction,
+    transaction.changes.mapPos(table.from, -1), transaction.changes.mapPos(table.to, 1)) : undefined;
 }
 
 /** A table history focus identifies the one closed replacement whose current
@@ -4466,7 +4467,7 @@ function projectLiveTableHistory(decorations: DecorationSet, transaction: Transa
   transaction.changes.iterChangedRanges((from, to, mappedFrom, mappedTo) => {
     if (from < table!.from || to > table!.to || mappedFrom < nextFrom || mappedTo > nextTo) closed = false;
   });
-  return closed ? projectLiveTableRange(decorations, transaction, table) : undefined;
+  return closed ? projectLiveTableRange(decorations, transaction, nextFrom, nextTo) : undefined;
 }
 
 /** Rebuild a closed changed block from the shared renderer and map the rest.
@@ -4906,6 +4907,19 @@ const liveDecorationField = StateField.define<DecorationSet>({
       // Phase bookkeeping, especially settlement after an authoritative refresh,
       // must not discard distant block heights a second time.
       if (!transaction.docChanged) return decorations;
+      const insertedLines = transaction.annotation(insertedTableLineCount);
+      if (insertedLines !== undefined) {
+        // Both insert commands generate a bounded, empty table. Anchor its range
+        // at the mapped header caret so normalization before it can shift offsets.
+        // Mount it now while the existing worker verifies the rest of the document.
+        const doc = transaction.newDoc;
+        const first = doc.lineAt(transaction.newSelection.main.head);
+        const last = first.number + insertedLines - 1;
+        if (last <= doc.lines) {
+          const table = projectLiveTableRange(decorations, transaction, first.from, doc.line(last).to);
+          if (table !== undefined) return table;
+        }
+      }
       const taskToggle = projectLiveTaskToggle(decorations, transaction);
       if (taskToggle !== undefined) return taskToggle;
       const tableCommand = projectLiveTableCommand(decorations, transaction);

@@ -1,6 +1,6 @@
 import { createRequestPrefix } from '../adapters/requestIdentity';
 import { ArrowUpDown, createElement } from 'lucide';
-import { EditorSelection, EditorState, Transaction, StateEffect, type Extension, type TransactionSpec } from '@codemirror/state';
+import { EditorSelection, EditorState, Transaction, StateEffect, type Annotation, type Extension, type TransactionSpec } from '@codemirror/state';
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { CompletionContext, type Completion } from '@codemirror/autocomplete';
@@ -18,7 +18,7 @@ import { beginHtmlCommentTemplate } from './htmlCommentEditing';
 import { nativeSymbolInput } from './nativeTypingAssistance';
 import { addAutomaticSymbolPair } from './typingAssistance';
 import { sourceTableAt } from './sourceTableCommands';
-import { blockInsertion, type MarkdownInputContext } from './blockInsertion';
+import { blockInsertion, insertedTableLineCount, type MarkdownInputContext } from './blockInsertion';
 import { encodeMarkdownPath } from '../../../src/foundation/linkDestination';
 import { scanHtmlTags } from '../../../src/foundation/htmlSyntax';
 import { candidateMatchPositions, candidateTextMatch } from '../../../src/foundation/candidateText';
@@ -615,17 +615,19 @@ export function createInputSuggestions(options: {
       let fields = command?.fields?.map(([start, end]) => ({ from: from + start, to: from + end }));
       let templateEnd = from + insert.length;
       let transaction: TransactionSpec = { changes: { from, to, insert }, selection: EditorSelection.cursor(caret) };
+      const annotations: Annotation<unknown>[] = [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')];
       if (item.slash?.scope === 'block') {
         const plan = blockInsertion(this.view.state, from, this.head, insert, item.caret!, options.inputContext(this.view.state, from));
         if (!plan) { this.slashFrom = null; this.clear(); return; }
         transaction = plan.transaction;
         fields = command?.fields?.map(([start, end]) => ({ from: plan.positionAt(start), to: plan.positionAt(end) }));
         templateEnd = plan.positionAt(insert.length);
+        if (command?.id === 'table') annotations.push(insertedTableLineCount.of(plan.lineCount));
       }
       this.slashFrom = null; this.clear();
       this.dismissed = item.kind !== 'directory';
       const complete = (acceptLayout: () => void) => {
-        this.view.dispatch({ ...transaction, effects: command?.id === 'comment' ? [beginHtmlCommentTemplate.of({ from: caret, to: caret, end: templateEnd }), addAutomaticSymbolPair.of({ from, to: templateEnd, open: '<!--', close: '-->' })] : transaction.effects, annotations: [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')] });
+        this.view.dispatch({ ...transaction, effects: command?.id === 'comment' ? [beginHtmlCommentTemplate.of({ from: caret, to: caret, end: templateEnd }), addAutomaticSymbolPair.of({ from, to: templateEnd, open: '<!--', close: '-->' })] : transaction.effects, annotations });
         if (fields) {
           this.fieldInput = null;
           this.fields = fields; this.fieldIndex = 0; this.templateEnd = templateEnd;

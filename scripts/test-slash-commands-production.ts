@@ -489,6 +489,11 @@ try {
       await prepare(mode, source, pos); await page.evaluate(() => (window as any).editor.executeCommand('insertTable')); await waitText(expected);
       const html = renderMarkdownToHtml({ markdownText: await text(), markdownFilePath: 'fixture.md', target: 'html' }).html;
       assert.ok(html.includes('<table'), source + ': inserted table remains a real Markdown table');
+      if (mode === 'live') await page.waitForFunction(() => {
+        const input = document.activeElement;
+        return input instanceof HTMLTextAreaElement && input.dataset.tableRow === '0'
+          && input.dataset.tableCol === '0' && input.selectionStart === 0 && input.selectionEnd === 0;
+      });
       await page.evaluate(() => (window as any).editor.undo()); await waitText(source);
     }
     await prepare(mode, 'first\nsecond'); await page.evaluate(() => { const e = (window as any).editor; e.view.dispatch({ selection: { anchor: 2, head: 12 } }); e.insertFormat('table'); }); await waitText('first\nsecond\n\n' + defaultTable);

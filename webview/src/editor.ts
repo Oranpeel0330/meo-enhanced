@@ -133,6 +133,7 @@ import {
   pendingTableDraftProjectionChanges,
   endTableCellEditing,
   restoreTablePointerSelection,
+  ensureMountedTableCell,
   tablePointerTarget,
   focusHistoryChange,
   focusTableHistoryChange,
@@ -451,6 +452,7 @@ export function createEditor({
   const searchOverviewDerivedConsumer = {};
   const liveSearchDecorationDerivedConsumer = {};
   const tablePositionDerivedConsumer = {};
+  const insertTableFocusConsumer = {};
   const bootstrapDerivedConsumer = {};
   let editorDestroyed = false;
 
@@ -1321,15 +1323,13 @@ export function createEditor({
 
   const focusInsertedTable = (beforeFocus?: () => void) => {
     if (currentMode !== 'live') return;
-    view.dispatch({ effects: supersedeLiveInputDerivedWork() });
     beforeFocus?.();
     focusInsertedTableCell(view.state.selection.main.head);
   };
 
   const focusInsertedTableCell = (position: number): HTMLTextAreaElement | null => {
-    refreshMountedTablePositions(view, currentDiagnostics, view.state.field(gitDiffLineFlagsField, false));
-    const input = mountedTableInputsForLine(view, view.state.doc.lineAt(position).number)[0];
-    if (!input || input.dataset.tableRow !== '0') return null;
+    const input = ensureMountedTableCell(view, view.state.doc.lineAt(position).number, 0, 0);
+    if (!input) return null;
     input.focus({ preventScroll: true });
     input.setSelectionRange(0, 0);
     lastFocusedEditorTarget = input;
@@ -1375,7 +1375,7 @@ export function createEditor({
         const isCurrent = () => isNavigationCurrent() && view.state.doc === insertedDoc && currentMode === mode;
         // The toolbar can finish returning focus after the command. Measure
         // the accepted editing layer and scroll only if its target is clipped.
-        requestAnimationFrame(() => {
+        const revealInsertedTarget = (retry: boolean) => {
           if (!isCurrent()) return;
           let input = getActiveTableInput();
           if (focusCell && !input) {
@@ -1384,6 +1384,11 @@ export function createEditor({
               viewportController.revealPosition(head, { y: 'nearest' }, isCurrent);
               flushEditorLayout(view);
               input = isCurrent() ? focusInsertedTableCell(head) : null;
+            }
+            if (!input && retry && isLiveInputDerivedWorkPending(view.state)) {
+              // A target outside the mounted presentation can arrive later.
+              // Finish the handoff on the existing accepted work generation.
+              requestLiveInputDerivedWorkOnFrame(view, insertTableFocusConsumer, () => revealInsertedTarget(false));
             }
           }
           if (input) {
@@ -1410,7 +1415,8 @@ export function createEditor({
             // Preview's current edit before its new presentation arrives.
             viewportController.revealPosition(head, { y: 'nearest' }, live ? viewportController.beginNavigationReveal() : isCurrent);
           }
-        });
+        };
+        requestAnimationFrame(() => revealInsertedTarget(true));
       }
       return inserted;
     } finally {

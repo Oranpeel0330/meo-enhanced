@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { Page } from 'puppeteer-core';
-import { browser, server, open, frames, captureResult } from './input-presentation-test-helpers';
+import { browser, server, open, frames, captureResult, assertStablePaint } from './input-presentation-test-helpers';
 import { closeTestBrowser } from './browser-test-helpers';
 import { assessLargeDocument } from '../src/foundation/largeDocument';
 import { emptyMarkdownTable } from '../webview/src/application/delimitedTable';
@@ -33,6 +33,88 @@ const tableExitPrefix = ('## A section\n\nParagraph with **bold**, `code`, and a
   + '| Heading | Value |\n| --- | --- |\n' + '| **one** | <br> two |\n'.repeat(8) + '\n'
   + '```js\n' + 'const value = '.repeat(32) + '1;\n```\n\n$$\n\\sum_{k=1}^N k\n$$\n\n'
   + '> Quoted content\n> on two lines.\n\n<div><p>HTML content</p></div>\n\n').repeat(130);
+
+async function checkTableInsertionPaint(atEnd: boolean, fromSlash: boolean): Promise<void> {
+  const label = `live-table-insertion-${atEnd ? 'end' : 'middle'}-${fromSlash ? 'slash' : 'toolbar'}`;
+  const witness = 'Reading witness before table';
+  const prefix = tableExitPrefix + witness
+    + '. Styled **bold** words keep this paint witness visible. More text on this row.\n\n';
+  const suffix = atEnd ? '' : '\n\nFollowing witness\n\n' + 'An ordinary **styled** line with text.\n\n'.repeat(45);
+  const expected = prefix + (fromSlash ? slashTable : toolbarTable).markdown + suffix;
+  const page = await browser.newPage();
+  const host = await open(page, prefix + suffix, false, 'live', { scrollBeyondLastLine: true });
+  try {
+    await page.setViewport({ width: 1200, height: 635 });
+    await page.$eval('.editor-host .cm-content', (content, anchor) => {
+      const view = (content as any).cmTile.root.view;
+      view.dispatch({ selection: { anchor }, effects: view.constructor.scrollIntoView(anchor, { y: 'center' }) });
+      view.focus();
+    }, prefix.length);
+    await frames(page, 16);
+    if (atEnd) {
+      await page.hover('.editor-host > .cm-editor > .cm-scroller');
+      await page.mouse.wheel({ deltaY: 500_000 });
+      await frames(page, 10);
+      await page.mouse.wheel({ deltaY: -85 });
+      await frames(page, 10);
+    }
+    const button = '.table-wrapper > .format-button';
+    const openTableGrid = async () => {
+      await page.hover(button);
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('.table-dropdown-wrapper')!).opacity === '1');
+    };
+    if (fromSlash) {
+      await page.keyboard.type('/table');
+      await page.waitForSelector('.meo-input-suggestions:not([hidden]) [data-command="table"]');
+      await frames(page, 6);
+    } else await openTableGrid();
+    const clip = await page.$eval('.editor-host .cm-content', (content, witness) => {
+      const row = [...content.querySelectorAll<HTMLElement>('.cm-line')].find(entry => entry.textContent?.startsWith(witness));
+      if (!row?.querySelector('.meo-md-strong')) throw new Error('Missing rendered text witness');
+      const rect = row.getBoundingClientRect();
+      const grid = document.querySelector('.table-dropdown')!.getBoundingClientRect();
+      const left = Math.ceil(Math.max(rect.left + 6, grid.right + 10));
+      return { left, top: Math.ceil(rect.top), width: 310, height: Math.floor(rect.bottom) - Math.ceil(rect.top) };
+    }, witness);
+    await assertStablePaint(page, clip, async () => {
+      await page.$eval('.editor-host .cm-content', (content, witness) => {
+        const scope = window as any;
+        const view = (content as any).cmTile.root.view;
+        const before = view.state.doc;
+        const row = () => [...content.querySelectorAll('.cm-line')].find(entry => entry.textContent?.startsWith(witness));
+        const original = row();
+        scope.__presentationFrames = [];
+        const sample = () => setTimeout(() => {
+          const input = document.activeElement;
+          if (view.state.doc !== before) scope.__presentationFrames.push({
+            rendered: Boolean(row()?.querySelector('.meo-md-strong')),
+            retained: row() === original,
+            firstCell: input instanceof HTMLTextAreaElement && input.dataset.tableRow === '0'
+              && input.dataset.tableCol === '0' && input.selectionStart === 0 && input.selectionEnd === 0
+          });
+          scope.tableInsertionFrame = requestAnimationFrame(sample);
+        }, 0);
+        scope.tableInsertionFrame = requestAnimationFrame(sample);
+      }, witness);
+      if (fromSlash) await page.keyboard.press('Enter');
+      else {
+        await openTableGrid();
+        await page.click(button);
+        await page.click('.table-grid-cell[data-row="3"][data-col="3"]');
+      }
+    }, label);
+    const samples = await page.evaluate(() => {
+      const scope = window as any;
+      cancelAnimationFrame(scope.tableInsertionFrame);
+      return scope.__presentationFrames as { rendered: boolean; retained: boolean; firstCell: boolean }[];
+    });
+    assert.ok(samples.length > 0 && samples.every(sample => sample.rendered && sample.retained && sample.firstCell),
+      `${label}: retain the unchanged line and focus the first cell from the first frame ${JSON.stringify(samples.slice(0, 5))}`);
+    assert.equal(host.readHost(), expected);
+    assert.deepEqual(host.errors, []);
+    console.log(`${label}: uninterrupted paint and first-cell focus through ${samples.length} frames`);
+  } finally { host.dispose(); await page.close(); }
+}
 
 async function checkLastTableCellKey(page: Page, expected: string, key: 'Enter' | 'ArrowDown' | 'Tab', draft?: string): Promise<void> {
   const last = '.editor-host .meo-md-html-table-shell tbody textarea[data-table-row="3"][data-table-col="2"]';
@@ -302,21 +384,27 @@ async function checkOpeningFenceCaret(): Promise<void> {
 }
 
 try {
-  await insertAtScrollEnd(true, toolbarTable, false, true, 'blank-exit');
-  await insertAtScrollEnd(true, toolbarTable, false, true, 'exit');
-  await insertAtScrollEnd(true, toolbarTable, false, true, 'append-row');
+  const paintOnly = process.argv.includes('--table-insertion-paint-only');
   const tableExitOnly = process.argv.includes('--table-exit-only');
   if (!tableExitOnly) {
+    for (const atEnd of [false, true]) for (const fromSlash of [false, true]) await checkTableInsertionPaint(atEnd, fromSlash);
+  }
+  if (!paintOnly) {
+    await insertAtScrollEnd(true, toolbarTable, false, true, 'blank-exit');
+    await insertAtScrollEnd(true, toolbarTable, false, true, 'exit');
+    await insertAtScrollEnd(true, toolbarTable, false, true, 'append-row');
+  }
+  if (!paintOnly && !tableExitOnly) {
     for (const large of [false, true]) await insertAtScrollEnd(large);
     await insertAtScrollEnd(false, toolbarTable, true);
     await insertAtScrollEnd(true, toolbarTable, false, false);
   }
-  if (!tableExitOnly && !process.argv.includes('--table-insertion-only')) {
+  if (!paintOnly && !tableExitOnly && !process.argv.includes('--table-insertion-only')) {
     await checkOpeningFenceCaret();
     for (const [large, test] of endInsertions) await insertAtScrollEnd(large, test);
     await insertAtScrollEnd(false, definition, true);
   }
-  const insertionsOnly = tableExitOnly || process.argv.includes('--table-insertion-only') || process.argv.includes('--end-insertion-only');
+  const insertionsOnly = paintOnly || tableExitOnly || process.argv.includes('--table-insertion-only') || process.argv.includes('--end-insertion-only');
   for (const large of [false, true]) for (const test of insertionsOnly ? [] : cases) {
     const { kind, block } = test, label = `${test.name}/${large ? 'large' : 'ordinary'}`;
     const marker = kind === 'math' ? '42' : 'Seed42';

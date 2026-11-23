@@ -6,7 +6,7 @@ import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPref
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
 import { createTableColumnResizeHandle } from '../editor/tableColumnResizeHandle';
 import { createTableRowWindow, type TableRowWindow } from '../editor/tableRowWindow';
-import { blockInsertion, type MarkdownInputContext } from '../editor/blockInsertion';
+import { blockInsertion, insertedTableLineCount, type MarkdownInputContext } from '../editor/blockInsertion';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { markLiveInputNestedProjection, usesLargeDocumentDerivedWorkBudget } from '../editor/liveInputDerivedWork';
 import { renderedBlockPreviewHeight, RenderedBlockPreviewHeight } from './renderedBlockPreview';
@@ -2901,17 +2901,18 @@ function buildWidgetTableData(
   if (colCount === 0 || !headerLine) return null;
   const sourceHeader = state.doc.sliceString(headerLine.from, headerLine.to);
   const indent = parseBlockLinePrefix(sourceHeader, state.tabSize).prefix;
-  const blockIndent = getLiveBlockIndent(state, headerLine.from + indent.length);
-  const visualIndent = blockIndent.footnoteNumber === null && !blockIndent.quoteColumns?.length && !blockIndent.taskIndent?.checkboxes
-    ? tableCellIndentColumns(indent)
-    : blockIndent;
+  const blockIndent = indent ? getLiveBlockIndent(state, headerLine.from + indent.length) : null;
+  const visualIndent = blockIndent && (blockIndent.footnoteNumber !== null || blockIndent.quoteColumns?.length || blockIndent.taskIndent?.checkboxes)
+    ? blockIndent : tableCellIndentColumns(indent);
   const normalizedAlignments = normalizeRow(alignments, colCount, '').map((value) => value ?? null);
   const headerCells = normalizeRow(headerLine.cells, colCount, '');
   const rows = dataLines.map((line) => normalizeRow(line.cells, colCount, ''));
   const diffFlagsByLine = collectTableDiffFlags(data, diffLineFlags);
   const comparison = state.facet(gitDiffLineFlagsFacet);
   const tableDiagnostics = collectTableDiagnostics(data, diagnostics);
-  const hasReferenceCandidate = [headerCells, ...rows].some(row => row.some(cell => possibleTableReferenceLink.test(cell)));
+  const cells = [headerCells, ...rows];
+  const hasReferenceCandidate = cells.some(row => row.some(cell => possibleTableReferenceLink.test(cell)));
+  const hasFootnoteCandidate = cells.some(row => row.some(cell => /\[\^|\^\[/.test(cell)));
   return {
     from,
     to,
@@ -2930,7 +2931,7 @@ function buildWidgetTableData(
       diagnostics: tableDiagnostics,
       diffFlagsByLine,
       referenceTargets: hasReferenceCandidate ? markdownReferenceTargetSignature(state) : undefined,
-      footnoteReferences: parseFootnotes(state).references
+      footnoteReferences: !hasFootnoteCandidate ? [] : parseFootnotes(state).references
         .filter(reference => reference.from >= from && reference.to <= to)
         // Click handlers resolve the current definition by label. Its absolute
         // position is not table content and must not invalidate measured DOM.
@@ -4135,7 +4136,10 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       const targetPos = targetLine ? Math.min(targetLine.from + Math.max(preferredColumn, 0), targetLine.to) : doc.length + 1;
       view.dispatch({
         changes: appendLine ? { from: doc.length, insert: '\n' } : undefined,
-        selection: { anchor: targetPos }
+        selection: { anchor: targetPos },
+        // Enter adds a normal editing revision. Keep pending Live presentation
+        // through this handoff, including when the table was just inserted.
+        userEvent: appendLine ? 'input.table-exit' : undefined
       });
       destination = { doc: view.state.doc, position: targetPos };
       if (!viewport) view.dispatch({ effects: editorScrollIntoView(targetPos, { y: 'nearest' }) });
@@ -8483,6 +8487,9 @@ function addTableWidgetDecoration(
   builder.push(
     Decoration.replace({
       block: true,
+      // Text inserted after the last cell, such as Enter leaving an EOF table,
+      // belongs to the next block. Keep the table's mapped extent closed.
+      inclusiveEnd: false,
       meoTable: true,
       widget: new HtmlTableWidget(
         tableData,
@@ -8584,9 +8591,10 @@ export function insertTable(
 ) {
   const table = emptyMarkdownTable(cols, rows);
   if (!table) return false;
-  const transaction = blockInsertion(view.state, selection.to, selection.to, table, 2, inputContext(view.state, selection.to));
-  if (!transaction) return false;
-  view.dispatch({ ...transaction.transaction, annotations: [...(userEvent ? [userEvent] : []), isolateHistory.of('full')] });
+  const plan = blockInsertion(view.state, selection.to, selection.to, table, 2, inputContext(view.state, selection.to));
+  if (!plan) return false;
+  view.dispatch({ ...plan.transaction, annotations: [...(userEvent ? [userEvent] : []), isolateHistory.of('full'),
+    insertedTableLineCount.of(plan.lineCount)] });
   return true;
 }
 

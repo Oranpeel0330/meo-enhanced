@@ -1,11 +1,14 @@
 import { matchInlineScript } from '../../../src/foundation/inlineScript';
 import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
-import { EditorSelection, type EditorState, type TransactionSpec } from '@codemirror/state';
+import { Annotation, EditorSelection, type EditorState, type TransactionSpec } from '@codemirror/state';
 import type { Tree } from '@lezer/common';
 import { syntaxTree } from '@codemirror/language';
 import { isSuggestionAddress } from '../application/inputSuggestions';
 import { indentedCodeBlockAt } from './codeBlockSource';
 export type MarkdownInputContext = 'block' | 'inline' | 'heading' | 'excluded';
+
+/** Number of source lines in the new table. The mapped caret identifies its header. */
+export const insertedTableLineCount = Annotation.define<number>();
 
 /** Literal comment markers in code cannot affect later prose comment operations. */
 export function markdownCodeRanges(tree: Tree): { from: number; to: number }[] {
@@ -46,7 +49,11 @@ export function markdownSyntaxContext(state: EditorState, position: number): Mar
 }
 
 /** Replaces a query, or inserts after a preserved selection. The editor supplies the context at `from`. */
-export function blockInsertion(state: EditorState, from: number, to: number, block: string, caret: number, context: MarkdownInputContext): { transaction: TransactionSpec; positionAt: (offset: number) => number } | null {
+export function blockInsertion(state: EditorState, from: number, to: number, block: string, caret: number, context: MarkdownInputContext): {
+  transaction: TransactionSpec;
+  positionAt: (offset: number) => number;
+  lineCount: number;
+} | null {
   if (state.selection.ranges.length !== 1 || context !== 'block') return null;
   const line = state.doc.lineAt(from);
   if (state.doc.lineAt(to).number !== line.number) return null;
@@ -84,5 +91,6 @@ export function blockInsertion(state: EditorState, from: number, to: number, blo
   }
   const changeFrom = emptyLeft ? line.from : from;
   const positionAt = (offset: number) => changeFrom + before.length + offset + prefix.length + (block.slice(0, offset).match(/\n/g)?.length ?? 0) * continuation.length;
-  return { transaction: { changes: { from: changeFrom, to, insert: before + rendered + after }, selection: EditorSelection.cursor(positionAt(caret)) }, positionAt };
+  return { transaction: { changes: { from: changeFrom, to, insert: before + rendered + after }, selection: EditorSelection.cursor(positionAt(caret)) },
+    positionAt, lineCount: lines.length };
 }
