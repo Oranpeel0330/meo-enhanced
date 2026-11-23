@@ -267,6 +267,7 @@ async function main(): Promise<void> {
       let after: ReturnType<typeof geometry> | null = null;
       if (scenarioInput.dynamicZoom !== undefined || scenarioInput.dynamicTransform !== undefined ||
         scenarioInput.dynamicShellTransform !== undefined || scenarioInput.dynamicRootTransform !== undefined) {
+        const deadline = performance.now() + 2000;
         await settle(() => {
           if (scenarioInput.dynamicZoom !== undefined) host.style.zoom = String(scenarioInput.dynamicZoom);
           if (scenarioInput.dynamicTransform !== undefined) ancestor.style.transform = scenarioInput.dynamicTransform;
@@ -278,7 +279,14 @@ async function main(): Promise<void> {
             document.documentElement.style.transform = scenarioInput.dynamicRootTransform;
             document.documentElement.style.transformOrigin = '0 0';
           }
-        }, () => true);
+        }, () => {
+          // The native layout observer may publish after the style mutation's own frame.
+          const current = geometry();
+          if (current.visible && current.chromeTop !== null && current.scrollerTop !== null
+            && Math.abs(current.chromeTop - current.scrollerTop) <= 1) return true;
+          if (performance.now() >= deadline) throw new Error('Sticky header did not settle after transform: ' + JSON.stringify(current));
+          return false;
+        });
         after = geometry();
       }
       (window as typeof window & { __disposeStickyGeometryEditor?: () => void })
