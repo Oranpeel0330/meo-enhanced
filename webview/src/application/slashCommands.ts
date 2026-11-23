@@ -52,11 +52,11 @@ export function readSlashQuery(value: string): string | null {
   // Asterisk is a dimension separator only, not punctuation in ordinary commands.
   return !query.includes('*') || /^(?:table)?[0-9]+\*[0-9]*$/i.test(query) ? query : null;
 }
-export function slashCommandSuggestions(query: string, context: 'block' | 'inline' | 'heading', canInsertInlineTable?: () => boolean): readonly SlashCommand[] {
+export function slashCommandSuggestions(query: string, context: 'block' | 'inline' | 'heading', canInsertBlock: () => boolean): readonly SlashCommand[] {
   const q = query.toLowerCase();
   const dimensions = /^(?:table)?([0-9]+)(?:[x×*]([0-9]*))?$/i.exec(q);
   if (dimensions) {
-    if (context !== 'block' && !canInsertInlineTable?.()) return [];
+    if (!canInsertBlock()) return [];
     const rows = Number(dimensions[1]), cols = Number(dimensions[2]), complete = !!dimensions[2];
     const table = commands[commands.length - 1], command = 'table' + q.replace(/^table/, '').replace(/×/g, 'x');
     const insert = complete ? emptyMarkdownTable(cols, rows) : null;
@@ -69,11 +69,11 @@ export function slashCommandSuggestions(query: string, context: 'block' | 'inlin
   }
   if (/^(?:table)?[0-9]/.test(q) || /^(?:table)?[x×*]/.test(q)) return [];
   const language = languages.find(([id, , aliases]) => [id, ...aliases].includes(q));
-  if (language && context === 'block') return [{ ...block('code-' + language[0], language[1] + ' Code', 'code', '{}', language[1] + ' 代码块', '```' + language[0] + '\n\n```', language[0].length + 4), command: language[0] }];
+  if (language && canInsertBlock()) return [{ ...block('code-' + language[0], language[1] + ' Code', 'code', '{}', language[1] + ' 代码块', '```' + language[0] + '\n\n```', language[0].length + 4), command: language[0] }];
   const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
   const rank = (item: SlashCommand) => item.aliases.includes(q) || normalize(item.label) === q ? 0 : normalize(item.label).startsWith(q) ? 1 : 2;
-  return commands.filter(item => item.scope === 'inline' || item.scope === 'heading' && context === 'heading' || item.scope === 'block' && context === 'block'
-    || item.id === 'table' && q !== '' && [item.id, ...item.aliases].some(name => name.startsWith(q)) && canInsertInlineTable?.())
-    .filter(item => [item.id, item.label, ...item.aliases].some(value => normalize(value).includes(q)))
+  return commands.filter(item => [item.id, item.label, ...item.aliases].some(value => normalize(value).includes(q)))
+    .filter(item => item.scope === 'inline' || item.scope === 'heading' && context === 'heading'
+      || item.scope === 'block' && (context === 'block' || q !== '' && [item.command, ...item.aliases].some(name => name.startsWith(q))) && canInsertBlock())
     .sort((a, b) => ['text', 'structure', 'list', 'media', 'code', 'data'].indexOf(a.group) - ['text', 'structure', 'list', 'media', 'code', 'data'].indexOf(b.group) || rank(a) - rank(b));
 }

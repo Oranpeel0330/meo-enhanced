@@ -18,7 +18,7 @@ import { beginHtmlCommentTemplate } from './htmlCommentEditing';
 import { nativeSymbolInput } from './nativeTypingAssistance';
 import { addAutomaticSymbolPair } from './typingAssistance';
 import { sourceTableAt } from './sourceTableCommands';
-import { blockInsertion, insertedTableLineCount, tableBlockInsertion, tableInsertionPoint, type MarkdownInputContext } from './blockInsertion';
+import { blockInsertionLocation, insertedTableLineCount, planMarkdownBlockInsertion, type BlockInsertionLocation, type MarkdownBlockGuard, type MarkdownInputContext } from './blockInsertion';
 import { encodeMarkdownPath } from '../../../src/foundation/linkDestination';
 import { scanHtmlTags } from '../../../src/foundation/htmlSyntax';
 import { candidateMatchPositions, candidateTextMatch } from '../../../src/foundation/candidateText';
@@ -30,6 +30,8 @@ export const refreshInputSuggestions = StateEffect.define<null>();
 type Suggestion = LinkCandidate & { readonly caret?: number; readonly slash?: SlashCommand; readonly math?: MathCompletion };
 type HtmlCompletionContext = { readonly type: 'html'; readonly from: number; readonly to: number; readonly query: string; readonly options: readonly Completion[] };
 type InputSuggestionContext = SuggestionContext | MathCompletionContext | HtmlCompletionContext;
+type SlashActivation = { readonly state: EditorState; readonly from: number; readonly replacedTo: number; end: number;
+  scope?: MarkdownInputContext; location?: BlockInsertionLocation | null };
 
 /** Markdown recognizes some opening tags only after `>`; complete the unfinished token independently. */
 function incompleteHtmlCompletion(state: EditorState, position: number, explicit: boolean, inputContext: (state: EditorState, position: number) => MarkdownInputContext) {
@@ -48,6 +50,7 @@ function incompleteHtmlCompletion(state: EditorState, position: number, explicit
 export function createInputSuggestions(options: {
   readonly openSettings?: (setting: InputSuggestionSetting) => void;
   readonly inputContext: (state: EditorState, position: number) => MarkdownInputContext;
+  readonly protectedBlockRange: MarkdownBlockGuard;
   readonly mathContext: (state: EditorState, position: number) => MathCompletionBody | null;
   readonly renderMathPreview: (source: string) => string | null;
   readonly requestLinks?: (context: { kind: 'documents' | 'paths' | 'headings'; query: string; target: string; wiki?: boolean }) => Promise<readonly LinkCandidate[]>;
@@ -64,7 +67,27 @@ export function createInputSuggestions(options: {
     ariaInput: HTMLElement | null = null;
     timer: ReturnType<typeof setTimeout> | null = null;
     generation = 0; disposed = false; index = 0;
-    slashFrom: number | null = null;
+    slash: SlashActivation | null = null;
+    get slashFrom() { return this.slash?.from ?? null; }
+    startSlash(state: EditorState, from: number, replacedTo: number, end: number) {
+      this.slash = { state, from, replacedTo, end };
+      this.selectedCommand = ''; this.resolvedQuery = ''; this.above = null;
+    }
+    slashBlockLocation(): BlockInsertionLocation | null {
+      const slash = this.slash;
+      if (!slash || slash.from !== slash.replacedTo || this.cellFrom !== null) return null;
+      if (slash.location === undefined) slash.location = blockInsertionLocation(slash.state, slash.from, options.inputContext, options.protectedBlockRange, false);
+      return slash.location;
+    }
+    slashScope(): MarkdownInputContext {
+      const slash = this.slash;
+      if (!slash) return 'excluded';
+      if (slash.scope === undefined) {
+        const scope = options.inputContext(slash.state, slash.from);
+        slash.scope = scope === 'excluded' && this.slashBlockLocation()?.point === slash.from ? 'block' : scope;
+      }
+      return slash.scope;
+    }
     htmlActivation: 'typing' | 'explicit' | null = null;
     cellFrom: number | null = null; cellInput: HTMLTextAreaElement | null = null;
     fieldInput: HTMLTextAreaElement | null = null; fieldValue = '';
@@ -75,7 +98,7 @@ export function createInputSuggestions(options: {
     dismissed = false;
     selectedCandidate = '';
     candidateKey(item: Suggestion) { return this.context?.type === 'documents' || this.context?.type === 'paths' ? item.detail || item.insert : item.detail + '#' + (item.anchor ?? item.insert); }
-    readonly windowBlur = () => { this.dismissed = true; this.htmlActivation = null; this.clear(); };
+    readonly windowBlur = () => { this.dismissed = true; this.htmlActivation = null; this.slash = null; this.clear(); };
     readonly nativeEvent = (event: Event) => {
       const input = event.target;
       if (!(input instanceof HTMLTextAreaElement) || !input.closest('.meo-md-html-table-wrap') || !this.view.dom.contains(input)) return;
@@ -138,7 +161,6 @@ export function createInputSuggestions(options: {
     }
     update(update: ViewUpdate) {
       if ((update.docChanged || update.selectionSet) && !update.transactions.some(transaction => transaction.isUserEvent('input.complete'))) this.dismissed = false;
-      if (this.slashFrom !== null && update.docChanged) this.slashFrom = update.changes.mapPos(this.slashFrom, -1);
       if (!this.fieldInput && this.fields.length && update.docChanged) {
         this.fields = this.fields.map(field => ({ from: update.changes.mapPos(field.from, -1), to: update.changes.mapPos(field.to, 1) }));
         this.templateEnd = update.changes.mapPos(this.templateEnd, 1);
@@ -147,16 +169,29 @@ export function createInputSuggestions(options: {
           templateEnd: update.changes.mapPos(parent.templateEnd, 1) }));
       }
       for (const transaction of update.transactions) {
-        if (transaction.isUserEvent('input.complete')) { this.htmlActivation = null; this.slashFrom = null; this.clear(); return; }
+        if (transaction.isUserEvent('input.complete')) { this.htmlActivation = null; this.slash = null; this.clear(); return; }
         if (transaction.isUserEvent('input.type')) this.htmlActivation ??= 'typing';
         if (transaction.isUserEvent('undo') || transaction.isUserEvent('redo') || transaction.reconfigured) this.htmlActivation = null;
-        if (transaction.isUserEvent('undo') || transaction.isUserEvent('redo') || transaction.reconfigured) { this.slashFrom = null; this.resetFields(); }
+        if (transaction.isUserEvent('undo') || transaction.isUserEvent('redo') || transaction.reconfigured) { this.slash = null; this.resetFields(); }
         if (transaction.reconfigured && this.context?.type === 'math') { this.dismissed = true; this.clear(); return; }
-        if (transaction.isUserEvent('input.type')) transaction.changes.iterChanges((_from, _to, from, to, inserted) => {
-          if (this.slashFrom === null && inserted.toString() === '/' && to === update.state.selection.main.head) { this.slashFrom = from; this.selectedCommand = ''; this.resolvedQuery = ''; this.above = null; }
-        });
+        if (!transaction.docChanged) continue;
+        const slash = this.slash;
+        if (slash) {
+          transaction.changes.iterChangedRanges((from, to) => {
+            if (from < slash.from || to > slash.end) this.slash = null;
+          });
+          if (this.slash) slash.end = transaction.changes.mapPos(slash.end, 1);
+        } else if (transaction.isUserEvent('input.type')) {
+          let edits = 0;
+          transaction.changes.iterChanges((from, to, start, end, inserted) => {
+            edits++;
+            if (start === from && inserted.toString() === '/' && (end === transaction.newSelection.main.head
+                || this.composing && start === transaction.newSelection.main.head)) this.startSlash(transaction.startState, from, to, end);
+          });
+          if (edits !== 1) this.slash = null;
+        }
       }
-      if (update.selectionSet && !update.docChanged && !this.composing) this.slashFrom = null;
+      if (update.selectionSet && !update.docChanged && !this.composing && update.state.selection.main.head !== this.slash?.end) this.slash = null;
       if (update.selectionSet && !update.docChanged && !this.composing) this.htmlActivation = null;
       if (!this.fieldInput && this.fields.length && update.selectionSet) {
         const selection = update.state.selection.main, field = this.fields[this.fieldIndex];
@@ -194,7 +229,7 @@ export function createInputSuggestions(options: {
       }
       this.cellInput = null;
       if (this.disposed || this.view.state.readOnly || !selection.main.empty && !this.composing || selection.ranges.length !== 1 || !this.view.hasFocus || active !== this.view.contentDOM) {
-        this.slashFrom = null; return null;
+        this.slash = null; return null;
       }
       const range = selection.main, line = this.view.state.doc.lineAt(this.composing ? range.to : range.head), preferences = this.view.state.facet(inputAssistanceFacet);
       const position = this.composing ? range.to : range.head;
@@ -203,7 +238,7 @@ export function createInputSuggestions(options: {
       const unfinishedHtml = !htmlActive && preferences.html && this.htmlActivation && !this.composing && !this.view.compositionStarted
         ? incompleteHtmlCompletion(this.view.state, position, this.htmlActivation === 'explicit', options.inputContext) : null;
       if (htmlActive || unfinishedHtml) {
-        this.slashFrom = null;
+        this.slash = null;
         if (!preferences.html || !this.htmlActivation) return null;
         // Composition updates retain the last query; preedit text never changes candidates or accepts an item.
         if (this.composing || this.view.compositionStarted) return this.context?.type === 'html' ? this.context : null;
@@ -214,16 +249,19 @@ export function createInputSuggestions(options: {
       if (preferences.math) {
         const position = this.composing ? range.to : range.head;
         const math = detectMathCompletion(this.view.state, position, () => options.mathContext(this.view.state, position));
-        if (math && !sourceTableAt(this.view.state, range.head)) { this.slashFrom = null; return math; }
+        if (math && !sourceTableAt(this.view.state, range.head)) { this.slash = null; return math; }
       }
       if (this.slashFrom !== null) {
         const from = this.slashFrom;
         const head = this.composing ? range.to : range.head;
         const value = from >= line.from && from < head ? this.view.state.sliceDoc(from, head) : '';
         const query = readSlashQuery(value);
-        if (preferences.slash && query !== null && this.view.state.sliceDoc(from - (from > 0 ? 1 : 0), from) !== '/' && options.inputContext(this.view.state, from + 1) !== 'excluded')
+        if (this.composing && head === from) return null;
+        if (preferences.slash && query !== null && head === this.slash!.end
+            && this.view.state.sliceDoc(from - (from > 0 ? 1 : 0), from) !== '/'
+            && !isSuggestionAddress(this.view.state.sliceDoc(line.from, from + 1)) && this.slashScope() !== 'excluded')
           return { type: 'slash', query, target: '', length: value.length, wiki: false } as SuggestionContext;
-        this.slashFrom = null;
+        this.slash = null;
       }
       if (isCodeInput(this.view)) return null;
       const context = detectSuggestionContext(this.view.state.sliceDoc(line.from, this.composing ? range.to : range.head), preferences, this.composing || this.view.compositionStarted);
@@ -264,11 +302,9 @@ export function createInputSuggestions(options: {
         .slice(0, 100).map(({ option }) => ({ label: option.label, insert: typeof option.apply === 'string' ? option.apply : option.label, detail: '' }));
       else if (context.type === 'emoji') items = emojiSuggestions.filter(item => item.name.startsWith(context.query.toLowerCase())).map(item => ({ label: ':' + item.name + ':', insert: item.value, detail: item.value }));
       else if (context.type === 'slash') {
-        const from = this.slashFrom!;
-        const scope = this.cellFrom !== null ? 'inline' : options.inputContext(this.view.state, from + 1);
-        const canInsertInlineTable = scope === 'inline' && this.cellFrom === null
-          ? () => tableInsertionPoint(this.view.state, from, options.inputContext, false) !== null : undefined;
-        items = scope === 'excluded' ? [] : slashCommandSuggestions(context.query, scope, canInsertInlineTable).map(slash => ({ label: slash.label, insert: slash.insert, detail: language === 'zh-CN' ? slash.zh : slash.en, caret: slash.caret, slash }));
+        const scope = this.cellFrom !== null ? 'inline' : this.slashScope();
+        items = scope === 'excluded' ? [] : slashCommandSuggestions(context.query, scope, () => this.slashBlockLocation() !== null)
+          .map(slash => ({ label: slash.label, insert: slash.insert, detail: language === 'zh-CN' ? slash.zh : slash.en, caret: slash.caret, slash }));
       } else if (context.type === 'headings' && !context.target) items = options.currentHeadings().filter(item => candidateMatchPositions(item.label, context.query).length || !context.query).slice(0, 50)
         .map(item => context.wiki ? { ...item, insert: item.anchor ?? item.insert } : item);
       else {
@@ -407,7 +443,7 @@ export function createInputSuggestions(options: {
       settings.addEventListener('click', () => {
         if (!this.context) return;
         const setting = inputSuggestionSetting(this.context.type);
-        this.dismissed = true; this.htmlActivation = null; this.slashFrom = null; this.cellFrom = null; this.cellInput = null;
+        this.dismissed = true; this.htmlActivation = null; this.slash = null; this.cellFrom = null; this.cellInput = null;
         this.clear(); options.openSettings?.(setting);
       });
       footer.append(keys, settings); this.popup.append(footer);
@@ -460,7 +496,7 @@ export function createInputSuggestions(options: {
       const slash = this.context?.type === 'slash', document = this.view.dom.ownerDocument;
       const close = () => {
         this.dismissed = true;
-        if (slash) { this.slashFrom = null; this.cellFrom = null; this.cellInput = null; }
+        if (slash) { this.slash = null; this.cellFrom = null; this.cellInput = null; }
         this.clear();
       };
       const anchor = slash ? this.cellInput ? this.cellFrom! : this.slashFrom!
@@ -560,7 +596,7 @@ export function createInputSuggestions(options: {
         const active = this.fields[this.fieldIndex];
         const nested = !this.fieldInput && active && plan.from >= active.from && plan.to <= active.to;
         if (!nested) this.resetFields();
-        this.clear(); this.slashFrom = null; this.dismissed = true;
+        this.clear(); this.slash = null; this.dismissed = true;
         this.view.dispatch({ changes: { from: plan.from, to: plan.to, insert: plan.insert },
           selection: EditorSelection.cursor(plan.fields[0]?.from ?? plan.end),
           effects: plan.pairs.map(pair => addAutomaticSymbolPair.of(pair)),
@@ -618,24 +654,21 @@ export function createInputSuggestions(options: {
       const command = item.slash;
       let fields = command?.fields?.map(([start, end]) => ({ from: from + start, to: from + end }));
       let templateEnd = from + insert.length;
-      let relocatedTable: number | undefined;
+      let insertionPoint: number | undefined;
       let transaction: TransactionSpec = { changes: { from, to, insert }, selection: EditorSelection.cursor(caret) };
       const annotations: Annotation<unknown>[] = [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')];
       if (item.slash?.scope === 'block') {
-        const tablePlan = command?.id === 'table'
-          ? tableBlockInsertion(this.view.state, from, this.head, insert, item.caret!, options.inputContext) : null;
-        const plan = command?.id === 'table' ? tablePlan
-          : blockInsertion(this.view.state, from, this.head, insert, item.caret!, options.inputContext(this.view.state, from));
-        if (!plan) { this.slashFrom = null; this.clear(); return; }
-        transaction = plan.transaction;
+        const location = this.slashBlockLocation(), slash = this.slash;
+        if (!location || !slash || slash.from !== from || slash.end !== to) { this.slash = null; this.clear(); return; }
+        const plan = planMarkdownBlockInsertion(slash.state, location, insert, item.caret!);
+        const removeQuery = this.view.state.changes({ from, to });
+        transaction = { ...plan.transaction, changes: removeQuery.compose(slash.state.changes(plan.transaction.changes)) };
         fields = command?.fields?.map(([start, end]) => ({ from: plan.positionAt(start), to: plan.positionAt(end) }));
         templateEnd = plan.positionAt(insert.length);
-        if (tablePlan) {
-          annotations.push(insertedTableLineCount.of(tablePlan.lineCount));
-          if (tablePlan.point !== from) relocatedTable = tablePlan.point;
-        }
+        if (command?.id === 'table') annotations.push(insertedTableLineCount.of(plan.lineCount));
+        if (location.point !== from) insertionPoint = location.point + (location.point > from ? to - from : 0);
       }
-      this.slashFrom = null; this.clear();
+      this.slash = null; this.clear();
       this.dismissed = item.kind !== 'directory';
       const complete = (acceptLayout: () => void) => {
         this.view.dispatch({ ...transaction, effects: command?.id === 'comment' ? [beginHtmlCommentTemplate.of({ from: caret, to: caret, end: templateEnd }), addAutomaticSymbolPair.of({ from, to: templateEnd, open: '<!--', close: '-->' })] : transaction.effects, annotations });
@@ -654,7 +687,7 @@ export function createInputSuggestions(options: {
         }
         return true;
       };
-      if (command && options.insertSlash) options.insertSlash(relocatedTable ?? from, relocatedTable ?? to, complete, command.id === 'table' ? 'cell' : 'caret');
+      if (command && options.insertSlash) options.insertSlash(insertionPoint ?? from, insertionPoint ?? to, complete, command.id === 'table' ? 'cell' : 'caret');
       else complete(() => {});
       if (item.kind === 'directory') this.schedule();
     }
@@ -694,9 +727,9 @@ export function createInputSuggestions(options: {
         }
         return true;
       }
-      if (event.key === 'Escape' && (this.slashFrom !== null || this.cellFrom !== null || !this.popup.hidden || this.fields.length)) { event.preventDefault(); this.dismissed = true; this.htmlActivation = null; this.slashFrom = null; this.cellFrom = null; this.cellInput = null; this.resetFields(); this.clear(); return true; }
+      if (event.key === 'Escape' && (this.slashFrom !== null || this.cellFrom !== null || !this.popup.hidden || this.fields.length)) { event.preventDefault(); this.dismissed = true; this.htmlActivation = null; this.slash = null; this.cellFrom = null; this.cellInput = null; this.resetFields(); this.clear(); return true; }
       if (this.popup.hidden) return false;
-      if (event.key === 'Escape') { event.preventDefault(); this.dismissed = true; this.slashFrom = null; this.cellFrom = null; this.cellInput = null; this.fields = []; this.clear(); return true; }
+      if (event.key === 'Escape') { event.preventDefault(); this.dismissed = true; this.slash = null; this.cellFrom = null; this.cellInput = null; this.fields = []; this.clear(); return true; }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
         const direction = event.key === 'ArrowDown' ? 1 : -1;
@@ -719,14 +752,16 @@ export function createInputSuggestions(options: {
     }
   }, { eventHandlers: {
     keydown(event) { return this.keydown(event); },
-    blur() { this.dismissed = true; this.htmlActivation = null; this.slashFrom = null; this.resetFields(); this.clear(); return false; },
+    blur() { this.dismissed = true; this.htmlActivation = null; this.slash = null; this.resetFields(); this.clear(); return false; },
     compositionstart() { this.composing = true; return false; },
     compositionend(event) {
       this.composing = false;
       const head = this.view.state.selection.main.head;
       // IME confirmation can move the caret without inserting the slash again.
       if (this.slashFrom === null && event.data === '/' && this.view.state.selection.main.empty && head > 0 && this.view.state.sliceDoc(head - 1, head) === '/') {
-        this.slashFrom = head - 1; this.selectedCommand = ''; this.resolvedQuery = ''; this.above = null;
+        const from = head - 1;
+        const origin = this.view.state.update({ changes: { from, to: head }, filter: false }).state;
+        this.startSlash(origin, from, from, head);
       }
       this.schedule(); return false;
     }

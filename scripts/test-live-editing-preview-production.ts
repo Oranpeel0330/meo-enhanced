@@ -17,7 +17,7 @@ const cases: Array<{ kind: Kind; name: string; block: string; layout?: string; l
   { kind: 'math', name: 'math/fence', block: '```math\nx=42\n```' }
 ];
 
-type EndInsertion = { slash?: string; query?: string; markdown: string; pasteImage?: boolean; keyboard?: boolean };
+type EndInsertion = { slash?: string; query?: string; markdown: string; pasteImage?: boolean; keyboard?: boolean; toolbarCode?: boolean };
 const toolbarTable: EndInsertion = { markdown: emptyMarkdownTable(3, 3)! };
 const slashTable: EndInsertion = { slash: 'table', query: 'table', markdown: emptyMarkdownTable()! };
 const definition: EndInsertion = { slash: 'definition', query: 'definition', markdown: '<dl>\n<dt>Term</dt>\n<dd>Definition</dd>\n</dl>' };
@@ -25,6 +25,7 @@ const endInsertions: readonly [boolean, EndInsertion][] = [
   [false, slashTable], [false, definition],
   [true, { slash: 'codeBlock', query: 'code', markdown: '```\n\n```' }],
   [true, { slash: 'blockMath', query: 'equation', markdown: '$$\n\n$$', keyboard: true }],
+  [true, { toolbarCode: true, markdown: '```\n\n```' }],
   [false, { slash: 'image', query: 'image', markdown: '![alt](url)' }],
   [true, { pasteImage: true, markdown: '![test.png](test.png)' }]
 ];
@@ -212,9 +213,9 @@ async function checkLastTableCellKey(page: Page, expected: string, key: 'Enter' 
 async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewportBottom = false, scrollBeyondLastLine = true,
   tableBoundary?: 'blank-exit' | 'exit' | 'append-row'): Promise<void> {
   const table = test === toolbarTable || test === slashTable;
-  const addBlankLines = test === toolbarTable && nearViewportBottom;
+  const addBlankLines = test.toolbarCode || test === toolbarTable && nearViewportBottom;
   const text = (tableBoundary ? tableExitPrefix : 'Paragraph with **bold** text.\n\n'.repeat(large ? 8_200 : 100))
-    + 'End insertion witness' + (addBlankLines ? '' : '\n\n');
+    + 'End insertion witness' + (test.toolbarCode ? '\n\n## End **heading**' : addBlankLines ? '' : '\n\n');
   assert.equal(assessLargeDocument(text).boundedEditorWork, large);
   const page = await browser.newPage();
   const host = await open(page, text, false, 'live', {
@@ -227,11 +228,11 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
   });
   try {
     await page.setViewport({ width: 1180, height: 610 });
-    await page.$eval('.editor-host .cm-content', content => {
+    await page.$eval('.editor-host .cm-content', (content, insideHeading) => {
       const view = (content as any).cmTile.root.view;
-      view.dispatch({ selection: { anchor: view.state.doc.length }, scrollIntoView: true });
+      view.dispatch({ selection: { anchor: view.state.doc.length - (insideHeading ? 5 : 0) }, scrollIntoView: true });
       view.focus();
-    });
+    }, !!test.toolbarCode);
     await frames(page, 10);
     const point = await page.$eval('.editor-host .cm-scroller', element => {
       const rect = element.getBoundingClientRect();
@@ -240,6 +241,14 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
     await page.mouse.move(point.x, point.y);
     await page.mouse.wheel({ deltaY: 1_000_000 });
     await frames(page, 10);
+    if (test.toolbarCode) {
+      // Keep the existing paragraph visible above the last heading.
+      await page.$eval('.editor-host .cm-content', (content, anchor) => {
+        const view = (content as any).cmTile.root.view;
+        view.dispatch({ effects: view.constructor.scrollIntoView(anchor, { y: 'start', yMargin: 40 }) });
+      }, text.lastIndexOf('End insertion witness'));
+      await frames(page, 10);
+    }
     if (nearViewportBottom) {
       const deltaY = await page.$eval('.editor-host .cm-content', content => {
         const view = (content as any).cmTile.root.view;
@@ -287,7 +296,8 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
     }, { observe, tableLine });
     const before = await read(!nearViewportBottom);
     assert.ok(before.witnessY !== null);
-    if (!nearViewportBottom) assert.ok(Math.abs(before.max - before.scrollTop) <= 1);
+    if (test.toolbarCode) assert.ok(before.witnessY >= 0);
+    else if (!nearViewportBottom) assert.ok(Math.abs(before.max - before.scrollTop) <= 1);
     if (test.slash) {
       if (test.keyboard) await page.keyboard.press('Enter');
       else await page.click(suggestion);
@@ -299,6 +309,8 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
       });
       await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.cm-content img')]
         .some(image => image.complete && image.naturalWidth === 240));
+    } else if (test.toolbarCode) {
+      await page.click('.format-button[data-action="codeBlock"]');
     } else {
       await page.hover('.table-wrapper > .format-button');
       await page.waitForFunction(() => getComputedStyle(document.querySelector('.table-dropdown-wrapper')!).opacity === '1');
@@ -351,7 +363,7 @@ async function insertAtScrollEnd(large: boolean, test = toolbarTable, nearViewpo
     }
     assert.deepEqual(host.errors, []);
     const fixture = nearViewportBottom ? 'near viewport bottom' : large ? 'optimized' : 'ordinary';
-    console.log(`${test.slash ? '/' + test.slash : test.pasteImage ? 'Pasted image' : 'Toolbar table'} stays at the document end (${fixture})`);
+    console.log(`${test.slash ? '/' + test.slash : test.pasteImage ? 'Pasted image' : test.toolbarCode ? 'Toolbar code block after heading' : 'Toolbar table'} stays at the document end (${fixture})`);
   } finally { host.dispose(); await page.close(); }
 }
 

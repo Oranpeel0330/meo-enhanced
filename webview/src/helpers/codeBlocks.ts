@@ -1,6 +1,6 @@
 import { documentBlocksFacet } from '../editor/documentBlocks';
 import { createGraphDiagramWidget, type GraphDiagramWidget, type GraphRenderer } from './graphDiagramWidget';
-import { StateField, EditorState, type Annotation, type ChangeDesc } from '@codemirror/state';
+import { StateField, EditorState, type ChangeDesc } from '@codemirror/state';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { Decoration, EditorView, WidgetType, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { IterMode, type SyntaxNodeRef } from '@lezer/common';
@@ -31,7 +31,7 @@ import {
 import { getCodeBlockLastLine, getCodeBlockSourceLines, getLiveBlockIndent, liveBlockIndentKey, parseBlockLinePrefix, type LiveBlockIndentValue } from './blockIndent';
 import { getViewportController } from './viewportController';
 import { getMermaidDiagramPresentationFactory } from '../editor/mermaidDiagramPresentation';
-import { currentSyntaxTree, getFencedCodeBodyRange, getFencedCodeInfo, syntaxTreeChanged } from './markdownSyntax';
+import { currentSyntaxTree, getFencedCodeBodyRange, getFencedCodeInfo, resolvedSyntaxTreeAt, syntaxTreeChanged } from './markdownSyntax';
 import {
   createRenderedBlockPreviewShell,
   RenderedBlockPreviewHeight,
@@ -529,33 +529,23 @@ export function resolveLiveCodeLanguage(info: string | null | undefined): any {
   return languageMap[normalized] ?? null;
 }
 
-export function insertCodeBlock(
-  view: EditorView,
-  selection: { from: number; to: number; empty?: boolean },
-  userEvent?: Annotation<string>
-): void {
-  const { state } = view;
-  let node = currentSyntaxTree(state).resolveInner(selection.from, 1);
+export function planCodeBlockRemoval(state: EditorState, selection: { from: number; to: number; empty: boolean }) {
+  const tree = resolvedSyntaxTreeAt(state, state.doc.lineAt(selection.to).to, 2);
+  let node = tree.resolve(selection.from, 1);
   while (node.parent && node.name !== 'FencedCode') node = node.parent;
-  if (node.name === 'FencedCode' && node.from <= selection.from && node.to >= selection.to) {
-    const first = state.doc.lineAt(node.from), last = state.doc.lineAt(node.to);
-    if (/^[ \t]*(?:> ?)*(`{3,}|~{3,})/.test(first.text) && /^[ \t]*(?:> ?)*(`{3,}|~{3,})[ \t]*$/.test(last.text) && last.number > first.number) {
-      const content = state.sliceDoc(first.to + 1, Math.max(first.to + 1, last.from - 1));
-      view.dispatch({ changes: { from: first.from, to: last.to, insert: content }, selection: { anchor: first.from, head: first.from + content.length }, annotations: userEvent });
-      return;
-    }
-  }
-  const line = state.doc.lineAt(selection.from);
-  const prefix = /^[ \t]*/.exec(line.text)![0];
-  const from = selection.empty ? line.from : selection.from;
-  const to = selection.empty ? line.to : selection.to;
-  const content = selection.empty ? line.text.slice(prefix.length) : state.sliceDoc(from, to);
-  let fenceLength = 3; for (const match of content.matchAll(/`+/g)) fenceLength = Math.max(fenceLength, match[0].length + 1);
-  const fence = '`'.repeat(fenceLength);
-  const before = from > line.from ? '\n' : '';
-  const after = to < state.doc.lineAt(to).to ? '\n' : '';
-  const insert = `${before}${prefix}${fence}\n${content}\n${prefix}${fence}${after}`;
-  view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + before.length + prefix.length + fence.length + 1 }, annotations: userEvent });
+  if (node.name !== 'FencedCode' || node.from > selection.from || node.to < selection.to
+      || selection.empty && (selection.from === node.from || selection.from === node.to)) return null;
+  const open = node.firstChild, close = node.lastChild;
+  if (open?.name !== 'CodeMark' || close?.name !== 'CodeMark' || open.from === close.from) return null;
+  const first = state.doc.lineAt(open.from), last = state.doc.lineAt(close.from);
+  if (first.number === last.number) return null;
+  const payload = getCodeBlockSourceLines(state, node, first.number + 1)[0];
+  const content = payload && payload.from < last.from
+    ? state.sliceDoc(payload.prefixTo, last.from - 1) : '';
+  return { from: node.from, to: last.to, transaction: {
+    changes: { from: node.from, to: last.to, insert: content },
+    selection: { anchor: node.from, head: node.from + content.length }
+  } };
 }
 
 const sourceCodeBlockLine = Decoration.line({ class: 'meo-src-code-block' });

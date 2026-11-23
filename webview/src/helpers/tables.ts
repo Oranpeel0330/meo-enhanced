@@ -6,7 +6,6 @@ import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPref
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
 import { createTableColumnResizeHandle } from '../editor/tableColumnResizeHandle';
 import { createTableRowWindow, type TableRowWindow } from '../editor/tableRowWindow';
-import { tableBlockInsertion, insertedTableLineCount, type MarkdownInputContextAt } from '../editor/blockInsertion';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { markLiveInputNestedProjection, usesLargeDocumentDerivedWorkBudget } from '../editor/liveInputDerivedWork';
 import { renderedBlockPreviewHeight, RenderedBlockPreviewHeight } from './renderedBlockPreview';
@@ -18,9 +17,9 @@ import { latexDelimitersFacet } from '../editor/mathSyntaxPreference';
 import { parseTableInlineSyntax } from './inlineMarkdownParser';
 import { wireNativeSymbolInput, nativeSymbolInput } from '../editor/nativeTypingAssistance';
 import { automaticSymbolPairs, symbolOriginEpoch, replaceAutomaticSymbolPairArea, inputAssistanceFacet, type AutomaticSymbolPair } from '../editor/typingAssistance';
-import { emptyMarkdownTable, markdownTableFromCells, serializeDelimitedTable, parseMarkdownTable, externalTableCellToMarkdown } from '../application/delimitedTable';
+import { markdownTableFromCells, serializeDelimitedTable, parseMarkdownTable, externalTableCellToMarkdown } from '../application/delimitedTable';
 import { defaultInputAssistance, type EditorCommandId } from '../../../src/foundation/editingPreferences';
-import { countColumn, findClusterBreak, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, Text as CodeMirrorText, type Annotation, type ChangeDesc, type ChangeSpec, type Range, type SelectionRange as CodeMirrorSelectionRange } from '@codemirror/state';
+import { countColumn, findClusterBreak, ChangeSet, EditorState, Facet, RangeSet, RangeValue, StateEffect, StateField, Transaction, Text as CodeMirrorText, type ChangeDesc, type ChangeSpec, type Range } from '@codemirror/state';
 import { ensureSyntaxTree, indentUnit, syntaxTree } from '@codemirror/language';
 import { deleteMarkupBackward, markdownLanguage } from '@codemirror/lang-markdown';
 import { Decoration, EditorView, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
@@ -8580,22 +8579,6 @@ export const sourceTableHeaderLineField = StateField.define<DecorationSet>({
   },
   provide: (field) => EditorView.decorations.from(field)
 });
-
-export function prepareTableInsertion(
-  state: EditorState,
-  selection: CodeMirrorSelectionRange,
-  inputContext: MarkdownInputContextAt,
-  cols = 3,
-  rows = 2,
-  userEvent?: Annotation<string>
-) {
-  const table = emptyMarkdownTable(cols, rows);
-  if (!table) return null;
-  const plan = tableBlockInsertion(state, selection.to, selection.to, table, 2, inputContext);
-  if (!plan) return null;
-  return { point: plan.point, transaction: { ...plan.transaction,
-    annotations: [...(userEvent ? [userEvent] : []), isolateHistory.of('full'), insertedTableLineCount.of(plan.lineCount)] } };
-}
 
 /** Reuses the mounted table's command target, pending-cell commit and selection owner. */
 export function requestMountedTableShortcut(view: EditorView, command: EditorCommandId, skipIfDisabled: boolean) {

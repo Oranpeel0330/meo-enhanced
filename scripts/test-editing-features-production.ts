@@ -212,6 +212,50 @@ try {
       await page.evaluate(() => (window as any).editor.undo()); await waitText(source);
     }
     await prepare(mode, 'word', 0, 4); await command('blockMath'); assert.equal(await text(), '$$\nword\n$$'); await command('blockMath'); assert.equal(await text(), 'word');
+    for (const [action, fixture, block] of [
+      ['insertTable', 'before\n\n¦## title', insertedTable],
+      ['insertTable', 'before\n\n## ti¦tle', insertedTable],
+      ['codeBlock', 'before [**wo¦rd**](file.md) after', '```\n\n```'],
+      ['blockMath', 'before **wo¦rd** after', '$$\n\n$$'],
+      ['rule', 'title¦\n-----', '---'],
+      ['rule', '> first\nlazy wo¦rd', '---']
+    ] as const) {
+      const [left, right] = fixture.split('¦'), source = left + right;
+      await prepare(mode, source, left.length);
+      assert.equal(await command(action), true, `${mode}: ${action} in ${fixture}`);
+      const expected = fixture.includes('¦##') ? 'before\n\n' + block + '\n\n## title'
+        : fixture.includes(' after') ? source.slice(0, -6) + '\n\n' + block + '\n\n after'
+        : fixture.startsWith('>') ? '> first\nlazy wo\n> \n> ---\n> \n> rd' : source + '\n\n' + block + (action === 'rule' ? '\n\n' : '');
+      await waitText(expected);
+      await page.evaluate(() => (window as any).editor.undo()); await waitText(source);
+    }
+    for (const fixture of ['| A | B |\n| --- | --- |\n| wor¦d | x |', '---\nname: wor¦d\n---', '$$\nx+¦2\n$$', '<div>wor¦d</div>']) {
+      const [left, right] = fixture.split('¦'), source = left + right;
+      for (const action of ['codeBlock', 'blockMath', 'heading2', 'quote', 'rule']) {
+        await prepare(mode, source, left.length);
+        assert.equal(await command(action), false, `${mode}: ${action} protects ${fixture}`);
+        assert.equal(await text(), source);
+      }
+    }
+    for (const action of ['codeBlock', 'blockMath']) {
+      const source = 'before **word** after', start = source.indexOf('word');
+      await prepare(mode, source, start + 1, start + 3);
+      assert.equal(await command(action), false, `${mode}: a partial formatted selection cannot be wrapped`);
+      assert.equal(await text(), source);
+      const list = '- alpha\n- beta';
+      await prepare(mode, list, 3, list.length - 1);
+      assert.equal(await command(action), false, `${mode}: wrapping may not join two list items`);
+      assert.equal(await text(), list);
+      await prepare(mode, '> word', 2, 6);
+      assert.equal(await command(action), true);
+      const marker = action === 'codeBlock' ? '```' : '$$';
+      await waitText(`> ${marker}\n> word\n> ${marker}`);
+      assert.equal(await command(action), true);
+      await waitText('> word');
+    }
+    await prepare(mode, '> - word', 4);
+    assert.equal(await command('rule'), true);
+    await waitText('> - \n>   ---\n>   \n>   word');
     await prepare(mode, '**word**', 4); await command('expandSelection'); await command('shrinkSelection');
     assert.equal(await page.evaluate(() => (window as any).editor.view.state.selection.main.head), 4);
     await prepare(mode, '$x$', 0, 3); await command('inlineMath'); assert.equal(await text(), 'x');

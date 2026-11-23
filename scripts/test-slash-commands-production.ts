@@ -474,6 +474,33 @@ try {
     await page.keyboard.press('Enter');
     await waitText('|  |  |  |  |\n| --- | --- | --- | --- |\n|  |  |  |  |\n|  |  |  |  |\n|  |  |  |  |');
     const defaultTable = '|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |';
+    for (const [fixture, query, id, expected] of [
+      ['before **word**¦ after', '/code', 'codeBlock', 'before **word**\n\n```\n\n```\n\n after'],
+      ['before [**wo¦rd**](file.md) after', '/js', 'code-javascript', 'before [**word**](file.md)\n\n```javascript\n\n```\n\n after'],
+      ['before<br>¦after', '/rule', 'rule', 'before<br>\n\n---\n\nafter'],
+      ['before <u>wo¦rd</u> after', '/code', 'codeBlock', 'before <u>word</u>\n\n```\n\n```\n\n after'],
+      ['## ti¦tle', '/code', 'codeBlock', '## title\n\n```\n\n```'],
+      ['tit¦le\n-----', '/rule', 'rule', 'title\n-----\n\n---\n\n'],
+      ['```js\nlet value = 1;\n```¦', '/code', 'codeBlock', '```js\nlet value = 1;\n```\n\n```\n\n```'],
+      ['$$\nx=2\n$$¦', '/rule', 'rule', '$$\nx=2\n$$\n\n---\n\n'],
+      ['> first\nlazy wo¦rd', '/code', 'codeBlock', '> first\nlazy wo\n> \n> ```\n> \n> ```\n> \n> rd']
+    ] as const) {
+      const [left, right] = fixture.split('¦');
+      await prepare(mode, left + right, left.length);
+      await page.keyboard.type(query); await open();
+      await page.click(`.meo-input-suggestions:not([hidden]) [data-command="${id}"]`);
+      await waitText(expected);
+      await page.evaluate(() => (window as any).editor.undo()); await waitText(left + query + right);
+      await page.evaluate(() => (window as any).editor.redo()); await waitText(expected);
+    }
+    for (const fixture of ['#¦# title', 'title\n--¦---', '-¦ word\n- next', '| A | B |\n| --¦- | --- |\n| word | x |']) {
+      if (mode === 'live' && fixture.startsWith('|')) continue;
+      const [left, right] = fixture.split('¦');
+      for (const query of ['/table', '/code', '/h2']) {
+        await prepare(mode, left + right, left.length);
+        await page.keyboard.type(query); await closed(); await waitText(left + query + right);
+      }
+    }
     for (const [inline, offset, query, table] of [
       ['**bold**', 4, '/table', defaultTable],
       ['[label](file.md)', 3, '/table2x2', emptyMarkdownTable(2, 2)!],

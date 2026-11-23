@@ -10,14 +10,15 @@ import { bodyCaret } from './editor/bodyCaret';
 import { applyPrimaryEditorTransactions } from './editor/nativeSelectionRetention';
 import { sourceLinePositionAtTarget } from './editor/domSourceLine';
 import { currentHeadingSuggestions } from './editor/headingSuggestions';
-import { markdownSyntaxContext, type MarkdownInputContext } from './editor/blockInsertion';
+import { blockInsertionLocation, insertedTableLineCount, markdownSyntaxContext, planMarkdownBlockInsertion,
+  planMarkdownBlockWrap, protectedMarkdownEdit, type MarkdownInputContext } from './editor/blockInsertion';
 import { createInputSuggestions, refreshInputSuggestions } from './editor/inputSuggestions';
 import { insertShortcutSnippet, insertSourceCellSnippet } from './editor/shortcutSnippet';
 import type { LinkCandidate } from '../../src/protocol/editorServices';
 import { sourceTableAt, createSourceTableCommandTarget, tableShortcutCommands, type SourceTable } from './editor/sourceTableCommands';
 import type { TableCommand, TableCommandTarget } from './application/tableCommand';
 import { webviewShortcutPlatform } from './helpers/shortcuts';
-import { parseMarkdownTable, serializeDelimitedTable } from './application/delimitedTable';
+import { emptyMarkdownTable, parseMarkdownTable, serializeDelimitedTable } from './application/delimitedTable';
 import { requestMountedTableShortcut, mountedTableClipboardText } from './helpers/tables';
 import { htmlCommentEditing } from './editor/htmlCommentEditing';
 import { nativeSymbolInput, planNativeHtmlCommentToggle } from './editor/nativeTypingAssistance';
@@ -56,7 +57,7 @@ import { isLiveListItemAt, liveModeExtensions, moveLiveHtmlBreakLineEnd, preserv
 import { setLivePointerSelectionActiveEffect } from './editor/livePointerSelection';
 import { detailsBlockStateExtensions } from './helpers/detailsBlocks';
 import { insertMountedTableCellBreak } from './helpers/tables';
-import { insertCodeBlock, sourceCodeBlockLines } from './helpers/codeBlocks';
+import { planCodeBlockRemoval, sourceCodeBlockLines } from './helpers/codeBlocks';
 import { continueLiteralSourceNewline, insertIndentedCodeNewline, insertLiteralSourceNewline } from './editor/indentedCodeEditing';
 import { getCodeBlockSourceLines } from './helpers/blockIndent';
 import { markdownContentStyleTheme } from './helpers/markdownContentStyleTheme';
@@ -117,7 +118,6 @@ import {
   orderedListRenumberTransactionFilter
 } from './helpers/listMarkers';
 import {
-  prepareTableInsertion,
   sourceTableHeaderLineField,
   refreshTableLocalLinkIndicators,
   tableCellEditorOffsetToSourceOffset,
@@ -172,7 +172,7 @@ import { canFormatDisplayMathSource, formatActiveDisplayMathSource, displayMathP
 import { createHtmlSourceEditing } from './editor/htmlSource';
 import { formatActiveHtmlSource, getHtmlEditingRange } from './helpers/htmlContent';
 import { supportedHtmlTags } from '../../src/shared/htmlPolicy';
-import { getMathCompletionBody } from './helpers/displayMathBlocks';
+import { getDisplayMathSource, getMathCompletionBody } from './helpers/displayMathBlocks';
 import {
   ViewportController,
   visualLineContextMargin,
@@ -1304,13 +1304,23 @@ export function createEditor({
   };
 
   const inputMathRanges = [new WeakMap<object, ReturnType<typeof collectLatexMathRanges>>(), new WeakMap<object, ReturnType<typeof collectLatexMathRanges>>()];
-  const inputContext = (state: EditorState, position: number): MarkdownInputContext => {
-    const frontmatter = parseFrontmatterCandidate(state);
-    if (frontmatter && position >= frontmatter.from && position <= frontmatter.to) return 'excluded';
+  const readInputMathRanges = (state: EditorState) => {
     const cache = inputMathRanges[Number(state.facet(latexDelimitersFacet))]!;
     let ranges = cache.get(state.doc);
-    if (!ranges) { ranges = collectLatexMathRanges(readDocumentTextProjection(state.doc), { latexDelimiters: state.facet(latexDelimitersFacet) }); cache.set(state.doc, ranges); }
-    if (ranges.some(range => position > range.from && position < range.to)) return 'excluded';
+    if (!ranges) {
+      ranges = collectLatexMathRanges(readDocumentTextProjection(state.doc), { latexDelimiters: state.facet(latexDelimitersFacet), includeEmptyDisplay: true });
+      cache.set(state.doc, ranges);
+    }
+    return ranges;
+  };
+  const protectedBlockRange = (state: EditorState, from: number, to: number): boolean => {
+    const frontmatter = parseFrontmatterCandidate(state);
+    if (frontmatter && from < frontmatter.to && to >= frontmatter.from) return true;
+    return readInputMathRanges(state).some(range => from < range.to && range.from < to);
+  };
+  const inputContext = (state: EditorState, position: number): MarkdownInputContext => {
+    if (protectedBlockRange(state, position, position)) return 'excluded';
+    if (readInputMathRanges(state).some(range => range.fencedDisplay && (position === range.from || position === range.to))) return 'block';
     return markdownSyntaxContext(state, position);
   };
 
@@ -1349,15 +1359,19 @@ export function createEditor({
     // Slash completion can replace the whole last line. Anchor the retained
     // text before that range, while its geometry still belongs to the old DOM.
     const position = doc.sliceString(line.from, from).trim() ? line.from : Math.max(0, line.from - 1);
+    // A relocated block can leave a focused heading or format span. Its line
+    // stays in place while revealing or hiding source changes the caret inset.
+    const geometry = !focusCell && from === to && from !== view.state.selection.main.head ? undefined : 'caret';
     const top = live && doc.length > 0 && isPositionVisible(to)
-      ? view.coordsAtPos(position, 1)?.top : undefined;
+      ? geometry === 'caret' ? view.coordsAtPos(position, 1)?.top : view.documentTop + view.lineBlockAt(position).top
+      : undefined;
     if (top !== undefined) viewportController.markInteraction();
     const mode = currentMode;
     let acceptedDoc: typeof doc | undefined;
     const isInsertionCurrent = viewportController.captureNavigationCurrentness();
     const retention = top === undefined ? null : viewportController.retainElementTop(
       null, () => null, () => isInsertionCurrent() && currentMode === mode && (!acceptedDoc || view.state.doc === acceptedDoc),
-      { position, top, geometry: 'caret', retainOnLayout: !focusCell }
+      { position, top, geometry, retainOnLayout: !focusCell }
     );
     let inserted = false;
     try {
@@ -1425,16 +1439,54 @@ export function createEditor({
     }
   };
 
-  const insertTableAtSelection = (cols = 3, rows = 2) => {
-    if (getActiveTableInput()) return false;
-    const plan = prepareTableInsertion(view.state, view.state.selection.main, inputContext, cols, rows,
-      Transaction.userEvent.of('input.toolbar'));
-    if (!plan) return false;
-    return withInsertionViewport(plan.point, plan.point, acceptLayout => {
-      view.dispatch(plan.transaction);
-      focusInsertedTable(acceptLayout);
+  const applyBlockEdit = (from: number, to: number, transaction: TransactionSpec,
+    kind: 'table' | 'math' | 'other', tableLines = 0) => {
+    return withInsertionViewport(from, to, acceptLayout => {
+      view.dispatch({ ...transaction, annotations: [Transaction.userEvent.of('input.toolbar'), isolateHistory.of('full'),
+        ...(kind === 'table' ? [insertedTableLineCount.of(tableLines)] : [])] });
+      if (kind === 'table') focusInsertedTable(acceptLayout);
+      else {
+        if (kind === 'math' && currentMode === 'live') view.dispatch({ effects: supersedeLiveInputDerivedWork() });
+        acceptLayout();
+      }
       return true;
-    }, 'cell');
+    }, kind === 'table' ? 'cell' : 'caret');
+  };
+  const insertBlockAtSelection = (block: string, caret: number, kind: 'table' | 'math' | 'other' = 'other') => {
+    if (getActiveTableInput()) return false;
+    const { state } = view;
+    const location = blockInsertionLocation(state, state.selection.main.to, inputContext, protectedBlockRange);
+    if (!location) return false;
+    const plan = planMarkdownBlockInsertion(state, location, block, caret);
+    return applyBlockEdit(location.point, location.point, plan.transaction, kind, plan.lineCount);
+  };
+  const insertTableAtSelection = (cols = 3, rows = 2) => {
+    const table = emptyMarkdownTable(cols, rows);
+    return table !== null && insertBlockAtSelection(table, 2, 'table');
+  };
+  const insertCodeOrMathBlock = (kind: 'code' | 'math') => {
+    const { state } = view, selection = state.selection.main;
+    if (state.readOnly || state.selection.ranges.length !== 1 || getActiveTableInput()) return false;
+    const frontmatter = parseFrontmatterCandidate(state);
+    if (frontmatter && selection.from < frontmatter.to && selection.to >= frontmatter.from) return false;
+    const isMath = kind === 'math';
+    if (isMath && !selection.empty) {
+      const math = readInputMathRanges(state).find(range => range.fencedDisplay && range.from <= selection.from && selection.to <= range.to
+        && state.sliceDoc(range.from, range.from + 2) === '$$' && state.sliceDoc(range.to - 2, range.to) === '$$');
+      const body = math ? getDisplayMathSource(state, math) : null;
+      if (math && body && (selection.from === math.from && selection.to === math.to
+          || selection.from === body.from && selection.to === body.last.to)) {
+        const content = state.sliceDoc(body.from, body.last.to), to = state.doc.lineAt(math.to).to;
+        return applyBlockEdit(math.from, to, { changes: { from: math.from, to, insert: content },
+          selection: EditorSelection.range(math.from, math.from + content.length) }, 'other');
+      }
+    } else if (!isMath && !protectedBlockRange(state, selection.from, selection.to)) {
+      const unwrap = planCodeBlockRemoval(state, selection);
+      if (unwrap) return applyBlockEdit(unwrap.from, unwrap.to, unwrap.transaction, 'other');
+    }
+    if (selection.empty) return insertBlockAtSelection(isMath ? '$$\n\n$$' : '```\n\n```', isMath ? 3 : 4, isMath ? 'math' : 'other');
+    const wrap = planMarkdownBlockWrap(state, selection, inputContext, protectedBlockRange, isMath);
+    return !!wrap && applyBlockEdit(selection.from, selection.to, wrap.transaction, isMath ? 'math' : 'other');
   };
 
   const requestEditorHistoryReplay = async (direction: EditorHistoryDirection): Promise<boolean> => {
@@ -2462,7 +2514,7 @@ export function createEditor({
         createMarkdownContentParser().set({ linkify: false }),
         () => viewportController.captureUserScrollCurrentness()
       )),
-      Prec.highest(createInputSuggestions({ inputContext, mathContext: getMathCompletionBody, requestLinks: requestLinkCandidates, currentHeadings: () => currentHeadingSuggestions(readDocumentTextProjection(view.state.doc)),
+      Prec.highest(createInputSuggestions({ inputContext, protectedBlockRange, mathContext: getMathCompletionBody, requestLinks: requestLinkCandidates, currentHeadings: () => currentHeadingSuggestions(readDocumentTextProjection(view.state.doc)),
         openSettings: openInputSuggestionSettings,
         renderMathPreview: source => renderLatexMathToHtml(source, 'inline'),
         cellCoords: measureTextareaSelectionStart,
@@ -4636,6 +4688,7 @@ export function createEditor({
         return true;
       }
       if (command === 'insertTable') return insertTableAtSelection();
+      if (command === 'blockMath') return insertCodeOrMathBlock('math');
       const formats: Partial<Record<EditorCommandId, EditorFormatAction>> = {
         bold: 'bold', italic: 'italic', inlineCode: 'inlineCode', strike: 'strike', highlight: 'highlight',
         underline: 'underline', kbd: 'kbd', link: 'link', wikiLink: 'wikiLink', image: 'image',
@@ -4649,7 +4702,7 @@ export function createEditor({
         if (command !== 'cellBreak') return false;
       }
       if (command === 'cellBreak') { if (getActiveTableInput()) return insertMountedTableCellBreak(view); return insertTableCellLineBreak(view); }
-      return runEditorCommand(view, command);
+      return runEditorCommand(view, command, protectedBlockRange);
     },
     canInsertSnippet(template: string, documentId: string) { return prepareShortcutSnippet(template, documentId) !== null; },
     insertSnippet(template: string, documentId: string) {
@@ -4699,7 +4752,7 @@ export function createEditor({
 
       if (view.state.selection.ranges.length > 1 && formatMultipleSelections(view, action)) return;
       const blockCommands: Partial<Record<EditorFormatAction, EditorCommandId>> = { bulletList: 'bullet', numberedList: 'ordered', task: 'taskList', quote: 'quote' };
-      if (action === 'heading' || blockCommands[action]) return runEditorCommand(view, action === 'heading' ? `heading${typeof level === 'number' ? level : 1}` as EditorCommandId : blockCommands[action]!);
+      if (action === 'heading' || blockCommands[action]) return runEditorCommand(view, action === 'heading' ? `heading${typeof level === 'number' ? level : 1}` as EditorCommandId : blockCommands[action]!, protectedBlockRange);
       const userEvent = Transaction.userEvent.of('input.toolbar');
       const { state } = view;
       const selection = state.selection.main;
@@ -4716,7 +4769,7 @@ export function createEditor({
 
       switch (action) {
         case 'codeBlock':
-          return insertCodeBlock(view, selection, userEvent);
+          return insertCodeOrMathBlock('code');
         case 'inlineCode':
           return insertInlineCode(view, inlineSelection(), userEvent);
         case 'kbd':
@@ -4733,7 +4786,7 @@ export function createEditor({
         case 'highlight':
           return insertInlineFence(view, inlineSelection(), '==', userEvent);
         case 'hr':
-          return insertHr(view, selection, userEvent);
+          return insertBlockAtSelection('---', 3);
         case 'table':
           return insertTableAtSelection(typeof level === 'object' ? level?.cols ?? 3 : 3, typeof level === 'object' ? level?.rows ?? 2 : 2);
         case 'link':
@@ -5404,29 +5457,6 @@ function insertInlineFence(
   userEvent: Annotation<string>
 ): void {
   return toggleInlineWrapper(view, selection, marker, marker, userEvent);
-}
-
-function insertHr(
-  view: EditorView,
-  selection: InlineSelectionRange | SelectionRange,
-  userEvent: Annotation<string>
-): void {
-  const { state } = view;
-  const line = state.doc.lineAt(selection.from);
-  const lineText = state.doc.sliceString(line.from, line.to);
-  const trimmed = lineText.trim();
-
-  // Blank lines keep this command unambiguous with Setext headings and frontmatter.
-  const before = trimmed ? '\n\n'
-    : line.number === 1 || state.doc.line(line.number - 1).text.trim() ? '\n' : '';
-  const after = line.to === state.doc.length ? '\n\n'
-    : state.doc.line(line.number + 1).text.trim() || line.number + 1 === state.doc.lines ? '\n' : '';
-  const from = trimmed ? line.to : line.from;
-  view.dispatch({
-    changes: { from, to: line.to, insert: before + '---' + after },
-    selection: { anchor: from + before.length + 3 },
-    annotations: userEvent
-  });
 }
 
 function insertLink(

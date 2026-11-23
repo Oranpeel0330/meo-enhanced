@@ -10,7 +10,7 @@ import { isCodeInput } from './pasteAssistance';
 import type { EditorCommandId } from '../../../src/foundation/editingPreferences';
 import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 
-import { markdownCodeRanges } from './blockInsertion';
+import { markdownCodeRanges, protectedMarkdownEdit, type MarkdownBlockGuard } from './blockInsertion';
 import { planHtmlCommentToggle } from '../application/htmlCommentInput';
 import { beginHtmlCommentTemplate } from './htmlCommentEditing';
 import { addAutomaticSymbolPair } from './typingAssistance';
@@ -30,9 +30,14 @@ function selectedLines(view: EditorView) {
   return [...numbers].sort((a, b) => a - b).map(number => state.doc.line(number));
 }
 
-function toggleLines(view: EditorView, command: EditorCommandId): boolean {
-  if (isCodeInput(view)) return false;
+function toggleLines(view: EditorView, command: EditorCommandId, protectedRange: MarkdownBlockGuard): boolean {
   let lines = selectedLines(view);
+  const headings = command.startsWith('heading') ? 'allow' : 'setext';
+  if (view.state.selection.ranges.some(range => {
+    const first = view.state.doc.lineAt(range.from);
+    const last = view.state.doc.lineAt(range.empty ? range.to : range.to - 1);
+    return protectedMarkdownEdit(view.state, first.from, last.to, protectedRange, headings);
+  })) return false;
   const heading = /^heading([1-6])$/.exec(command);
   const setextByLine = new Map<number, SyntaxNode>();
   if (command.startsWith('heading')) {
@@ -121,8 +126,8 @@ function toggleLines(view: EditorView, command: EditorCommandId): boolean {
   return true;
 }
 
-function wrapMath(view: EditorView, block: boolean): boolean {
-  const open = block ? '$$\n' : '$', close = block ? '\n$$' : '$';
+function wrapInlineMath(view: EditorView): boolean {
+  const open = '$', close = '$';
   view.dispatch({ ...view.state.changeByRange(range => {
     const text = view.state.sliceDoc(range.from, range.to);
     let from = range.from, to = range.to, insert = open + text + close, wrapped = true;
@@ -199,9 +204,9 @@ export function canRunCustomEditorCommand(view: EditorView, command: EditorComma
   return true;
 }
 
-export function runEditorCommand(view: EditorView, command: EditorCommandId): boolean {
-  if (/^heading/.test(command) || ['bullet', 'ordered', 'taskList', 'taskDone', 'quote'].includes(command)) return toggleLines(view, command);
-  if (command === 'inlineMath' || command === 'blockMath') return wrapMath(view, command === 'blockMath');
+export function runEditorCommand(view: EditorView, command: EditorCommandId, protectedRange: MarkdownBlockGuard): boolean {
+  if (/^heading/.test(command) || ['bullet', 'ordered', 'taskList', 'taskDone', 'quote'].includes(command)) return toggleLines(view, command, protectedRange);
+  if (command === 'inlineMath') return wrapInlineMath(view);
   const lineCommands = { moveUp: moveLineUp, moveDown: moveLineDown, copyUp: copyLineUp, copyDown: copyLineDown, deleteLine };
   if (command in lineCommands) return structuralLineCommand(view, lineCommands[command as keyof typeof lineCommands]);
   if (command === 'blankAbove' || command === 'blankBelow') {
