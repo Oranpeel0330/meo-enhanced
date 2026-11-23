@@ -7699,6 +7699,10 @@ html[data-editor-appearance='dark'] body.vscode-dark
   background-color: var(--meo-selection-bg);
 }
 
+.cm-editor .has-projected-text-selection :is(.meo-md-html-table-cell-preview, .meo-md-html-table-cell-preview *)::selection {
+  background-color: transparent;
+}
+
 .selection-inline-menu,
 .cm-editor .meo-md-html-table-context-trigger,
 .cm-editor .meo-md-html-table-context-menu,
@@ -9308,6 +9312,10 @@ html[data-meo-ui-contrast='high'] .meo-input-suggestion[aria-selected='true'] :i
   --meo-scrollbar-thumb-active: var(--meo-ui-scrollbar-active);
 }
 .cm-editor.meo-mode-source, .cm-editor.meo-mode-source :is(.cm-scroller, .cm-content, .cm-line) { color: var(--meo-source-foreground); }
+html[data-meo-ui-contrast='high'] .cm-editor.meo-mode-source .cm-content *::selection {
+  color: var(--meo-source-selection-foreground);
+  -webkit-text-fill-color: var(--meo-source-selection-foreground);
+}
 .cm-editor.meo-mode-source .cm-gutterElement.cm-activeLineGutter { color: var(--meo-source-active-line-number); }
 /* Diff rows own their background and gap fill, including fenced code. */
 .cm-editor.meo-mode-source .cm-line.cm-activeLine:not(.meo-diff-added-line):not(.meo-diff-changed-line):not(.meo-git-diff-current-line) { background: var(--meo-source-line) !important; box-shadow: none; }

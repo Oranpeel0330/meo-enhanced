@@ -229,6 +229,27 @@ try {
     }));
     headingResults.push(result);
     assert.equal(Boolean(await headingPage.$('.meo-source-token')), !large, 'The differential must exercise both syntax renderers');
+    for (const [appearance, foreground, background] of [
+      ['dark', 'rgb(0, 0, 0)', 'rgb(255, 255, 255)'], ['light', 'rgb(255, 255, 255)', 'rgb(0, 0, 0)']
+    ] as const) {
+      await headingPage.evaluate(({ appearance, foreground, background, theme }) => {
+        document.body.className = appearance === 'dark' ? 'vscode-high-contrast' : 'vscode-high-contrast-light';
+        const style = document.documentElement.style;
+        style.setProperty('--vscode-editor-selectionForeground', foreground);
+        style.setProperty('--vscode-editor-selectionBackground', background);
+        window.dispatchEvent(new MessageEvent('message', { data: {
+          type: 'vscodeCodeThemeChanged', appearance, vscodeTheme: { ...theme, type: appearance }
+        } }));
+      }, { appearance, foreground, background, theme: headingTheme });
+      const syntax = await headingPage.waitForSelector('.cm-editor.meo-mode-source .cm-line:has(span)');
+      assert.ok(syntax, 'High-contrast fixture includes styled Source syntax');
+      const palettes = await syntax.evaluate(line => [line, ...line.querySelectorAll('span')].map(element => {
+        const selection = getComputedStyle(element, '::selection');
+        return [selection.backgroundColor, selection.color, selection.webkitTextFillColor];
+      }));
+      for (const palette of palettes) assert.deepEqual(palette, [background, foreground, foreground],
+        `${large ? 'optimized' : 'ordinary'}/${appearance}: Source uses the host's selection background and ink`);
+    }
     await headingPage.close();
   }
   assert.deepEqual(headingResults[1], headingResults[0], 'Large Source headings, heading marks and link targets must match the native TextMate path');

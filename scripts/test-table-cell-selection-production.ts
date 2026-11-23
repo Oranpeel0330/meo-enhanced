@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 import type { Page } from 'puppeteer-core';
 import { launchTestBrowser } from './browser-test-helpers';
 import { assessLargeDocument } from '../src/foundation/largeDocument';
@@ -471,6 +472,81 @@ async function checkCrossTablePointerTransfer(page: Page) {
   }
 }
 
+async function checkTextSelectionPaint(page: Page) {
+  const cell = 'tbody tr:first-child td:nth-child(2)';
+  const preview = `${cell} .meo-md-html-table-cell-preview`;
+  const color = [255, 0, 219];
+  const paint = async () => {
+    const box = (await (await page.$(cell))!.boundingBox())!;
+    const buffer = await page.screenshot({ clip: {
+      x: Math.floor(box.x) + 1, y: Math.floor(box.y) + 1,
+      width: Math.floor(box.width) - 2, height: Math.floor(box.height) - 2
+    } });
+    const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const rows = Array.from({ length: info.height }, (_, row) => row).filter(row => {
+      let matches = 0;
+      for (let column = 0; column < info.width; column++) {
+        const offset = (row * info.width + column) * info.channels;
+        if (color.every((channel, index) => data[offset + index] === channel) && ++matches === 2) return true;
+      }
+      return false;
+    });
+    assert.ok(rows.length > 8, 'The selected text visibly paints a background');
+    return { height: box.height, top: rows[0]!, bottom: rows.at(-1)! };
+  };
+  for (const large of [false, true]) {
+    for (const formatted of [false, true]) {
+      const value = formatted ? '**粗体**、*斜体*、~~删除线~~' : '粗体、斜体、删除线';
+      const text = `| A | B |\n| --- | --- |\n| another cell | ${value} |`
+        + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
+      await page.evaluate(({ text, color }) => {
+        const harness = (window as any).TableStabilityHarness;
+        harness.applyBuiltInVisualBaseline('dark');
+        document.documentElement.style.setProperty('--meo-selection-bg', `rgb(${color.join(',')})`);
+        (window as any).__paintEditor = harness.createEditor({
+          parent: document.getElementById('app')!, text, initialMode: 'live', onApplyChanges() {}
+        });
+      }, { text, color });
+      try {
+        await page.waitForSelector(preview);
+        await page.waitForFunction(large => (window as any).TableStabilityHarness
+          .usesLargeDocumentDerivedWorkBudget((window as any).__paintEditor.view.state) === large, {}, large);
+        await page.click('tbody tr:first-child td:first-child .meo-md-html-table-cell-preview');
+        const points = await page.$eval(preview, element => {
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          const nodes: Text[] = [];
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) if ((node as Text).length) nodes.push(node as Text);
+          const point = (node: Text, offset: number) => {
+            const range = document.createRange();
+            range.setStart(node, offset);
+            range.collapse(true);
+            const rect = range.getBoundingClientRect();
+            return { x: rect.left, y: rect.top + rect.height / 2 };
+          };
+          return [point(nodes[0]!, 1), point(nodes.at(-1)!, nodes.at(-1)!.length - 1)] as const;
+        });
+        await page.mouse.move(points[0].x, points[0].y);
+        await page.mouse.down();
+        await page.mouse.move(points[1].x, points[1].y, { steps: 7 });
+        assert.equal(await page.evaluate(() => document.getSelection()?.toString()), '体、斜体、删除');
+        const held = await paint();
+        await page.mouse.up();
+        const released = await paint();
+        const label = `${large ? 'optimized' : 'ordinary'}/${formatted ? 'formatted' : 'plain'}`;
+        assert.deepEqual(released, held, `${label}: mouseup must not change the visible selection band or row height`);
+        assert.equal(await page.$eval(`${cell} textarea`, input => input.value.slice(input.selectionStart, input.selectionEnd)),
+          formatted ? '体**、*斜体*、~~删除' : '体、斜体、删除');
+      } finally {
+        await page.evaluate(() => {
+          (window as any).__paintEditor.destroy();
+          document.documentElement.style.removeProperty('--meo-selection-bg');
+        });
+      }
+    }
+  }
+  console.log('Table drag selection paint remains stable in ordinary and optimized documents');
+}
+
 async function main() {
   const build = await Bun.build({
     entrypoints: [path.join(repoRoot, 'scripts', 'test-table-stability-entry.ts')],
@@ -488,6 +564,10 @@ async function main() {
     await page.setContent('<!doctype html><button id="outside">outside</button><div id="app"></div>');
     await page.addStyleTag({ path: path.join(repoRoot, 'webview', 'src', 'styles.css') });
     await page.addScriptTag({ path: path.join(tempDir, 'bundle.js') });
+    if (!process.argv.some(argument => ['--single-cell-only', '--cross-table-only', '--outline-only'].includes(argument))) {
+      await checkTextSelectionPaint(page);
+      if (process.argv.includes('--paint-only')) return;
+    }
     if (!process.argv.includes('--single-cell-only') && !process.argv.includes('--cross-table-only')) {
       await checkSelectionOutlines(page);
       if (process.argv.includes('--outline-only')) return;

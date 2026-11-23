@@ -300,6 +300,7 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
   style.setProperty('--meo-outline-foreground', color('editor.foreground', fallback['--vscode-editor-foreground']));
   for (const [name, id, legacy] of [
     ['selection', 'editor.selectionBackground', fallback['--vscode-editor-selectionBackground']],
+    ['selection-foreground', 'editor.selectionForeground', 'currentColor'],
     ['inactive-selection', 'editor.inactiveSelectionBackground', fallback['--vscode-editor-selectionBackground']],
     ['line', 'editor.lineHighlightBackground', matchesHost ? 'transparent' : 'var(--meo-document-active-line)'],
     ['line-border', 'editor.lineHighlightBorder', 'transparent'],

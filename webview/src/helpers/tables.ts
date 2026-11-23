@@ -3337,8 +3337,9 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   tableCommandEnvironment: TableCommandEnvironment;
   tableCommandTargetId: string;
   tableCommandTargetRegistration: TableCommandTargetRegistration | null;
-  private selectionDomAnchor: { node: Node; offset: number; cell: HTMLTableCellElement | undefined } | null = null;
+  private selectionDomAnchor: { node: Node; offset: number; cell: HTMLTableCellElement | undefined; projected: boolean } | null = null;
   selectionDomHead: { node: Node; offset: number } | null = null;
+  private pointerTextHighlight: Highlight | null = null;
   measuredHeightCache: RenderedBlockPreviewHeight;
   pendingContextMenuRestore: boolean;
   contextPage: TableContextPage;
@@ -4227,6 +4228,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     };
     const clearNativeTextSelection = (onlyOwned = false) => {
       this.selectionDomAnchor?.cell?.classList.remove(tableCellTextSelectingClass);
+      this.clearPointerTextHighlight();
       this.selectionDomAnchor = null;
       this.selectionDomHead = null;
       const selection = document.getSelection();
@@ -4310,14 +4312,16 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
         runPrimary(() => this.applySelection(null));
         runPrimary(() => {
           const cell = this.domRefs?.cellGrid[effect.cell.row]?.[effect.cell.col];
-          this.selectionDomAnchor = context.domCaret ? { ...context.domCaret, cell } : null;
-          if (effect.anchorCaret === effect.headCaret) return;
           const input = this.cellInput(effect.cell.row, effect.cell.col);
+          const projected = !!input && this.canProjectCellLine(input)
+            && !shouldExpandTableCellForSearch(tableCellEditorValueToSource(input.value), this.searchState);
+          this.selectionDomAnchor = context.domCaret ? { ...context.domCaret, cell, projected } : null;
+          if (effect.anchorCaret === effect.headCaret) return;
           const preview = input?.parentElement?.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
           if (!input || !preview) return;
           const anchor = tableCellEditorOffsetToSourceOffset(input.value, effect.anchorCaret);
           const range = inlineSourceSelectionRanges(preview, anchor, anchor + 1)[0];
-          if (range) this.selectionDomAnchor = { node: range.startContainer, offset: range.startOffset, cell };
+          if (range) this.selectionDomAnchor = { node: range.startContainer, offset: range.startOffset, cell, projected };
         });
         runPrimary(() => {
           const active = document.activeElement;
@@ -4386,6 +4390,29 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     // Once text has been selected, keep the stroke on this cell even if the
     // pointer returns to the starting character before the gesture ends.
     if (selection && !selection.isCollapsed) anchor.cell?.classList.toggle(tableCellTextSelectingClass, true);
+    if (!anchor.projected || !selection?.rangeCount || selection.isCollapsed || !CSS.highlights || typeof Highlight === 'undefined') {
+      this.clearPointerTextHighlight();
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const highlight = this.pointerTextHighlight;
+    if (highlight) {
+      highlight.clear();
+      highlight.add(range);
+    } else {
+      this.pointerTextHighlight = new Highlight(range);
+      CSS.highlights.set('meo-table-cell-selection', this.pointerTextHighlight);
+      anchor.cell?.classList.add('has-projected-text-selection');
+    }
+  }
+
+  private clearPointerTextHighlight() {
+    if (!this.pointerTextHighlight) return;
+    if (CSS.highlights?.get('meo-table-cell-selection') === this.pointerTextHighlight) {
+      CSS.highlights.delete('meo-table-cell-selection');
+    }
+    this.pointerTextHighlight = null;
+    this.selectionDomAnchor?.cell?.classList.remove('has-projected-text-selection');
   }
 
   setSingleCellSelection(coords: CellCoords, origin: 'focus' | 'command') {
@@ -7131,13 +7158,17 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     presentation.highlight = highlight;
   }
 
+  private canProjectCellLine(input: HTMLTextAreaElement): boolean {
+    return input !== this.wholeCellInput && canProjectTableCellLines(input.value);
+  }
+
   private updateCellLinePresentation(input: HTMLTextAreaElement, force = false): boolean {
     const content = input.parentElement;
     const current = this.linePresentation?.input === input ? this.linePresentation : null;
     if (!content?.classList.contains('is-editing')) return false;
     const phase = this.cellSelection.snapshot().phase;
     if (this.composingInput === input || phase === 'text-candidate' || phase === 'dragging') return !!current;
-    const projectLine = input !== this.wholeCellInput && canProjectTableCellLines(input.value);
+    const projectLine = this.canProjectCellLine(input);
     if (!current && !projectLine) return false;
     const preview = content.querySelector<HTMLElement>('.meo-md-html-table-cell-preview');
     if (!preview) return false;
