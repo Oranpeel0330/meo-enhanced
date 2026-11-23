@@ -684,7 +684,24 @@ try {
     if (!wrap.scrollLeft) throw new Error('The horizontal clipping fixture must actually overflow');
   }); await closed();
   await page.evaluate(() => { document.querySelector('.meo-md-html-table-wrap')!.scrollLeft = 0; }); await settlePosition(); await closed();
-  await prepareCell('[x](https://example.invalid/' + 'long-path/'.repeat(80) + ') z');
+  const longLinkCell = '[x](https://example.invalid/' + 'long-path/'.repeat(80) + ') z';
+  await prepareCell(longLinkCell); await page.keyboard.type('/b'); await open();
+  await page.waitForSelector('.meo-md-table-active-source-line');
+  const projectedMenuTop = await page.$eval('.meo-input-suggestions', popup => popup.getBoundingClientRect().top);
+  await page.evaluate(() => {
+    const input = document.activeElement as HTMLTextAreaElement;
+    // Simulate the hidden input's bounds diverging from the projected caret.
+    input.style.transform = 'translateY(300px)';
+    input.dispatchEvent(new Event('scroll'));
+  }); await settlePosition();
+  assert.equal(await page.$eval('.meo-input-suggestions', popup => (popup as HTMLElement).hidden), false);
+  assert.equal(await page.$eval('.meo-input-suggestions', popup => popup.getBoundingClientRect().top), projectedMenuTop);
+
+  await prepareCell(longLinkCell);
+  await page.keyboard.down('Shift'); await page.keyboard.press('F10'); await page.keyboard.up('Shift');
+  await page.click('.meo-md-html-table-context-next');
+  await page.click('button[aria-label="Edit entire cell"]');
+  assert.equal(await page.$('.meo-md-table-active-source-line'), null);
   await page.evaluate(() => {
     const input = document.activeElement as HTMLTextAreaElement;
     input.style.height = '32px'; input.style.maxHeight = '32px'; input.style.overflowY = 'auto';

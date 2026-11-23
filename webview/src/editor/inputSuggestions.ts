@@ -56,7 +56,7 @@ export function createInputSuggestions(options: {
   readonly focusTable?: (acceptLayout: () => void) => void;
   readonly focusMath?: (acceptLayout: () => void) => void;
   /** Viewport coordinates of the painted cell caret. */
-  readonly cellCoords?: (input: HTMLTextAreaElement, offset: number) => { left: number; top: number };
+  readonly cellCoords?: (input: HTMLTextAreaElement, offset: number) => { left: number; top: number; paintedElement: HTMLElement };
   readonly currentHeadings: () => readonly LinkCandidate[];
 }): Extension {
   const plugin = ViewPlugin.fromClass(class {
@@ -489,7 +489,8 @@ export function createInputSuggestions(options: {
       let visibleTop = top, visibleBottom = bottom, visibleLeft = left - 8, visibleRight = right + 8;
       // A cell can be clipped by its own scroll or by a horizontally scrolling table.
       // The menu still uses the editor viewport, so it can extend beyond the small cell.
-      for (let node: HTMLElement | null = this.cellInput; node && node !== scroller; node = node.parentElement) {
+      // A projected caret is painted by the preview, outside the transparent textarea.
+      for (let node = native?.paintedElement ?? this.cellInput; node && node !== scroller; node = node.parentElement) {
         const style = getComputedStyle(node), bounds = node.getBoundingClientRect();
         if (node === this.cellInput || /auto|scroll|hidden|clip/.test(style.overflowY)) {
           visibleTop = Math.max(visibleTop, bounds.top + node.clientTop);

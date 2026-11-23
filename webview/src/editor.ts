@@ -1454,7 +1454,8 @@ export function createEditor({
 
   const measureTextareaSelectionStart = (input: HTMLTextAreaElement, index: number) => {
     const projected = tableCellProjectedCaretRect(input, index);
-    if (projected) return { left: projected.left, top: projected.top };
+    if (projected) return { left: projected.left, top: projected.top,
+      paintedElement: input.parentElement?.querySelector<HTMLElement>('.meo-md-table-active-source-line') ?? input };
     const doc = input.ownerDocument;
     const mirror = doc.createElement('div');
     const marker = doc.createElement('span');
@@ -1494,7 +1495,8 @@ export function createEditor({
     const inputRect = input.getBoundingClientRect();
     const coords = {
       left: inputRect.left + (markerRect.left - mirrorRect.left) - input.scrollLeft,
-      top: inputRect.top + (markerRect.top - mirrorRect.top) - input.scrollTop
+      top: inputRect.top + (markerRect.top - mirrorRect.top) - input.scrollTop,
+      paintedElement: input
     };
 
     mirror.remove();
