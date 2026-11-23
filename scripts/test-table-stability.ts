@@ -218,7 +218,10 @@ async function main() {
       inlineEditingInput.value = '11before `literal` #tag [external](https://example.com) [internal](#target) **bold**';
       inlineEditingInput.setSelectionRange(2, 2);
       inlineEditingInput.dispatchEvent(new Event('input', { bubbles: true }));
-      const inlineEditingPreviewVisibility = getComputedStyle(inlineEditingPreview).visibility;
+      const inlineEditingSourceAndFormatting = inlineEditingPreview
+        .querySelector('.meo-md-table-active-source-line')?.textContent?.startsWith('11before literal') === true
+        && getComputedStyle(inlineEditingPreview).visibility === 'visible'
+        && inlineEditingPreview.querySelectorAll('code, .meo-md-tag, .meo-md-link, .meo-md-strong').length === 5;
       inlineEditingEditor.destroy();
 
       const nestedInlineEditor = await create([
@@ -311,13 +314,15 @@ async function main() {
         rawMarkdown: tableImageInput?.value ?? '',
         previewVisibility: tableImagePreview ? getComputedStyle(tableImagePreview).visibility : null
       };
+      const tableImageReadingPreview = tableImageInput?.parentElement
+        ?.querySelector('.meo-md-html-table-cell-reading-preview .meo-md-image');
       if (tableImageInput) {
         tableImageInput.value += 'x';
         tableImageInput.dispatchEvent(new Event('input', { bubbles: true }));
       }
-      const tableImageRetainedDuringInput = Boolean(tableImage &&
+      const tableImageRetainedDuringInput = Boolean(tableImageReadingPreview &&
         tableImageInput?.parentElement?.querySelector('.meo-md-html-table-cell-preview') === tableImagePreview &&
-        tableImagePreview?.querySelector('.meo-md-image') === tableImage);
+        tableImageInput?.parentElement?.querySelector('.meo-md-html-table-cell-reading-preview .meo-md-image') === tableImageReadingPreview);
       tableImageEditor.destroy();
 
       const bodyLinkEditor = await create('intro\n\n[external](https://example.com) [internal](#target)');
@@ -455,7 +460,7 @@ async function main() {
       const markdownInput = markdownCell.querySelector<HTMLTextAreaElement>('textarea')!;
       const wideText = Array.from(markdownPreview.querySelectorAll<HTMLElement>('[data-meo-source-from]'))
         .find((element) => element.textContent === 'wide')!;
-      const wideNode = wideText.firstChild!;
+      const wideNode = document.createTreeWalker(wideText, NodeFilter.SHOW_TEXT).nextNode()!;
       const wideRange = document.createRange();
       wideRange.setStart(wideNode, 1);
       wideRange.setEnd(wideNode, 2);
@@ -1286,7 +1291,7 @@ async function main() {
         inlineLinkButtons,
         inlineOpenedHrefs,
         linkButtonsPreservedEditingCell,
-        inlineEditingPreviewVisibility,
+        inlineEditingSourceAndFormatting,
         nestedInlineState,
         underscoreBoundaryState,
         tableImageClickState,
@@ -1410,9 +1415,9 @@ async function main() {
       JSON.stringify(result.inlineLinkButtons) !== JSON.stringify(['Open link', 'Jump within document']) ||
       JSON.stringify(result.inlineOpenedHrefs) !== JSON.stringify(['https://example.com', '#target']) ||
       !result.linkButtonsPreservedEditingCell ||
-      result.inlineEditingPreviewVisibility !== 'hidden'
+      !result.inlineEditingSourceAndFormatting
     ) {
-      failures.push(`inline preview link controls were incomplete: ${JSON.stringify({ count: result.inlineDecorationCount, buttons: result.inlineLinkButtons, openedHrefs: result.inlineOpenedHrefs, preservedEditingCell: result.linkButtonsPreservedEditingCell, visibility: result.inlineEditingPreviewVisibility })}`);
+      failures.push(`inline preview link controls were incomplete: ${JSON.stringify({ count: result.inlineDecorationCount, buttons: result.inlineLinkButtons, openedHrefs: result.inlineOpenedHrefs, preservedEditingCell: result.linkButtonsPreservedEditingCell, editingSourceAndFormatting: result.inlineEditingSourceAndFormatting })}`);
     }
     if (
       JSON.stringify(result.nestedInlineState.texts) !== JSON.stringify([
@@ -1447,7 +1452,8 @@ async function main() {
       !result.tableImageClickState.inputFocused ||
       !result.tableImageClickState.editing ||
       result.tableImageClickState.rawMarkdown !== '![pixel](https://example.com/pixel.png)' ||
-      result.tableImageClickState.previewVisibility !== 'hidden' ||
+      result.tableImageClickState.previewText !== result.tableImageClickState.rawMarkdown ||
+      result.tableImageClickState.previewVisibility !== 'visible' ||
       !result.tableImageRetainedDuringInput
     ) {
       failures.push(`table image click did not reveal its Markdown source: ${JSON.stringify(result.tableImageClickState)}`);
@@ -2388,7 +2394,7 @@ async function main() {
       const editor = (window as any).__linkInteractionEditor;
       const firstBodyLine = document.querySelector<HTMLElement>('.cm-content > .cm-line');
       return {
-        urlStillHidden: Boolean(firstBodyLine?.querySelector('.meo-md-link-url-hidden')),
+        hiddenURLs: [...firstBodyLine?.querySelectorAll('.meo-md-link-url-hidden') ?? []].map(element => element.textContent ?? ''),
         selectionHead: editor.view.state.selection.main.head
       };
     });
@@ -2530,7 +2536,8 @@ async function main() {
       tableReentryState.row !== '1' ||
       tableReentryState.col !== '1' ||
       !tableReentryState.interactionActive ||
-      bodyTitleResult.urlStillHidden ||
+      bodyTitleResult.hiddenURLs.some(url => url.includes('https://body.example')) ||
+      !bodyTitleResult.hiddenURLs.some(url => url.includes('#')) ||
       bodyTitleResult.selectionHead > 40 ||
       !interactionResult.tableInteractionActive ||
       interactionResult.pointerSelectionActive ||

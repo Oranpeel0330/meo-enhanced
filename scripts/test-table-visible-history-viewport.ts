@@ -102,10 +102,12 @@ async function main(): Promise<void> {
         const input = Array.from(document.querySelectorAll<HTMLTextAreaElement>('.meo-md-html-table textarea'))
           .find((candidate) => candidate.value.startsWith('C08'));
         const viewport = editor.view.scrollDOM.getBoundingClientRect();
-        const rect = input?.getBoundingClientRect() ?? null;
+        // The projected source editor repositions its transparent textarea
+        // inside the cell. The visible row is the stable reading anchor.
+        const rect = input?.closest('tr')?.getBoundingClientRect() ?? null;
         return {
           scrollTop: editor.view.scrollDOM.scrollTop,
-          targetTop: rect?.top ?? null,
+          rowTop: rect?.top ?? null,
           visible: Boolean(rect && rect.bottom > viewport.top && rect.top < viewport.bottom)
         };
       });
@@ -121,7 +123,7 @@ async function main(): Promise<void> {
       const active = document.activeElement;
       return {
         scrollTop: editor.view.scrollDOM.scrollTop,
-        targetTop: active instanceof HTMLTextAreaElement ? active.getBoundingClientRect().top : null,
+        rowTop: active instanceof HTMLTextAreaElement ? active.closest('tr')?.getBoundingClientRect().top ?? null : null,
         focusedValue: active instanceof HTMLTextAreaElement ? active.value : null
       };
     });
@@ -136,7 +138,7 @@ async function main(): Promise<void> {
       const active = document.activeElement;
       return {
         scrollTop: editor.view.scrollDOM.scrollTop,
-        targetTop: active instanceof HTMLTextAreaElement ? active.getBoundingClientRect().top : null,
+        rowTop: active instanceof HTMLTextAreaElement ? active.closest('tr')?.getBoundingClientRect().top ?? null : null,
         focusedValue: active instanceof HTMLTextAreaElement ? active.value : null
       };
     });
@@ -147,10 +149,10 @@ async function main(): Promise<void> {
       afterUndo.focusedValue !== 'C08' || afterRedo.focusedValue !== 'C08__HISTORY__' ||
       Math.abs(afterUndo.scrollTop - beforeUndo.scrollTop) > 2 ||
       Math.abs(afterRedo.scrollTop - beforeRedo.scrollTop) > 2 ||
-      afterUndo.targetTop === null || beforeUndo.targetTop === null ||
-      afterRedo.targetTop === null || beforeRedo.targetTop === null ||
-      Math.abs(afterUndo.targetTop - beforeUndo.targetTop) > 2 ||
-      Math.abs(afterRedo.targetTop - beforeRedo.targetTop) > 2
+      afterUndo.rowTop === null || beforeUndo.rowTop === null ||
+      afterRedo.rowTop === null || beforeRedo.rowTop === null ||
+      Math.abs(afterUndo.rowTop - beforeUndo.rowTop) > 2 ||
+      Math.abs(afterRedo.rowTop - beforeRedo.rowTop) > 2
     ) {
       throw new Error(`Visible table history moved the viewport: ${JSON.stringify(evidence)}`);
     }
