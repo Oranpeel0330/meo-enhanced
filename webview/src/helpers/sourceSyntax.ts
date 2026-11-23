@@ -213,7 +213,7 @@ export const sourceSyntax = Prec.highest(ViewPlugin.fromClass(class {
       const to = changes?.mapPos(end, insertions.has(end) ? 1 : -1) ?? end;
       if (from >= to || !view.visibleRanges.some(range => from < range.to && to > range.from)) continue;
       const font = token.fontStyle ?? 0;
-      const style = `color:${token.color ?? 'var(--meo-source-foreground)'} !important;-webkit-text-fill-color:currentColor !important;font-style:${font & 1 ? 'italic' : 'normal'} !important;font-weight:${font & 2 ? '700' : 'var(--meo-font-source-weight)'} !important;text-decoration:${[font & 4 ? 'underline' : '', font & 8 ? 'line-through' : ''].filter(Boolean).join(' ') || 'none'} !important`;
+      const style = `color:${token.color ?? 'var(--meo-source-foreground)'} !important;-webkit-text-fill-color:var(--meo-secondary-selection-ink, currentColor) !important;font-style:${font & 1 ? 'italic' : 'normal'} !important;font-weight:${font & 2 ? '700' : 'var(--meo-font-source-weight)'} !important;text-decoration:${[font & 4 ? 'underline' : '', font & 8 ? 'line-through' : ''].filter(Boolean).join(' ') || 'none'} !important`;
       let mark = this.marks.get(style);
       if (!mark) {
         mark = Decoration.mark({ class: 'meo-source-token', attributes: { style } });

@@ -190,7 +190,7 @@ try {
   assert.equal(largeSourceResult.fullTokens, false, 'large Source must use incremental parser coloring instead of full-document TextMate work');
   // Differential regression: the viewport renderer must preserve the native
   // TextMate heading rules, even when a later Setext rule has another style.
-  const headingFixture = '# 一级标题\n\n## Second heading\n\n###### Heading six\n\n[Link label](#target)';
+  const headingFixture = '# 一级标题\n\n## Second heading\n\n###### Heading six\n\n[Link label](#target)\n\n| A | B |\n| --- | --- |\n| **Rich** cell | Plain cell |';
   const headingTheme = { ...darkPlus, tokenColors: [...darkPlus.tokenColors!,
     { scope: 'markup.heading', settings: { foreground: '#c792ea', fontStyle: '' } },
     { scope: 'markup.heading.setext', settings: { foreground: '#abb2bf', fontStyle: 'bold' } },
@@ -237,6 +237,7 @@ try {
         const style = document.documentElement.style;
         style.setProperty('--vscode-editor-selectionForeground', foreground);
         style.setProperty('--vscode-editor-selectionBackground', background);
+        style.setProperty('--vscode-editor-lineHighlightBorder', foreground);
         window.dispatchEvent(new MessageEvent('message', { data: {
           type: 'vscodeCodeThemeChanged', appearance, vscodeTheme: { ...theme, type: appearance }
         } }));
@@ -249,6 +250,36 @@ try {
       }));
       for (const palette of palettes) assert.deepEqual(palette, [background, foreground, foreground],
         `${large ? 'optimized' : 'ordinary'}/${appearance}: Source uses the host's selection background and ink`);
+      const extra = await headingPage.evaluate(() => {
+        const content = document.querySelector('.cm-editor.meo-mode-source .cm-content')!;
+        const view = (content as any).cmTile.root.view;
+        const selection = view.state.selection.constructor;
+        view.focus();
+        view.dispatch({ selection: selection.create([selection.range(0, view.state.doc.line(1).to), selection.cursor(view.state.doc.line(3).from)], 1) });
+        const secondary = content.querySelector('.meo-secondary-selection')!;
+        const activeLine = content.querySelector('.cm-activeLine')!;
+        return { background: getComputedStyle(secondary).backgroundColor,
+          ink: [secondary, ...secondary.querySelectorAll('span')].map(node => getComputedStyle(node).webkitTextFillColor),
+          shadow: getComputedStyle(activeLine).boxShadow };
+      });
+      assert.equal(extra.background, background);
+      assert.ok(extra.ink.every(color => color === foreground), 'Every secondary selection token uses the host ink');
+      assert.match(extra.shadow, /inset/);
+      await headingPage.click('button[data-mode="live"]');
+      await headingPage.waitForSelector('.cm-editor.meo-mode-live .meo-md-html-table');
+      const live = await headingPage.evaluate(() => [
+        ['.meo-mode-live .cm-line .meo-md-link', '::selection'],
+        ['.meo-mode-live td textarea', '::selection'],
+        ['.meo-mode-live td .meo-md-html-table-cell-preview strong', '::highlight(meo-table-cell-selection)']
+      ].map(([selector, pseudo]) => {
+        const element = document.querySelector(selector!);
+        if (!element) throw new Error(`Missing high-contrast fixture: ${selector}`);
+        const style = getComputedStyle(element, pseudo);
+        return [style.backgroundColor, style.webkitTextFillColor];
+      }));
+      assert.deepEqual(live, Array.from({ length: 3 }, () => [background, foreground]), 'Live links and both table selection layers use the host pair');
+      await headingPage.click('button[data-mode="source"]');
+      await headingPage.waitForSelector('.cm-editor.meo-mode-source');
     }
     await headingPage.close();
   }

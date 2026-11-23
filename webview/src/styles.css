@@ -9312,13 +9312,22 @@ html[data-meo-ui-contrast='high'] .meo-input-suggestion[aria-selected='true'] :i
   --meo-scrollbar-thumb-active: var(--meo-ui-scrollbar-active);
 }
 .cm-editor.meo-mode-source, .cm-editor.meo-mode-source :is(.cm-scroller, .cm-content, .cm-line) { color: var(--meo-source-foreground); }
-html[data-meo-ui-contrast='high'] .cm-editor.meo-mode-source .cm-content *::selection {
-  color: var(--meo-source-selection-foreground);
-  -webkit-text-fill-color: var(--meo-source-selection-foreground);
+html[data-meo-ui-contrast='high'] .cm-editor {
+  --meo-selection-bg: var(--meo-high-contrast-selection);
+  --meo-source-active-line-shadow: inset 0 0 0 1px var(--meo-source-line-border);
+}
+html[data-meo-ui-contrast='high'] .cm-editor .cm-content *:not(:is(.is-editing-line, .has-search-match) > textarea)::selection,
+html[data-meo-ui-contrast='high'] .cm-editor .cm-content :is(.cm-line, td, th) *:not(:is(.is-editing-line, .has-search-match) > textarea)::selection {
+  color: var(--meo-high-contrast-selection-foreground) !important;
+  -webkit-text-fill-color: var(--meo-high-contrast-selection-foreground) !important;
+}
+html[data-meo-ui-contrast='high'] ::highlight(meo-table-cell-selection) {
+  color: var(--meo-high-contrast-selection-foreground);
+  -webkit-text-fill-color: var(--meo-high-contrast-selection-foreground);
 }
 .cm-editor.meo-mode-source .cm-gutterElement.cm-activeLineGutter { color: var(--meo-source-active-line-number); }
 /* Diff rows own their background and gap fill, including fenced code. */
-.cm-editor.meo-mode-source .cm-line.cm-activeLine:not(.meo-diff-added-line):not(.meo-diff-changed-line):not(.meo-git-diff-current-line) { background: var(--meo-source-line) !important; box-shadow: none; }
+.cm-editor.meo-mode-source .cm-line.cm-activeLine:not(.meo-diff-added-line):not(.meo-diff-changed-line):not(.meo-git-diff-current-line) { background: var(--meo-source-line) !important; box-shadow: var(--meo-source-active-line-shadow, none); }
 .cm-editor.meo-mode-source .cm-line.meo-src-code-block:not(.cm-activeLine):not(.meo-diff-added-line):not(.meo-diff-changed-line):not(.meo-git-diff-current-line) { background: var(--meo-background) !important; }
 .cm-editor.meo-mode-source:not(.cm-focused) .cm-selectionBackground { background: var(--meo-source-inactive-selection) !important; }
 :is(.more-tools-option, .changes-review-option, .changes-review-snapshot-select, .changes-review-snapshot-action):is(:hover, :focus-visible):not(:disabled) { color: var(--meo-ui-text); background: var(--meo-ui-surface-hover); outline: none; outline-offset: -1px; }
@@ -9340,6 +9349,13 @@ html[data-meo-ui-contrast='high'] :is(.more-tools-option, .changes-review-option
 .meo-secondary-selection { background: var(--meo-content-editor-selectionBackground); }
 .meo-secondary-cursor { border-left-color: var(--meo-foreground); }
 .cm-editor.meo-mode-source .meo-secondary-selection { background: var(--meo-source-selection); }
+html[data-meo-ui-contrast='high'] .cm-editor .meo-secondary-selection { background: var(--meo-high-contrast-selection); }
+html[data-meo-ui-contrast='high'] .cm-editor .meo-secondary-selection,
+html[data-meo-ui-contrast='high'] .cm-editor .meo-secondary-selection * {
+  --meo-secondary-selection-ink: var(--meo-high-contrast-selection-foreground);
+  color: var(--meo-secondary-selection-ink) !important;
+  -webkit-text-fill-color: var(--meo-secondary-selection-ink) !important;
+}
 
 /* Shared foreground hierarchy for peripheral controls and their icons. */
 :is(.mode-toolbar, .more-tools-panel, .heading-dropdown, .table-dropdown, .preview-export-menu, .toolbar-overflow-panel, .selection-inline-menu, .find-panel, .preview-dropdown-panel, .settings-window, .changes-review-panel),

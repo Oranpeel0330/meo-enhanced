@@ -378,10 +378,14 @@ const previewSourcePositionMarkerStyles = `
   stroke-width: 1.8;
 }
 
+[data-meo-preview-high-contrast] .meo-preview-source-position-marker {
+  box-shadow: inset 0 0 0 1px var(--meo-preview-foreground, var(--meo-fg));
+}
+
 @media (forced-colors: active) {
-  .meo-preview-source-position-marker {
-    background: Highlight;
-    opacity: 0.18;
+  :root .meo-preview-source-position-marker {
+    background: color-mix(in srgb, Highlight 18%, transparent);
+    box-shadow: inset 0 0 0 1px Highlight;
     forced-color-adjust: none;
   }
 }
@@ -1838,6 +1842,8 @@ export function createPreviewController({
   };
 
   const syncDocumentBackground = (frameDocument: Document): void => {
+    frameDocument.documentElement.toggleAttribute('data-meo-preview-high-contrast',
+      document.documentElement.dataset.meoUiContrast === 'high');
     // Default follows the document carrier; independent presets and an opposite
     // preview appearance retain their own paired colors. No render is needed.
     const followsCarrier = presetPreference === 'default' && appearance === getEditorAppearance();

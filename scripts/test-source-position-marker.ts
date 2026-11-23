@@ -149,6 +149,42 @@ try {
   assert.equal(markerPresentation.cursorDisplay, 'none');
   assert.equal(markerPresentation.railDisplay, 'none');
   assert.equal(markerPresentation.usesTextCursorIcon, true);
+  await page.evaluate(() => {
+    document.body.classList.add('vscode-high-contrast');
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: null } }));
+  });
+  await page.waitForFunction(() => {
+    const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!;
+    const marker = frame.contentDocument?.querySelector<HTMLElement>('.meo-preview-source-position-marker');
+    return marker && !marker.hidden && frame.contentWindow?.getComputedStyle(marker).boxShadow.includes('inset');
+  });
+  const contrastSession = await page.createCDPSession();
+  try {
+    await contrastSession.send('Emulation.setEmulatedMedia', { features: [{ name: 'forced-colors', value: 'active' }] });
+    assert.ok(await page.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!;
+      const doc = frame.contentDocument!, view = frame.contentWindow!;
+      const marker = doc.querySelector<HTMLElement>('.meo-preview-source-position-marker')!;
+      const witness = doc.createElement('span');
+      witness.style.cssText = 'color:Highlight;forced-color-adjust:none';
+      doc.body.append(witness);
+      const systemColor = view.getComputedStyle(witness).color;
+      witness.remove();
+      return view.matchMedia('(forced-colors: active)').matches && view.getComputedStyle(marker).boxShadow.includes(systemColor);
+    }), 'System forced colors take precedence over the host theme at the position marker');
+  } finally {
+    await contrastSession.send('Emulation.setEmulatedMedia', { features: [] });
+    await contrastSession.detach();
+  }
+  await page.evaluate(() => {
+    document.body.classList.remove('vscode-high-contrast');
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'vscodeCodeThemeChanged', appearance: 'dark', vscodeTheme: null } }));
+  });
+  await page.waitForFunction(() => {
+    const frame = document.querySelector<HTMLIFrameElement>('.preview-frame')!;
+    const marker = frame.contentDocument?.querySelector<HTMLElement>('.meo-preview-source-position-marker');
+    return marker && !marker.hidden && frame.contentWindow?.getComputedStyle(marker).boxShadow === 'none';
+  });
   assert.equal(markerPresentation.railBorderRadius, '0px');
   assert.ok(Math.abs(markerPresentation.markerLeft) <= 0.5, JSON.stringify(markerPresentation));
   assert.ok(Math.abs(markerPresentation.markerRight - markerPresentation.positioningWidth) <= 0.5, JSON.stringify(markerPresentation));

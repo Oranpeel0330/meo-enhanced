@@ -298,9 +298,10 @@ export function applyUiTheme(appearance: 'light' | 'dark', matchesHost: boolean,
   })) style.setProperty('--meo-' + property, `var(--meo-ui-${role})`);
   // Source chrome and document navigation retain their native content palette.
   style.setProperty('--meo-outline-foreground', color('editor.foreground', fallback['--vscode-editor-foreground']));
+  style.setProperty('--meo-high-contrast-selection', color('editor.selectionBackground', 'Highlight'));
+  style.setProperty('--meo-high-contrast-selection-foreground', color('editor.selectionForeground', 'HighlightText'));
   for (const [name, id, legacy] of [
     ['selection', 'editor.selectionBackground', fallback['--vscode-editor-selectionBackground']],
-    ['selection-foreground', 'editor.selectionForeground', 'currentColor'],
     ['inactive-selection', 'editor.inactiveSelectionBackground', fallback['--vscode-editor-selectionBackground']],
     ['line', 'editor.lineHighlightBackground', matchesHost ? 'transparent' : 'var(--meo-document-active-line)'],
     ['line-border', 'editor.lineHighlightBorder', 'transparent'],
