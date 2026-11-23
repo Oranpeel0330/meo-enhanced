@@ -491,26 +491,34 @@ async function main(): Promise<void> {
       assert.equal(observation.focus, true);
     }
 
-    await page.evaluate((text) => {
+    const replacements = await page.evaluate((text) => {
       const state = (window as any).__imageLifecycle;
+      const source = 'projection-stable.png';
+      const waiters = state.pending.get(source);
+      const signals: AbortSignal[] = (window as any).__imageLifecycleMetrics.resolverSignalsBySrc[source];
       state.projectionMutations.length = 0;
+      const before = waiters.length;
       state.projection.setText(text);
+      const afterFirst = waiters.length;
+      const intermediate = signals.at(-1);
       state.projection.setText(text);
+      return { before, afterFirst, afterSecond: waiters.length,
+        intermediateAborted: intermediate?.aborted, latestAborted: signals.at(-1)?.aborted };
     }, projectionText);
-    await page.waitForFunction(() => (
-      (window as any).__imageLifecycle.pending.get('projection-stable.png')?.length === 4
-    ));
-    await page.evaluate(() => {
+    assert.deepEqual(replacements, { before: replacements.before, afterFirst: replacements.before + 1,
+      afterSecond: replacements.before + 2, intermediateAborted: true, latestAborted: false },
+      'each replacement starts a request and the newest generation retires its predecessor');
+    await page.evaluate((index) => {
       const state = (window as any).__imageLifecycle;
-      state.pending.get('projection-stable.png')?.[2]?.(state.svg('intermediate-external', '#a66'));
-    });
+      state.pending.get('projection-stable.png')[index](state.svg('intermediate-external', '#a66'));
+    }, replacements.before);
     await waitForFrames(page, 6);
     assert.equal(await page.$('#projection .meo-md-image-img'), null,
       'an intermediate external completion replaced the latest projection');
-    await page.evaluate(() => {
+    await page.evaluate((index) => {
       const state = (window as any).__imageLifecycle;
-      state.pending.get('projection-stable.png')?.[3]?.(state.svg('latest-external', '#6a8'));
-    });
+      state.pending.get('projection-stable.png')[index](state.svg('latest-external', '#6a8'));
+    }, replacements.afterFirst);
     await page.waitForFunction(() => (
       document.querySelector('#projection .meo-md-image-img')
         ?.getAttribute('src')?.includes('latest-external')
