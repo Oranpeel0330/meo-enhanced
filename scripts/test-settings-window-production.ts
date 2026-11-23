@@ -1203,7 +1203,8 @@ try {
       // already visible and must preserve the interactive page's viewport.
       await (await page.$('.meo-input-suggestions:not([hidden])'))!.screenshot({ path: path.join(folder, `menu-${language}-${appearance}.png`), captureBeyondViewport: false });
       await (await page.$('.meo-suggestion-guidance'))!.screenshot({ path: path.join(folder, `guidance-${language}-${appearance}.png`), captureBeyondViewport: false });
-      const documentLine = await page.$eval('.meo-md-kbd', key => key.closest('.cm-line')!.getBoundingClientRect().toJSON());
+      const documentKbd = '.editor-host .cm-content kbd';
+      const documentLine = await page.$eval(documentKbd, key => key.closest('.cm-line')!.getBoundingClientRect().toJSON());
       await page.screenshot({ path: path.join(folder, `document-${language}-${appearance}.png`), captureBeyondViewport: false, clip: {
         x: Math.floor(documentLine.x) - 6, y: Math.floor(documentLine.y) - 4,
         width: Math.min(420, Math.ceil(documentLine.width) + 12), height: Math.ceil(documentLine.height) + 8
@@ -1250,7 +1251,7 @@ try {
         return view.hasFocus && view.state.doc.toString().endsWith('/');
       }), true, 'closing the styled settings restores the unchanged document');
       if (appearance === 'dark' && language === 'en') {
-        const documentKey = () => page.$eval('.meo-md-kbd', cap => {
+        const documentKey = () => page.$eval(documentKbd, cap => {
           const style = getComputedStyle(cap); return [style.backgroundColor, style.color, style.borderColor, style.boxShadow];
         });
         const documentKeyBefore = await documentKey();

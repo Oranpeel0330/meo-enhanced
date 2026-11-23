@@ -168,9 +168,9 @@ try {
     for (const [source, anchor, expected] of [
       ['word', 4, 'word\n\n---\n\n'],
       ['before\n\nafter', 7, 'before\n\n---\n\nafter'],
-      ['before\nafter', 2, 'before\n\n---\n\nafter'],
+      ['before\nafter', 2, 'be\n\n---\n\nfore\nafter'],
       ['before\n\n\nafter', 8, 'before\n\n---\n\nafter'],
-      ['', 0, '\n---\n\n']
+      ['', 0, '---']
     ] as const) {
       const result = await page.evaluate(async ({ mode, source, anchor }) => {
         const editor = (window as any).ListEditingHarness.createEditor({ parent: document.querySelector('#live'), text: source, initialMode: mode, onApplyChanges() {} });

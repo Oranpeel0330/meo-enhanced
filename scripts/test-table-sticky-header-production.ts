@@ -117,7 +117,11 @@ async function main(): Promise<void> {
     }) => {
       const geometryPage = await browser.newPage();
       await geometryPage.setViewport({ width: 960, height: 430, deviceScaleFactor: scenario.dpr });
-      await geometryPage.setContent('<!doctype html><div id="outer"><div class="spacer"></div><div id="ancestor"><div id="host"></div></div><div class="tail"></div></div>');
+      await geometryPage.exposeFunction('scrollStickyThreshold', async (x: number, y: number, deltaY: number) => {
+        await geometryPage.mouse.move(x, y);
+        await geometryPage.mouse.wheel({ deltaY });
+      });
+      await geometryPage.setContent('<!doctype html><html data-editor-appearance="dark"><body class="vscode-dark"><div id="outer"><div class="spacer"></div><div id="ancestor"><div id="host"></div></div><div class="tail"></div></div>');
       await geometryPage.addStyleTag({ path: path.join(root, 'webview', 'src', 'styles.css') });
       await geometryPage.addStyleTag({ content: `
         :root{--meo-background:#24292e;--meo-inset-background:#2a2d2f;--meo-foreground:#e6edf3;--meo-semantic-tableBorder:#474b50;--meo-semantic-tableHeaderBackground:#314159}
@@ -225,10 +229,13 @@ async function main(): Promise<void> {
             beforeVisible
           })}`);
         }
-        await settle(() => {
-          scroller.scrollTop = 160;
-          scroller.dispatchEvent(new Event('scroll'));
-        }, () => true);
+        // A trusted wheel transfers the editor's viewport ownership before
+        // crossing the sticky threshold, as it does during reading.
+        const bounds = scroller.getBoundingClientRect();
+        await (window as any).scrollStickyThreshold(bounds.left + 24, bounds.top + 70, Math.ceil(beforeGap * 1.5 + 48));
+        for (let frame = 0; frame < 8; frame++) {
+          await new Promise<void>(resolve => nativeFrame(() => resolve()));
+        }
         const afterGeometry = geometry();
         const afterGap = table.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
         if (!(afterGap <= 0) || !afterGeometry.visible) {

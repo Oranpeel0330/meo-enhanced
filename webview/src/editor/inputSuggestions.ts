@@ -101,6 +101,21 @@ export function createInputSuggestions(options: {
     readonly windowBlur = () => { this.dismissed = true; this.htmlActivation = null; this.slash = null; this.clear(); };
     readonly nativeEvent = (event: Event) => {
       const input = event.target;
+      if (event instanceof MouseEvent && event.type === 'click' && event.isTrusted && event.button === 0 && input instanceof Element) {
+        const table = input.closest('.meo-md-html-table-wrap');
+        if (!table) return;
+        // The cell can switch from painted text to a textarea during the click.
+        // Read the accepted focus and caret after the table finishes that switch.
+        queueMicrotask(() => {
+          const document = this.view.dom.ownerDocument;
+          const active = document.activeElement;
+          if (this.disposed || !(active instanceof HTMLTextAreaElement) || !table.contains(active)
+            || document.elementFromPoint(event.clientX, event.clientY) !== active) return;
+          this.dismissed = false;
+          this.schedule();
+        });
+        return;
+      }
       if (!(input instanceof HTMLTextAreaElement) || !input.closest('.meo-md-html-table-wrap') || !this.view.dom.contains(input)) return;
       if (event.type === 'keydown') {
         if (this.keydown(event as KeyboardEvent)) event.stopImmediatePropagation();
@@ -150,7 +165,7 @@ export function createInputSuggestions(options: {
       this.popup.className = 'meo-input-suggestions'; this.popup.hidden = true; this.popup.setAttribute('role', 'group');
       this.popup.id = 'meo-input-suggestions-' + createRequestPrefix();
       view.dom.ownerDocument.body.append(this.popup);
-      for (const type of ['input', 'keydown', 'select', 'pointerup', 'compositionstart', 'compositionend', 'focusout']) view.dom.addEventListener(type, this.nativeEvent, type === 'keydown' || type.startsWith('composition'));
+      for (const type of ['input', 'keydown', 'select', 'pointerup', 'click', 'compositionstart', 'compositionend', 'focusout']) view.dom.addEventListener(type, this.nativeEvent, type === 'keydown' || type.startsWith('composition'));
       view.dom.ownerDocument.addEventListener('scroll', this.reposition, true);
       view.dom.ownerDocument.defaultView?.addEventListener('resize', this.reposition);
       view.dom.ownerDocument.defaultView?.addEventListener('blur', this.windowBlur);
@@ -744,7 +759,7 @@ export function createInputSuggestions(options: {
     }
     destroy() {
       this.disposed = true; this.clear(); this.popup.remove();
-      for (const type of ['input', 'keydown', 'select', 'pointerup', 'compositionstart', 'compositionend', 'focusout']) this.view.dom.removeEventListener(type, this.nativeEvent, type === 'keydown' || type.startsWith('composition'));
+      for (const type of ['input', 'keydown', 'select', 'pointerup', 'click', 'compositionstart', 'compositionend', 'focusout']) this.view.dom.removeEventListener(type, this.nativeEvent, type === 'keydown' || type.startsWith('composition'));
       this.view.dom.ownerDocument.removeEventListener('scroll', this.reposition, true);
       this.view.dom.ownerDocument.defaultView?.removeEventListener('resize', this.reposition);
       this.view.dom.ownerDocument.defaultView?.removeEventListener('blur', this.windowBlur);

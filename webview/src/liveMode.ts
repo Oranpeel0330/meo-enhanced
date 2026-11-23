@@ -81,7 +81,7 @@ import {
   isThematicBreakLine,
   type FrontmatterInfo
 } from './helpers/frontmatter';
-import { isWikiLinkNode, parseWikiLinkData, getWikiLinkStatus, getWikiLinkIssue } from './helpers/wikiLinks';
+import { isWikiLinkNode, parseWikiLinkData, getWikiLinkStatus, getWikiLinkIssue, wikiLinkSourceRange } from './helpers/wikiLinks';
 import {
   createMissingLocalLinkIndicator,
   isMissingLocalLinkTarget
@@ -1580,11 +1580,14 @@ function addAutolinkDecorations(builder: DecorationCollector, state: EditorState
   addTrimmedUrlLinkMark(builder, urlNode.from, urlNode.to, rawUrl, href, !editing);
 }
 
-function addWikiLinkDecorations(builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, editing: boolean): boolean {
+function addWikiLinkDecorations(
+  builder: DecorationCollector, state: EditorState, node: SyntaxNodeRef, isEditing: (from: number, to: number) => boolean
+): boolean {
   const wikiLink = parseWikiLinkData(state, node);
   if (!wikiLink) {
     return false;
   }
+  const editing = isEditing(wikiLink.openFrom, wikiLink.closeTo);
 
   const hasVisibleText = wikiLink.textFrom >= 0 && wikiLink.textTo > wikiLink.textFrom;
   if (wikiLink.href && hasVisibleText) {
@@ -1653,14 +1656,30 @@ function liveInlineSource(state: EditorState, tree: Tree, math: readonly Documen
   }
   const active = selections.map(selection => {
     const candidates: InlineEditRange[] = [];
+    const { from } = selection;
     for (const side of selection.empty ? [-1, 1] as const : [1] as const) {
-      for (let node: SyntaxNode | null = tree.resolve(selection.from, side); node; node = node.parent) {
+      for (let node: SyntaxNode | null = tree.resolve(from, side); node; node = node.parent) {
         if (!markdownInlineSourceNodeNames.has(node.name)) continue;
-        if (node.name === 'Link' && !isWikiLinkNode(state, node) && !hrefFromSourceLinkNode(state, node)
-          && !node.getChild('URL')) continue;
+        if (node.name === 'Link') {
+          const wiki = wikiLinkSourceRange(state, node);
+          if (wiki) {
+            candidates.push(wiki);
+            continue;
+          }
+          if (!hrefFromSourceLinkNode(state, node) && !node.getChild('URL')) continue;
+        }
         candidates.push(node);
       }
     }
+    // The Markdown parser can leave the outer Wiki brackets outside its Link node.
+    const addWikiAtEdge = (position: number, side: -1 | 1) => {
+      for (let node: SyntaxNode | null = tree.resolve(position, side); node; node = node.parent) {
+        const range = wikiLinkSourceRange(state, node);
+        if (range && (side < 0 ? range.to : range.from) === from) candidates.push(range);
+      }
+    };
+    if (state.sliceDoc(from, Math.min(from + 2, state.doc.length)) === '[[') addWikiAtEdge(from + 1, 1);
+    if (selection.empty && from >= 2 && state.sliceDoc(from - 2, from) === ']]') addWikiAtEdge(from - 1, -1);
     const opaque = [
       ...inlineRangesAt(math, selection).filter(range => !range.fencedDisplay),
       ...inlineRangesAt(footnotes.references, selection).filter(reference => reference.definition)
@@ -2433,10 +2452,10 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
           }
           return;
         }
-        const editingLink = inlineSource.editing(node.from, node.to);
-        if (addWikiLinkDecorations(ranges, state, node, editingLink)) {
+        if (addWikiLinkDecorations(ranges, state, node, inlineSource.editing)) {
           return;
         }
+        const editingLink = inlineSource.editing(node.from, node.to);
         // Lezer also emits Link nodes for unresolved reference candidates such
         // as [~], [-] and [label]. They are prose until a target resolves.
         if (!findChildNode(node, 'URL') && !hrefFromSourceLinkNode(state, node.node)) {
@@ -4087,14 +4106,16 @@ function rebuildLiveSelectionBlocks(decorations: DecorationSet, transaction: Tra
   for (const selection of [sourcePresentationSelection(before), sourcePresentationSelection(state), before.selection, state.selection]) for (const range of selection.ranges) {
     if (state.doc.lineAt(range.to).number - state.doc.lineAt(range.from).number > 128) return;
   }
-  const previousTree = acceptedLiveMarkdownSyntax(before);
-  const tree = markdownStructureAvailable(state) ? resolvedSyntaxTree(state, 0) : previousTree;
+  // An unchanged document keeps the accepted outer tree for viewport and
+  // selection work. An equivalent parser publication must not replace its
+  // rendered-block index during scrolling.
+  const tree = acceptedLiveMarkdownSyntax(before);
   if (tree.length !== state.doc.length) return;
   // A caret transaction can publish the already completed parse too. Only
   // accept that publication when both complete outer Markdown trees agree;
   // a genuinely extended/inconclusive syntax result still takes the full path.
-  if (syntaxTreeChanged(transaction) && (previousTree.length !== before.doc.length
-    || !hasSameLiveMarkdownSyntax(previousTree, tree))) return;
+  if (syntaxTreeChanged(transaction) && markdownStructureAvailable(state)
+    && !hasSameLiveMarkdownSyntax(tree, resolvedSyntaxTree(state, 0))) return;
   return withMarkdownSyntaxSnapshot(state, tree, () => rebuildLiveSelectionWithSyntax(decorations, transaction, tree));
 }
 
@@ -4740,9 +4761,9 @@ function projectLiveLocalChange(decorations: DecorationSet, before: EditorState,
     && oldParagraph && newParagraph && oldParagraph.from === newParagraph.from
     && changes.mapPos(oldParagraph.to, 1) === newParagraph.to) {
     markLiveInputPresentationMapped(state);
-    projectUnchangedLiveRenderedBlocks(before, state, changes, oldTree, newTree);
+    projectUnchangedLiveRenderedBlocks(before, state, changes, oldTree);
   }
-  if (unchangedParagraphMembership) projectUnchangedLiveRenderedBlocks(before, state, changes, oldTree, newTree);
+  if (unchangedParagraphMembership) projectUnchangedLiveRenderedBlocks(before, state, changes, oldTree);
   completeLiveDecorationSets.add(result);
   return result;
 }
@@ -4915,6 +4936,23 @@ const liveDecorationField = StateField.define<DecorationSet>({
           if (table !== undefined) return table;
         }
       }
+      if (transaction.isUserEvent('input.table-exit')) {
+        // Keep the table's old range while projecting the appended newline as prose.
+        const end = transaction.startState.doc.length;
+        let trailingTable: Range<Decoration> | undefined;
+        decorations.between(end, end, (from, to, decoration) => {
+          if (to === end && decoration.spec.meoTable) trailingTable = decoration.range(from, to);
+        });
+        if (trailingTable) {
+          const tableStart = trailingTable.from;
+          const otherDecorations = updateLivePresentationRanges(decorations, {
+            filterFrom: tableStart, filterTo: end,
+            filter: (from, to, decoration) => from !== tableStart || to !== end || !decoration.spec.meoTable
+          });
+          liveDecorationMetadata.set(transaction.state, { complete: false });
+          return updateLivePresentationRanges(mapLiveInputDerivedDecorations(otherDecorations, transaction), { add: [trailingTable] });
+        }
+      }
       const taskToggle = projectLiveTaskToggle(decorations, transaction);
       if (taskToggle !== undefined) return taskToggle;
       const tableCommand = projectLiveTableCommand(decorations, transaction);
@@ -4936,7 +4974,7 @@ const liveDecorationField = StateField.define<DecorationSet>({
           if (!isLiveInputDerivedWorkPending(transaction.startState) || hasMappedLiveInputPresentation(transaction.startState)) {
             markLiveInputPresentationMapped(transaction.state);
             projectUnchangedLiveRenderedBlocks(transaction.startState, transaction.state, transaction.changes,
-              resolvedSyntaxTree(transaction.startState, 0), resolvedSyntaxTree(transaction.state, 0));
+              resolvedSyntaxTree(transaction.startState, 0));
           }
           if (!isEmptyDecorationSet(mapped.decorations)) completeLiveDecorationSets.add(mapped.decorations);
           return mapped.decorations;

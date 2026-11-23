@@ -365,13 +365,12 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
   const frontmatterHtml = github && extractedFrontmatter.frontmatterHtml && !extractedFrontmatter.frontmatterHtml.includes('meo-export-frontmatter-source')
       ? renderGithubFrontmatter(originalSourceLines, extractedFrontmatter.body.sourceLines[0] ?? originalSourceLines.length + 1)
       : extractedFrontmatter.frontmatterHtml;
-  const sanitize = (rawHtml: string): RenderMarkdownResult => {
-  const customTags = github ? [] : [...new Set(getHtmlTagNames(rawHtml).filter(isCustomHtmlTag))];
-  const html = sanitizeHtml(github ? replaceGithubEmoji(linkifyGithubFilteredHtml(addGithubDetailsSummary(stripGithubSelectMarkup(rawHtml))), deferImageSrc) : rawHtml, {
+  // A window can render thousands of fragments of the same document.
+  // Reuse its base policy and extend it only for custom tags in a fragment.
+  const sanitizeOptions = {
     allowedTags: [
       ...sanitizeHtml.defaults.allowedTags,
       ...(github ? [] : renderedHtmlTagNames),
-      ...customTags,
       ...(github ? [...githubHtmlTags, 'input'] : []),
       'mark',
       'details',
@@ -405,7 +404,6 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
       'polyline'
     ],
     allowedAttributes: renderedHtmlAttributes({
-      ...Object.fromEntries(customTags.map(tag => [tag, getSupportedHtmlAttributes(tag)])),
       ...(github ? { input: ['type', 'disabled', 'checked', 'aria-label'] } : {}),
       ...(github ? Object.fromEntries(Object.entries(githubHtmlAttributes).filter(([tag]) => !['*', 'a', 'img', 'ol', 'th', 'td', 'p', 'div', 'span', 'details'].includes(tag))) : {}),
       ...(github ? { source: ['srcset', 'data-meo-deferred-image-srcset'] } : {}),
@@ -527,9 +525,19 @@ export function prepareMarkdownPresentation(options: RenderMarkdownOptions): Mar
         return { tagName, attribs: next };
       }
     }
-  });
-
-  return { html, hasMermaid, hasMath };
+  } satisfies sanitizeHtml.IOptions;
+  const sanitize = (rawHtml: string): RenderMarkdownResult => {
+    const customTags = github ? [] : [...new Set(getHtmlTagNames(rawHtml).filter(isCustomHtmlTag))];
+    const options = customTags.length ? {
+      ...sanitizeOptions,
+      allowedTags: [...sanitizeOptions.allowedTags, ...customTags],
+      allowedAttributes: {
+        ...Object.fromEntries(customTags.map(tag => [tag, getSupportedHtmlAttributes(tag)])),
+        ...sanitizeOptions.allowedAttributes
+      }
+    } : sanitizeOptions;
+    const source = github ? replaceGithubEmoji(linkifyGithubFilteredHtml(addGithubDetailsSummary(stripGithubSelectMarkup(rawHtml))), deferImageSrc) : rawHtml;
+    return { html: sanitizeHtml(source, options), hasMermaid, hasMath };
   };
   const prefix = options.contentOnly ? '' : tableOfContentsHtml + frontmatterHtml;
   const prefixBlocks: MarkdownPresentationBlock[] = prefix ? [{ index: 0, sourceLine: 1,

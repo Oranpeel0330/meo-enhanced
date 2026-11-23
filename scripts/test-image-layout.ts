@@ -458,6 +458,7 @@ async function main() {
     }, largeSource.slice(beforeViewer.length));
     await page.waitForFunction(() => (window as any).TableStabilityHarness.usesLargeDocumentDerivedWorkBudget(
       (window as any).__imageLayoutEditor.view.state));
+    await page.hover('.meo-md-image-img');
     await page.click(openViewer);
     await page.waitForSelector('.meo-md-image-fullscreen-img');
     await page.mouse.move(600, 450);

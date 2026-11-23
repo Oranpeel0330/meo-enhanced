@@ -36,26 +36,38 @@ export interface LiveCollapsedGitBlock {
 }
 
 const renderedBlockCache = new WeakMap<EditorState, { tree: any; blocks: LiveRenderedBlock[] }>();
-const renderedSourceCache = new WeakMap<EditorState['doc'], {
-  tree: Tree; source: DiscoveredMarkdownBlock[]; renderer: DocumentBlocksPort | undefined;
+type RenderedSource = {
+  source: DiscoveredMarkdownBlock[]; renderer: DocumentBlocksPort | undefined;
   rendererRevision: object | undefined; htmlFrom: number | undefined; blocks: LiveRenderedBlock[];
-}>();
+};
 type DiscoveredBlock = DiscoveredMarkdownBlock;
-// Discovery depends on text and the resolved parse. Selection and HTML editing
-// only filter that discovery; they must not invalidate its whole-document scans.
-const discoveredBlockCache = new WeakMap<EditorState['doc'], {
-  tree: Tree; tabSize: number; blocks: DiscoveredBlock[];
+type DiscoveredSource = { tabSize: number; blocks: DiscoveredBlock[] };
+type LiveBlockSourceCache = {
+  discovered: WeakMap<Tree, DiscoveredSource>;
+  rendered: WeakMap<Tree, RenderedSource>;
   // A proven source projection remains valid while the parser publishes its
   // next tree. This certifies block membership, never parser completeness.
-  projected?: { language: Language | null };
-}>();
+  projected?: DiscoveredSource & { language: Language | null };
+};
+const liveBlockSources = new WeakMap<EditorState['doc'], LiveBlockSourceCache>();
+
+function liveBlockSourceCache(doc: EditorState['doc']): LiveBlockSourceCache {
+  let cache = liveBlockSources.get(doc);
+  if (!cache) {
+    cache = { discovered: new WeakMap(), rendered: new WeakMap() };
+    liveBlockSources.set(doc, cache);
+  }
+  return cache;
+}
 
 export function prepareLiveBlockContext(state: EditorState, tree: Tree): DiscoveredMarkdownBlock[] {
   return withMarkdownSyntaxSnapshot(state, tree, () => discoverRenderedBlocks(state, tree));
 }
 
 export function adoptLiveBlockContext(doc: EditorState['doc'], tree: Tree, tabSize: number, blocks: DiscoveredMarkdownBlock[]): void {
-  discoveredBlockCache.set(doc, { tree, tabSize, blocks });
+  const cache = liveBlockSourceCache(doc);
+  cache.projected = undefined;
+  cache.discovered.set(markdownStructureIdentity(tree), { tabSize, blocks });
 }
 
 /** The caller proves a complete plain-prose projection with unchanged rich
@@ -65,14 +77,15 @@ export function projectUnchangedLiveRenderedBlocks(
   before: EditorState,
   state: EditorState,
   changes: ChangeDesc,
-  oldTree: Tree,
-  newTree: Tree
+  oldTree: Tree
 ): void {
-  const previous = discoveredBlockCache.get(before.doc);
+  const cache = liveBlockSources.get(before.doc);
   const sourceLanguage = state.facet(language);
+  const projected = cache?.projected;
+  const previous = projected?.language === sourceLanguage ? projected
+    : oldTree.length === before.doc.length ? cache?.discovered.get(markdownStructureIdentity(oldTree)) : undefined;
   if (!previous || before.facet(language) !== sourceLanguage || before.tabSize !== state.tabSize
-    || previous.tabSize !== state.tabSize || !(previous.projected?.language === sourceLanguage
-      || markdownStructureIdentity(previous.tree) === markdownStructureIdentity(oldTree) && oldTree.length === before.doc.length)) return;
+    || previous.tabSize !== state.tabSize) return;
   let unchangedLines = true;
   changes.iterChangedRanges((from, to, nextFrom, nextTo) => {
     if (before.doc.lineAt(from).number !== before.doc.lineAt(to).number
@@ -103,7 +116,7 @@ export function projectUnchangedLiveRenderedBlocks(
     }
     return { block: mapped, htmlFrom: htmlFrom === undefined ? undefined : changes.mapPos(htmlFrom, 1) };
   });
-  discoveredBlockCache.set(state.doc, { tree: newTree, tabSize: state.tabSize, blocks, projected: { language: sourceLanguage } });
+  liveBlockSourceCache(state.doc).projected = { tabSize: state.tabSize, blocks, language: sourceLanguage };
 }
 const collapsedBlockCache = new WeakMap<EditorState, {
   lineFlags: readonly LineFlagLike[];
@@ -241,19 +254,22 @@ export function getLiveRenderedBlocks(
     return cached.blocks;
   }
 
-  let discovered = discoveredBlockCache.get(state.doc);
-  if (!discovered || discovered.tabSize !== state.tabSize
-    || (discovered.projected ? discovered.projected.language !== state.facet(language)
-      : markdownStructureIdentity(discovered.tree) !== markdownStructureIdentity(tree))) {
-    discovered = { tree, tabSize: state.tabSize, blocks: prepareLiveBlockContext(state, tree) };
-    discoveredBlockCache.set(state.doc, discovered);
+  // Gutter and sticky geometry can read the published tree while the Live
+  // viewport uses a completed outer snapshot. Keep both indexes available.
+  const cache = liveBlockSourceCache(state.doc);
+  const structure = markdownStructureIdentity(tree);
+  const projected = cache.projected;
+  let discovered = projected?.tabSize === state.tabSize && projected.language === state.facet(language)
+    ? projected : cache.discovered.get(structure);
+  if (!discovered || discovered.tabSize !== state.tabSize) {
+    discovered = { tabSize: state.tabSize, blocks: prepareLiveBlockContext(state, tree) };
+    cache.discovered.set(structure, discovered);
   }
   const htmlEditingRange = getHtmlEditingRange(state);
   const renderers = state.facet(documentBlocksFacet), rendererRevision = renderers?.revision;
-  const sourceCached = renderedSourceCache.get(state.doc);
-  const structure = markdownStructureIdentity(tree);
+  const sourceCached = cache.rendered.get(structure);
   let sourceBlocks: LiveRenderedBlock[];
-  if (sourceCached?.tree === structure && sourceCached.source === discovered.blocks
+  if (sourceCached?.source === discovered.blocks
     && sourceCached.renderer === renderers && sourceCached.rendererRevision === rendererRevision
     && (!renderers || rendererRevision !== undefined)
     && sourceCached.htmlFrom === htmlEditingRange?.from) sourceBlocks = sourceCached.blocks;
@@ -271,7 +287,7 @@ export function getLiveRenderedBlocks(
       }
       sourceBlocks.sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
     }
-    renderedSourceCache.set(state.doc, { tree: structure, source: discovered.blocks, renderer: renderers,
+    cache.rendered.set(structure, { source: discovered.blocks, renderer: renderers,
       rendererRevision, htmlFrom: htmlEditingRange?.from, blocks: sourceBlocks });
   }
   if (options.includeSelectedMath) return sourceBlocks;

@@ -8486,9 +8486,6 @@ function addTableWidgetDecoration(
   builder.push(
     Decoration.replace({
       block: true,
-      // Text inserted after the last cell, such as Enter leaving an EOF table,
-      // belongs to the next block. Keep the table's mapped extent closed.
-      inclusiveEnd: false,
       meoTable: true,
       widget: new HtmlTableWidget(
         tableData,

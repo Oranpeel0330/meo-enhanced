@@ -43,8 +43,17 @@ const build = await Bun.build({ entrypoints: [path.join(root, 'scripts/test-live
     ]) builder.onLoad({ filter: new RegExp(`webview[\\\\/]src[\\\\/]helpers[\\\\/]${file}\\.ts$`) }, async ({ path }) => {
       const source = await Bun.file(path).text();
       assert.equal(source.split(boundary).length, 2);
-      return { loader: 'ts', contents: source.replace(boundary,
-        `${boundary} if ((globalThis as any).__windowIndexWork) (globalThis as any).__windowIndexWork.${counter}++;`) };
+      let contents = source.replace(boundary,
+        `${boundary} if ((globalThis as any).__windowIndexWork) (globalThis as any).__windowIndexWork.${counter}++;`);
+      if (file === 'livePresentationWindow') {
+        // Read scopes already computed by production. Recomputing here can
+        // replace the cached index with a different published syntax tree.
+        const acceptedScope = 'windowInputs.set(result, { doc: state.doc, tree: markdownStructureIdentity(tree), blocks, details });';
+        assert.equal(source.split(acceptedScope).length, 2);
+        contents = contents.replace(acceptedScope, acceptedScope +
+          ' ((globalThis as any).__livePresentationScopes ??= new WeakMap()).set(state.doc, scope);');
+      }
+      return { loader: 'ts', contents };
     });
     for (const [file, boundary, counter] of [
       ['liveRenderedBlocks', 'function discoverRenderedBlocks(state: EditorState, tree: Tree): DiscoveredBlock[] {', '__renderedDiscoveries'],
@@ -62,7 +71,7 @@ const build = await Bun.build({ entrypoints: [path.join(root, 'scripts/test-live
       return { loader: 'ts', contents: source.replace(boundary,
         `${boundary} if (!scope) { ((globalThis as any).__fullHtmlRequests ??= 0); (globalThis as any).__fullHtmlRequests++; }`) };
     });
-    builder.onLoad({ filter: /webview[\\/]src[\\/]helpers[\\/]markdownSyntax\.ts$/ }, async ({ path }) => {
+    builder.onLoad({ filter: /webview[\\/]src[\\/]editor[\\/]backgroundMarkdownStructure\.ts$/ }, async ({ path }) => {
       const source = await Bun.file(path).text();
       const boundary = 'return ensureSyntaxTree(state, upto, timeout) ?? syntaxTree(state);';
       assert.equal(source.split(boundary).length, 2);

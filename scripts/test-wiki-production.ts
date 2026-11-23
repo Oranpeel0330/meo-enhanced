@@ -38,6 +38,22 @@ try {
   assert.ok(live.links.filter(href => href?.startsWith('meo-wiki:')).every(href => decodeURIComponent(href!.slice(9)) === 'assets/中文 图片.png'), 'escaped aliases in tables preserve the destination');
   assert.ok(await page.evaluate(() => (window as any).__wiki.resolutions.every((url: string) => url.startsWith('meo-wiki-image:') && !url.includes('literal') && !url.includes('code'))));
 
+  stage = 'edit at both outer Wiki brackets';
+  const wikiSource = '[[assets/中文 图片.png|图片链接]]';
+  for (const offset of [0, 1, wikiSource.length - 1, wikiSource.length]) {
+    const revealed = await page.evaluate(async ({ source, offset }) => {
+      const { view } = (window as any).__wiki.editor;
+      const from = view.state.doc.toString().indexOf(source);
+      view.focus();
+      view.dispatch({ selection: { anchor: from + offset } });
+      for (let frame = 0; frame < 3; frame++) await new Promise(requestAnimationFrame);
+      const content = view.dom.querySelector('.meo-md-wiki-marker.meo-md-marker-active')?.closest('.cm-line');
+      const position = view.coordsAtPos(from + offset, offset < 2 ? 1 : -1);
+      return { text: content?.textContent, caret: Boolean(position) };
+    }, { source: wikiSource, offset });
+    assert.deepEqual(revealed, { text: wikiSource, caret: true }, 'Wiki source is editable at offset ' + offset);
+  }
+
   const before = await page.evaluate(() => (window as any).__wiki.resolutions.length);
   stage = 'refresh existing Wiki images';
   await page.evaluate(() => { (window as any).__wiki.version = 2; (window as any).WikiHarness.refreshWikiImagePresentations(); });

@@ -160,6 +160,11 @@ function wikiLinkBounds(state: EditorState, node: any): WikiLinkBounds | null {
   };
 }
 
+export function wikiLinkSourceRange(state: EditorState, node: any): { from: number; to: number } | null {
+  const bounds = wikiLinkBounds(state, node);
+  return bounds && { from: bounds.openFrom, to: bounds.closeTo };
+}
+
 function wikiHrefFromTarget(target: string): string {
   if (!target) {
     return '';

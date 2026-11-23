@@ -647,15 +647,21 @@ async function main() {
       throw new Error(`Selected heading strike rendered as foreground white: ${JSON.stringify(headingStrikePixelCounts)}`);
     }
 
-    const headingStrikeMarkerColors = await page.evaluate(() => {
+    const activateHeadingSyntax = (text: string) => page.evaluate(async ({ heading, text }) => {
+      const { view } = (window as any).__editor;
+      const from = view.state.doc.toString().indexOf(heading);
+      view.dispatch({ selection: { anchor: from + heading.indexOf(text) } });
+      for (let frame = 0; frame < 3; frame++) await new Promise(requestAnimationFrame);
+    }, { heading: headingStrikeLine, text });
+
+    const headingMarkerStyles = () => page.evaluate(() => {
       const line = Array.from(document.querySelectorAll<HTMLElement>('.cm-line'))
         .find((candidate) => candidate.textContent?.includes('标题里的'));
       const syntaxMarker = line?.querySelector<HTMLElement>('.meo-md-marker-active:not(.meo-md-strike-marker-active)') ?? null;
       const strongMarkers = Array.from(line?.querySelectorAll<HTMLElement>('.meo-md-strong-marker-active') ?? []);
       const emMarkers = Array.from(line?.querySelectorAll<HTMLElement>('.meo-md-em-marker-active') ?? []);
       const strikeMarkers = Array.from(line?.querySelectorAll<HTMLElement>('.meo-md-strike-marker-active') ?? []);
-      if (!syntaxMarker || strongMarkers.length !== 2 || emMarkers.length !== 2 || strikeMarkers.length !== 2) return null;
-      const strong = getComputedStyle(strongMarkers[0]);
+      if (!syntaxMarker) return null;
       const markerState = (marker: HTMLElement) => {
         const style = getComputedStyle(marker);
         const textElement = Array.from(marker.querySelectorAll<HTMLElement>('span')).at(-1) ?? marker;
@@ -679,40 +685,44 @@ async function main() {
       const syntaxMarkerState = markerState(syntaxMarker);
       return {
         syntaxMarkerState,
-        strongMarkerStyle: strongMarkers[0].getAttribute('style') ?? '',
-        strongMarkerColor: strong.color,
-        strongMarkerTextFillColor: strong.webkitTextFillColor,
         strongMarkers: strongMarkers.map(markerState),
         emMarkers: emMarkers.map(markerState),
         strikeMarkers: strikeMarkers.map(markerState)
       };
     });
+    await activateHeadingSyntax('内');
+    const strongMarkerStyles = await headingMarkerStyles();
+    await activateHeadingSyntax('斜体');
+    const headingStrikeMarkerColors = await headingMarkerStyles();
+    const strongMarker = strongMarkerStyles?.strongMarkers[0];
     if (
       !headingStrikeMarkerColors ||
-      [...headingStrikeMarkerColors.strongMarkers, ...headingStrikeMarkerColors.emMarkers, ...headingStrikeMarkerColors.strikeMarkers]
+      !strongMarkerStyles || strongMarkerStyles.strongMarkers.length !== 2 || !strongMarker ||
+      headingStrikeMarkerColors.emMarkers.length !== 2 ||
+      headingStrikeMarkerColors.strikeMarkers.length !== 2 ||
+      [...strongMarkerStyles.strongMarkers, ...headingStrikeMarkerColors.emMarkers, ...headingStrikeMarkerColors.strikeMarkers]
         .some((marker) => (
-        marker.inlineStyle !== headingStrikeMarkerColors.strongMarkerStyle ||
-        marker.color !== headingStrikeMarkerColors.strongMarkerColor ||
-        marker.textFillColor !== headingStrikeMarkerColors.strongMarkerTextFillColor ||
+        marker.inlineStyle !== strongMarker.inlineStyle ||
+        marker.color !== strongMarker.color ||
+        marker.textFillColor !== strongMarker.textFillColor ||
         marker.color !== headingStrikeMarkerColors.syntaxMarkerState.color ||
         marker.textFillColor !== headingStrikeMarkerColors.syntaxMarkerState.textFillColor ||
         marker.fontStyle !== 'normal' ||
         marker.textDecorationLine !== 'none' ||
-        marker.textElementColor !== headingStrikeMarkerColors.strongMarkers[0].textElementColor ||
+        marker.textElementColor !== strongMarker.textElementColor ||
         marker.textElementTextFillColor !== headingStrikeMarkerColors.syntaxMarkerState.textElementTextFillColor ||
         marker.textElementFontStyle !== headingStrikeMarkerColors.syntaxMarkerState.textElementFontStyle ||
         marker.textElementFontWeight !== headingStrikeMarkerColors.syntaxMarkerState.textElementFontWeight ||
         marker.textElementTextDecorationLine !== headingStrikeMarkerColors.syntaxMarkerState.textElementTextDecorationLine
       ))
     ) {
-      throw new Error(`Inline style markers did not match Markdown syntax presentation: ${JSON.stringify(headingStrikeMarkerColors)}`);
+      throw new Error(`Inline style markers did not match Markdown syntax presentation: ${JSON.stringify({ strongMarkerStyles, headingStrikeMarkerColors })}`);
     }
 
-    const inlineCodeMarkerStyles = await page.evaluate(() => {
+    const readInlineCodeMarkerStyles = () => page.evaluate(() => {
       const line = Array.from(document.querySelectorAll<HTMLElement>('.cm-line'))
         .find((candidate) => candidate.textContent?.includes('标题里的'));
       const markers = Array.from(line?.querySelectorAll<HTMLElement>('.meo-md-code-marker-active') ?? []);
-      if (markers.length !== 4) return null;
       return markers.map((marker) => {
         const textElement = Array.from(marker.querySelectorAll<HTMLElement>('span')).at(-1) ?? marker;
         const style = getComputedStyle(textElement);
@@ -725,14 +735,19 @@ async function main() {
         };
       });
     });
+    await activateHeadingSyntax('内');
+    const nestedCodeMarkerStyles = await readInlineCodeMarkerStyles();
+    await activateHeadingSyntax('外');
+    const standaloneCodeMarkerStyles = await readInlineCodeMarkerStyles();
     if (
-      !inlineCodeMarkerStyles ||
-      inlineCodeMarkerStyles.slice(0, 2).some((style) => (
-        JSON.stringify(style) !== JSON.stringify(inlineCodeMarkerStyles[2])
+      nestedCodeMarkerStyles.length !== 2 ||
+      standaloneCodeMarkerStyles.length !== 2 ||
+      nestedCodeMarkerStyles.some((style) => (
+        JSON.stringify(style) !== JSON.stringify(standaloneCodeMarkerStyles[0])
       )) ||
-      JSON.stringify(inlineCodeMarkerStyles[2]) !== JSON.stringify(inlineCodeMarkerStyles[3])
+      JSON.stringify(standaloneCodeMarkerStyles[0]) !== JSON.stringify(standaloneCodeMarkerStyles[1])
     ) {
-      throw new Error(`Nested inline-code markers did not match standalone markers: ${JSON.stringify(inlineCodeMarkerStyles)}`);
+      throw new Error(`Nested inline-code markers did not match standalone markers: ${JSON.stringify({ nestedCodeMarkerStyles, standaloneCodeMarkerStyles })}`);
     }
 
     const markerLabels = [
@@ -1151,7 +1166,7 @@ async function main() {
       }))
     }));
     if (
-      !imageSourceState.lines.some((line) => line.innerText.includes('![示例](https://example.invalid/image.png)'))
+      !imageSourceState.lines.some((line) => line.innerText.replace(/\n/g, '').includes('![示例](https://example.invalid/image.png)'))
     ) {
       throw new Error(`Markdown image source did not recover from stale table interaction: ${JSON.stringify(imageSourceState)}`);
     }

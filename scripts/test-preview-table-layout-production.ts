@@ -97,7 +97,8 @@ try {
     for (const width of [360, 720]) for (const theme of ['light', 'dark'] as const) {
       for (const surface of ['preview', 'live'] as const) {
         const page = await browser.newPage();
-        await page.setViewport({ width, height: 1600, deviceScaleFactor: 1.5 });
+        // Admit all five fitted tables even when narrow, CJK-heavy cells wrap.
+        await page.setViewport({ width, height: 2400, deviceScaleFactor: 1.5 });
         await page.setContent(surface === 'preview'
           ? `<!doctype html><style>${fittedPayload.styles[theme]}</style><main class="meo-export-doc">${fittedPayload.html}</main>`
           : `<!doctype html><style>html,body,#app{height:100%;margin:0}</style><body class="vscode-${theme}"><div id="app"></div></body>`);
