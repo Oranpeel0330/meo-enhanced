@@ -41,6 +41,18 @@ try {
   };
   const trigger = '.meo-paste-options-trigger';
   const option = (mode: string) => '.meo-paste-options-menu [data-paste-mode="' + mode + '"]';
+  const assertMenuExpanded = async (expanded: boolean, label: string) => {
+    assert.deepEqual(await page.$eval(trigger, button => {
+      const arrow = button.querySelector('svg:last-child')!;
+      const transform = getComputedStyle(arrow).transform;
+      const menu = button.parentElement!.querySelector<HTMLElement>('[role="menu"]')!;
+      return {
+        expanded: button.getAttribute('aria-expanded'),
+        visible: getComputedStyle(menu).display !== 'none',
+        direction: new DOMMatrixReadOnly(transform === 'none' ? undefined : transform).a
+      };
+    }), { expanded: String(expanded), visible: expanded, direction: expanded ? -1 : 1 }, label);
+  };
   const choose = async (mode: string) => {
     await page.waitForSelector(trigger, { visible: true });
     await page.click(trigger);
@@ -81,6 +93,16 @@ try {
     await page.mouse.move(0, 0);
     await page.keyboard.press('Control');
     await page.waitForSelector(option('plain'), { visible: true });
+    await page.keyboard.press('Control');
+    await assertMenuExpanded(false, mode + ': a second Ctrl collapses the menu and resets the arrow');
+    assert.equal(await page.evaluate(() => document.activeElement === (window as any).editor.view.contentDOM), true,
+      mode + ': collapsing with Ctrl returns focus to the editor');
+    await page.click(trigger);
+    await assertMenuExpanded(true, mode + ': clicking opens the menu and flips the arrow');
+    await page.click(trigger);
+    await assertMenuExpanded(false, mode + ': clicking again collapses the menu and resets the arrow');
+    await page.keyboard.press('Control');
+    await assertMenuExpanded(true, mode + ': Ctrl reopens the menu after a click');
     assert.equal(await page.$eval(option('plain'), element => element.textContent), mode === 'live' ? '仅保留文字' : 'Keep text only');
     if (mode === 'live') {
       await page.waitForSelector('.meo-md-html-table', { visible: true });

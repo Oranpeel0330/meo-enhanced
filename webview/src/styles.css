@@ -8946,6 +8946,9 @@ html[data-editor-appearance='dark'] :is(.settings-warning, .settings-shortcut-co
 .meo-paste-options-trigger:hover, .meo-paste-options-trigger[aria-expanded="true"] {
   background: var(--meo-ui-surface-pressed);
 }
+.meo-paste-options-trigger[aria-expanded="true"] .meo-paste-options-chevron {
+  transform: rotate(180deg);
+}
 .meo-paste-options-menu {
   min-width: min(164px, 100%);
   overflow: hidden;

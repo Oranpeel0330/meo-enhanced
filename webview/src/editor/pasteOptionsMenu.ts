@@ -75,13 +75,13 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
     trigger.append(
       createIcon(ClipboardList, { width: 16, height: 16, 'aria-hidden': 'true' }),
       'Ctrl',
-      createIcon(ChevronDown, { width: 10, height: 10, 'aria-hidden': 'true' })
+      createIcon(ChevronDown, { width: 10, height: 10, class: 'meo-paste-options-chevron', 'aria-hidden': 'true' })
     );
     trigger.setAttribute('aria-label', labels.pasteOptions);
     trigger.setAttribute('aria-haspopup', 'menu');
     trigger.setAttribute('aria-expanded', 'false');
     trigger.setAttribute('aria-keyshortcuts', 'Control');
-    trigger.addEventListener('click', this.openMenu);
+    trigger.addEventListener('click', this.toggleMenu);
     const menu = doc.createElement('div');
     menu.className = 'meo-paste-options-menu';
     menu.hidden = true;
@@ -117,14 +117,20 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
     this.position();
   }
 
-  private openMenu = () => {
-    if (!this.menu || !this.trigger) return;
-    this.menu.hidden = false;
-    this.trigger.setAttribute('aria-expanded', 'true');
-    this.focusFirst = this.popup?.style.visibility === 'hidden';
-    if (!this.focusFirst) this.focusOption();
-    this.position();
+  private toggleMenu = () => {
+    if (this.menu) this.setMenuExpanded(this.menu.hidden);
   };
+
+  private setMenuExpanded(expanded: boolean) {
+    if (!this.menu || !this.trigger) return;
+    const restoreEditorFocus = !expanded && this.menu.contains(this.menu.ownerDocument.activeElement);
+    this.menu.hidden = !expanded;
+    this.trigger.setAttribute('aria-expanded', String(expanded));
+    this.focusFirst = expanded && this.popup?.style.visibility === 'hidden';
+    if (expanded && !this.focusFirst) this.focusOption();
+    if (restoreEditorFocus) this.view.focus();
+    this.position();
+  }
 
   private focusOption() {
     const paste = this.accepted;
@@ -147,7 +153,7 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       if (event.target === this.trigger && this.menu?.hidden) {
         event.preventDefault();
-        this.openMenu();
+        this.setMenuExpanded(true);
       } else if (this.menu && !this.menu.hidden && this.popup?.contains(event.target as Node)) {
         event.preventDefault();
         const options = Array.from(this.menu.querySelectorAll('button'));
@@ -161,7 +167,7 @@ export const pasteOptionsMenu = ViewPlugin.fromClass(class {
   private onKeyUp = (event: KeyboardEvent) => {
     if (event.key === 'Control' && this.ctrlPressed) {
       this.ctrlPressed = false;
-      if (this.menu?.hidden) this.openMenu();
+      this.toggleMenu();
     }
   };
 
