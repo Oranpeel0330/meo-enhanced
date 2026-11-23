@@ -67,6 +67,32 @@ type ExportMathRuntimeWindow = typeof window & {
 
 const browser = await launchTestBrowser();
 try {
+  const portablePath = path.join(temp, 'portable.html');
+  const portable = await exportRuntime.renderExportHtmlDocument({
+    readingSnapshot: { snapshotId: 'portable-math', text: 'Inline $\\frac{x}{y}$.\n\n$$\\frac{a}{b}$$',
+      appearance: 'light', uiLanguage: 'en', environment: { previewFontFamily: '' } },
+    sourceDocumentPath: path.join(temp, 'fixture.md'), outputFilePath: portablePath, target: 'html', title: 'Portable math',
+    mermaidRuntimeSrc: '', baseHref: 'file:///unavailable/', shikiLanguageAssetsRoot: '',
+    katexStylesHref: 'file:///unavailable/katex.min.css', embeddedKatexStylesPath: path.resolve('webview/dist/katex/katex-embedded.css')
+  });
+  await exportRuntime.writeHtmlExport({ htmlDocument: portable.htmlDocument, outputHtmlPath: portablePath });
+  const offline = await browser.newPage();
+  const forbidden: string[] = [];
+  const portableUrl = pathToFileURL(portablePath).href;
+  await offline.setRequestInterception(true);
+  offline.on('request', request => {
+    if (request.url() === portableUrl || request.url().startsWith('data:')) void request.continue();
+    else { forbidden.push(request.resourceType()); void request.abort(); }
+  });
+  await offline.goto(portableUrl);
+  await offline.waitForFunction(() => (window as ExportMathRuntimeWindow).__MEO_EXPORT_READY__ === true);
+  const fractions = await offline.$$eval('.katex .frac-line', bars => bars.map(bar => getComputedStyle(bar).borderBottomWidth));
+  assert.equal(fractions.length, 2);
+  assert.ok(fractions.every(width => parseFloat(width) > 0), 'Inline and display fractions retain their bars offline');
+  assert.ok(await offline.evaluate(() => [...document.fonts].some(face => face.family.startsWith('KaTeX') && face.status === 'loaded')));
+  assert.deepEqual(forbidden, [], 'The formula CSS and fonts do not use machine-local or network paths');
+  await offline.close();
+
   await browser.defaultBrowserContext().overridePermissions('file://', ['clipboard-read', 'clipboard-write']);
   for (const deviceScaleFactor of [1, 2]) {
     for (const width of [420, 1200]) {

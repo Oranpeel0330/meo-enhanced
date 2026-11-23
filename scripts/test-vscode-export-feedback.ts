@@ -7,6 +7,7 @@ const fileUri = (fsPath: string): FakeUri => ({ fsPath, scheme: 'file' });
 const targetUri = fileUri('D:/exports/note.pdf');
 const progressMessages: string[] = [];
 const informationMessages: Array<{ message: string; actions: string[] }> = [];
+const warningMessages: Array<{ message: string; actions: string[] }> = [];
 const errorMessages: string[] = [];
 const openedUris: FakeUri[] = [];
 const systemOpenedPaths: string[] = [];
@@ -63,6 +64,10 @@ mock.module('vscode', () => ({
     },
     showErrorMessage: async (message: string) => {
       errorMessages.push(message);
+      return undefined;
+    },
+    showWarningMessage: async (message: string, ...actions: string[]) => {
+      warningMessages.push({ message, actions });
       return undefined;
     }
   },
@@ -388,5 +393,14 @@ assert.equal(
 );
 assert.deepEqual(completionOutcomes, ['completed', 'completed']);
 assert.equal(openedUris.at(-1), firstCompletedTarget);
+
+const successNotices = informationMessages.length;
+saveDialogHandler = undefined;
+saveDialogResult = targetUri;
+const partialOutcome = await runVscodeExportWithFeedback({ sourceDocumentUri, format: 'pdf', uiLanguage: 'zh-CN' },
+  async () => ({ warning: 'PDF 已导出，但有 1 张图片未能加载。' }));
+assert.equal(partialOutcome, 'completed');
+assert.equal(informationMessages.length, successNotices);
+assert.deepEqual(warningMessages.at(-1), { message: 'PDF 已导出，但有 1 张图片未能加载。', actions: ['打开', '打开所在文件夹'] });
 
 console.log('VS Code export feedback checks passed');

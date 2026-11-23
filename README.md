@@ -40,6 +40,7 @@ When your Markdown is ready, open Preview and choose **Export as…**. All three
 | **Word (.docx)** | Handing the document over for further editing | Uses a fixed document format |
 
 Exported HTML includes the Mermaid runtime when it contains a diagram. Share the HTML file by itself to view those diagrams offline in a modern browser with JavaScript enabled; external links and media still depend on their original resources.
+HTML also embeds the styles and fonts used by LaTeX formulas. PDF export keeps the file and warns when images fail to load; Word preserves formulas and SVG graphics as images.
 
 ![The Preview export menu with HTML, PDF, and Word options, each available with a table of contents](docs/readme/en/export-formats.png)
 

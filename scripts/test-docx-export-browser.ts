@@ -12,6 +12,41 @@ import { complexMermaidSamples } from './fixtures/mermaid-community-samples';
 const repoRoot = path.resolve(import.meta.dir, '..');
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-docx-browser-'));
 
+async function assertInlineContentAndChapterAnchors(): Promise<void> {
+  await sharp({ create: { width: 37, height: 24, channels: 3, background: '#00ff00' } }).png().toFile(path.join(fixtureRoot, 'fallback.png'));
+  await sharp({ create: { width: 73, height: 34, channels: 3, background: '#ff0000' } }).png().toFile(path.join(fixtureRoot, 'selected.png'));
+  const text = [
+    'Before math $\\frac{x}{y}$ after math.',
+    '[Chapter jump](#章节) and [external](https://example.invalid/).',
+    '## 章节',
+    '<picture><source srcset="selected.png" media="(min-width: 1px)"><img src="fallback.png" alt="Responsive fixture"></picture>',
+    '<svg width="59" height="31" xmlns="http://www.w3.org/2000/svg" aria-label="SVG fixture"><rect width="59" height="31" fill="#8739ef" /></svg>'
+  ].join('\n\n');
+  const outputDocxPath = path.join(fixtureRoot, 'inline-content.docx');
+  const { htmlDocument } = await exportRuntime.renderExportHtmlDocument({
+    readingSnapshot: { snapshotId: 'inline-content', text, appearance: 'light', uiLanguage: 'en', environment: { previewFontFamily: '' } },
+    sourceDocumentPath: path.join(fixtureRoot, 'source.md'), outputFilePath: outputDocxPath,
+    target: 'docx', title: 'Inline content', baseHref: pathToFileURL(fixtureRoot + path.sep).href, mermaidRuntimeSrc: '',
+    katexStylesHref: pathToFileURL(path.join(repoRoot, 'webview/dist/katex/katex.min.css')).href, shikiLanguageAssetsRoot: ''
+  });
+  await exportRuntime.writeDocxExport({ htmlDocument, outputDocxPath, title: 'Inline content', uiLanguage: 'en', includeTableOfContents: false,
+    docxRuntimeModulePath: path.join(repoRoot, 'dist/docx-runtime.js'), puppeteerRuntimeModulePath: path.join(repoRoot, 'dist/puppeteer-runtime.js') });
+  const archive = await JSZip.loadAsync(fs.readFileSync(outputDocxPath));
+  const xml = await archive.file('word/document.xml')!.async('string');
+  const relationships = await archive.file('word/_rels/document.xml.rels')!.async('string');
+  const paragraph = [...xml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find(match => match[0].includes('Before math'))?.[0];
+  assert.match(paragraph ?? '', /Before math[\s\S]*<w:drawing>[\s\S]*after math/, 'The original paragraph contains a true inline formula drawing');
+  assert.equal((xml.match(/<w:drawing>/g) ?? []).length, 3, 'Formula, responsive image and inline SVG survive conversion');
+  const dimensions = await Promise.all(Object.keys(archive.files).filter(name => /^word\/media\/.+\.png$/.test(name))
+    .map(async name => sharp(await archive.file(name)!.async('nodebuffer')).metadata()));
+  assert.ok(dimensions.some(image => image.width === 73 && image.height === 34), 'Word captures the selected picture, not its fallback');
+  assert.ok(dimensions.some(image => image.width === 59 && image.height === 31), 'Word captures the SVG at its authored size');
+  const anchor = /<w:hyperlink\b[^>]*w:anchor="([^"]+)"[^>]*>[\s\S]*?Chapter jump/.exec(xml)?.[1];
+  assert.ok(anchor && xml.includes(`w:name="${anchor}"`), 'The Unicode chapter link targets an actual bookmark without a TOC');
+  assert.match(relationships, /https:\/\/example\.invalid\//);
+  assert.doesNotMatch(relationships, /Target="#/);
+}
+
 async function assertLongMermaidLabelMaterializesWithoutCropping(): Promise<void> {
   const outputDocxPath = path.join(fixtureRoot, 'long-mermaid-label.docx');
   const text = '```mermaid\nflowchart LR\n  OfflineStart[OFFLINE_MERMAID_START]\n```\n';
@@ -100,6 +135,7 @@ async function checkHtmlVisibility(): Promise<void> {
 try {
   await assertLongMermaidLabelMaterializesWithoutCropping();
   await checkHtmlVisibility();
+  await assertInlineContentAndChapterAnchors();
   const outputDocxPath = path.join(fixtureRoot, 'rich-media.docx');
   const rendered = await exportRuntime.renderExportHtmlDocument({
     readingSnapshot: {
@@ -160,7 +196,7 @@ try {
   const pdf = await exportRuntime.renderExportHtmlDocument({
     readingSnapshot: {
       snapshotId: 'pdf-rich-media',
-      text: '# PDF fixture\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n$$x^2 + y^2 = z^2$$',
+      text: '# PDF fixture\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n$$x^2 + y^2 = z^2$$\n\n![Missing shown image](absent.png)\n\n<img hidden src="hidden-absent.png" alt="Hidden image">',
       appearance: 'dark', uiLanguage: 'en',
       environment: { previewFontFamily: '', previewSourceColoring: true }
     },
@@ -172,11 +208,12 @@ try {
     title: 'Rich media PDF', includeTableOfContents: true,
     shikiLanguageAssetsRoot: path.join(repoRoot, 'webview/dist')
   });
-  await renderPdfFromHtmlExport({
+  const { missingImages } = await renderPdfFromHtmlExport({
     htmlDocument: pdf.htmlDocument, outputPdfPath,
     puppeteerRuntimeModulePath: path.join(repoRoot, 'dist/puppeteer-runtime.js'),
     timeoutMs: 60000
   });
+  assert.equal(missingImages, 1, 'Missing visible images are reported, hidden resource failures do not count');
   const pdfBytes = fs.readFileSync(outputPdfPath);
   assert.equal(pdfBytes.subarray(0, 5).toString(), '%PDF-');
   assert.match(pdfBytes.toString('latin1'), /\/Type\s*\/Page\b/);

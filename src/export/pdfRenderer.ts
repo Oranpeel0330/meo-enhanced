@@ -86,8 +86,11 @@ async function resolvePdfPageMargins(page: any): Promise<PdfPageMargins> {
   }, { defaultMargin: DEFAULT_PDF_MARGIN_MM, width: A4_WIDTH_MM, height: A4_HEIGHT_MM });
 }
 
-export async function renderPdfFromHtmlExport(options: RenderPdfExportOptions): Promise<void> {
-  await withPreparedExportPage(options, async (page, margins) => {
+export async function renderPdfFromHtmlExport(options: RenderPdfExportOptions): Promise<{ missingImages: number }> {
+  return withPreparedExportPage(options, async (page, margins) => {
+    const missingImages = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLImageElement>('.meo-export-doc img'))
+      .filter(image => !image.naturalWidth && (image.currentSrc || image.getAttribute('src') || image.getAttribute('srcset'))
+        && image.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })).length);
     await page.pdf({
       path: options.outputPdfPath,
       printBackground: true,
@@ -100,6 +103,7 @@ export async function renderPdfFromHtmlExport(options: RenderPdfExportOptions): 
         left: `${margins.left}px`
       }
     });
+    return { missingImages };
   });
 }
 
@@ -136,8 +140,9 @@ export async function materializeDocxBodyFromHtmlExport(options: HeadlessExportO
           element.style.removeProperty('background'); element.style.removeProperty('background-color');
         }
       }
+      root.querySelectorAll<HTMLElement>('.meo-export-math-inline').forEach(element => { element.style.display = 'inline-block'; });
     });
-    const handles = await page.$$('.meo-export-mermaid.is-rendered, .meo-export-contributed, .meo-export-math-display, img:not(.meo-export-contributed img)');
+    const handles = await page.$$('.meo-export-doc :is(.meo-export-mermaid.is-rendered, .meo-export-contributed, .meo-export-math-display, .meo-export-math-inline, svg, img):not(svg svg, .meo-export-contributed *, .meo-export-mermaid.is-rendered *, .meo-export-math-display *, .meo-export-math-inline *)');
     for (const [index, handle] of handles.entries()) {
       const bounds = await handle.boundingBox();
       if (!bounds || bounds.width <= 0 || bounds.height <= 0) continue;
@@ -156,8 +161,16 @@ export async function materializeDocxBodyFromHtmlExport(options: HeadlessExportO
         image.src = `data:image/png;base64,${captured.pngBase64}`;
         image.alt = element instanceof HTMLImageElement
           ? element.alt
-          : element.getAttribute('data-source') ?? '';
+          : element.getAttribute('aria-label') ?? element.getAttribute('data-source') ?? '';
         image.setAttribute('data-meo-docx-materialized', '');
+        const original = element instanceof HTMLImageElement ? element.closest('picture') ?? element : element;
+        if (original.id || element.id) image.id = original.id || element.id;
+        const inlineMath = element.classList.contains('meo-export-math-inline');
+        if (inlineMath || original !== element || element instanceof SVGSVGElement) {
+          image.width = Math.ceil(captured.width);
+          image.height = Math.ceil(captured.height);
+          if (inlineMath) image.style.cssText = 'display:inline-block;vertical-align:middle';
+        }
         if ((element.classList.contains('meo-export-mermaid') || element.classList.contains('meo-export-contributed')) && !element.classList.contains('is-math')) {
           // Word cannot split a drawing across pages. Match docxRuntime's A4 / 20mm
           // margins, retaining space for the image paragraph and its spacing.
@@ -167,7 +180,7 @@ export async function materializeDocxBodyFromHtmlExport(options: HeadlessExportO
           image.width = Math.floor(captured.width * scale);
           image.height = Math.floor(captured.height * scale);
         }
-        element.replaceWith(image);
+        original.replaceWith(image);
       }, { pngBase64: data, width: bounds.width, height: bounds.height });
     }
     return page.$eval('.meo-export-doc', (element: Element) => element.outerHTML);

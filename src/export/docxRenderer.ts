@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DomUtils, parseDocument } from 'htmlparser2';
 import { Comment, Element, Text, type ChildNode } from 'domhandler';
@@ -25,7 +26,10 @@ type TocEntry = {
   readonly bookmarkName: string;
   readonly headingMarker: string;
   readonly tocMarker: string;
+  readonly fragment?: string;
 };
+
+type Bookmark = { readonly name: string; readonly marker: string };
 
 const wordBodyFonts = '<w:rFonts w:ascii="DengXian" w:hAnsi="DengXian" w:eastAsia="等线" w:cs="DengXian"/>';
 
@@ -44,9 +48,11 @@ export async function writeDocxExport(options: WriteDocxExportOptions): Promise<
 
   const needsMaterialization = DomUtils.findOne((element) => (
     (element.name === 'img' && !/^data:image\/(?:png|jpe?g|gif|bmp);base64,/i.test(element.attribs.src ?? ''))
+    || element.name === 'picture' || element.name === 'svg'
     || classNames(element).includes('meo-export-mermaid')
     || classNames(element).includes('meo-export-contributed')
     || classNames(element).includes('meo-export-math-display')
+    || classNames(element).includes('meo-export-math-inline')
     || Object.hasOwn(element.attribs, 'hidden')
     || element.name === 'details' && !Object.hasOwn(element.attribs, 'open')
     || /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:|opacity\s*:\s*0(?:\D|$)|font-size\s*:\s*0(?:\D|$)|color\s*:\s*(?:transparent|#[\da-f]{3}0\b|#[\da-f]{6}00\b|rgba\(|hsla\())/i.test(element.attribs.style ?? '')
@@ -73,6 +79,7 @@ export async function writeDocxExport(options: WriteDocxExportOptions): Promise<
   normalizeFrontmatter(root);
   normalizeTables(root);
   const headings = options.includeTableOfContents ? prepareHeadingBookmarks(root) : [];
+  const bookmarks = prepareInternalLinkBookmarks(root, headings);
   const includeTableOfContents = headings.length > 0;
   if (includeTableOfContents) {
     prependTableOfContents(root, options.uiLanguage === 'zh-CN' ? '目录' : 'Contents', headings);
@@ -83,7 +90,7 @@ export async function writeDocxExport(options: WriteDocxExportOptions): Promise<
     lang: options.uiLanguage === 'zh-CN' ? 'zh-CN' : 'en-US',
     title: options.title
   });
-  const output = await finalizeWordDocument(generated, headings);
+  const output = await finalizeWordDocument(generated, headings, bookmarks);
   await fs.writeFile(options.outputDocxPath, output);
 }
 
@@ -335,6 +342,7 @@ function prepareHeadingBookmarks(root: Element): TocEntry[] {
     const entry = {
       level: Number.parseInt(heading.name.slice(1), 10),
       text,
+      fragment: heading.attribs.id,
       bookmarkName: `meo_heading_${entryNumber}`,
       headingMarker: `MEOHEADINGMARKER${entryNumber}`,
       tocMarker: `MEOTOCENTRYMARKER${entryNumber}`
@@ -342,6 +350,33 @@ function prepareHeadingBookmarks(root: Element): TocEntry[] {
     DomUtils.prependChild(heading, markerSpan(entry.headingMarker));
     return [entry];
   });
+}
+
+function localFragment(href: string | undefined): string | undefined {
+  if (!href?.startsWith('#') || href.length === 1) return undefined;
+  try { return decodeURIComponent(href.slice(1)); } catch { return href.slice(1); }
+}
+
+function prepareInternalLinkBookmarks(root: Element, headings: readonly TocEntry[]): Map<string, Bookmark> {
+  const referenced = new Set(DomUtils.findAll(element => element.name === 'a', root.children)
+    .map(element => localFragment(element.attribs.href)).filter(fragment => fragment !== undefined));
+  const bookmarks = new Map<string, Bookmark>();
+  for (const heading of headings) {
+    if (heading.fragment && referenced.has(heading.fragment)) bookmarks.set(heading.fragment, { name: heading.bookmarkName, marker: heading.headingMarker });
+  }
+  const markerSuffix = randomUUID().replace(/-/g, '');
+  for (const element of DomUtils.findAll(target => referenced.has(target.attribs.id), root.children)) {
+    const fragment = element.attribs.id;
+    if (bookmarks.has(fragment)) continue;
+    const index = bookmarks.size + 1;
+    const bookmark = { name: `meo_anchor_${index}`, marker: `MEOANCHOR${markerSuffix}X${index}` };
+    const paragraph = DomUtils.findOne(child => /^(?:p|h[1-6])$/.test(child.name), element.children, true);
+    if (paragraph) DomUtils.prependChild(paragraph, markerSpan(bookmark.marker));
+    else if (/^(?:a|img|span|sup|sub)$/.test(element.name)) DomUtils.prepend(element, markerSpan(bookmark.marker));
+    else DomUtils.prependChild(element, markerSpan(bookmark.marker));
+    bookmarks.set(fragment, bookmark);
+  }
+  return bookmarks;
 }
 
 function prependTableOfContents(root: Element, label: string, entries: readonly TocEntry[]): void {
@@ -366,7 +401,7 @@ function markerSpan(marker: string): Element {
   return new Element('span', { style: 'font-size:1px;color:#ffffff' }, [new Text(marker)]);
 }
 
-async function finalizeWordDocument(buffer: Buffer, entries: readonly TocEntry[]): Promise<Buffer> {
+async function finalizeWordDocument(buffer: Buffer, entries: readonly TocEntry[], bookmarks: ReadonlyMap<string, Bookmark>): Promise<Buffer> {
   const archive = await JSZip.loadAsync(buffer);
   const documentEntry = archive.file('word/document.xml');
   const settingsEntry = archive.file('word/settings.xml');
@@ -375,8 +410,8 @@ async function finalizeWordDocument(buffer: Buffer, entries: readonly TocEntry[]
     throw new Error('Word export produced an incomplete DOCX package.');
   }
 
+  let documentXml = await documentEntry.async('string');
   if (entries.length > 0) {
-    let documentXml = await documentEntry.async('string');
     for (const [index, entry] of entries.entries()) {
       documentXml = replaceParagraphContainingMarker(documentXml, entry.headingMarker, (paragraph) => {
         const withoutMarker = removeMarkerRun(paragraph, entry.headingMarker);
@@ -418,8 +453,6 @@ async function finalizeWordDocument(buffer: Buffer, entries: readonly TocEntry[]
         });
       });
     }
-    archive.file('word/document.xml', documentXml);
-
     const settingsXml = await settingsEntry.async('string');
     if (!/<w:updateFields\b/.test(settingsXml)) {
       archive.file('word/settings.xml', settingsXml.replace(
@@ -428,6 +461,8 @@ async function finalizeWordDocument(buffer: Buffer, entries: readonly TocEntry[]
       ));
     }
   }
+  if (bookmarks.size) documentXml = await finalizeInternalLinks(archive, documentXml, bookmarks, entries.length);
+  if (entries.length || bookmarks.size) archive.file('word/document.xml', documentXml);
 
   const normalizedStylesXml = normalizeWordBodyFonts(await stylesEntry.async('string'));
   const stylesXml = (entries.length > 0
@@ -438,6 +473,44 @@ async function finalizeWordDocument(buffer: Buffer, entries: readonly TocEntry[]
   );
   archive.file('word/styles.xml', stylesXml);
   return archive.generateAsync({ type: 'nodebuffer' });
+}
+
+async function finalizeInternalLinks(archive: JSZip, documentXml: string, bookmarks: ReadonlyMap<string, Bookmark>, headingCount: number): Promise<string> {
+  const available = new Map<string, string>();
+  const markers = new Map<string, { fragment: string; name: string }>();
+  let nextId = 1000 + headingCount;
+  for (const [fragment, bookmark] of bookmarks) {
+    if (bookmark.name.startsWith('meo_heading_')) available.set(fragment, bookmark.name);
+    else markers.set(bookmark.marker, { fragment, name: bookmark.name });
+  }
+  if (markers.size) {
+    documentXml = documentXml.replace(/<w:r(?:\s[^>]*)?>[\s\S]*?<\/w:r>/g, run => {
+      const marker = /<w:t(?:\s[^>]*)?>(MEOANCHOR[\da-f]{32}X\d+)<\/w:t>/.exec(run)?.[1];
+      const bookmark = marker && markers.get(marker);
+      if (!bookmark) return run;
+      const id = nextId++;
+      available.set(bookmark.fragment, bookmark.name);
+      return `<w:bookmarkStart w:id="${id}" w:name="${bookmark.name}"/><w:bookmarkEnd w:id="${id}"/>`;
+    });
+  }
+  const relPath = 'word/_rels/document.xml.rels';
+  const entry = archive.file(relPath);
+  if (!entry || !available.size) return documentXml;
+  const rels = parseDocument(await entry.async('string'), { xmlMode: true });
+  const internal = new Map<string, string>();
+  for (const relation of DomUtils.findAll(element => element.name === 'Relationship' && element.attribs.Type?.endsWith('/hyperlink'), rels.children)) {
+    const fragment = localFragment(relation.attribs.Target);
+    const bookmark = fragment && available.get(fragment);
+    if (!bookmark) continue;
+    internal.set(relation.attribs.Id, bookmark);
+    DomUtils.removeElement(relation);
+  }
+  if (!internal.size) return documentXml;
+  archive.file(relPath, DomUtils.getOuterHTML(rels, { xmlMode: true }));
+  return documentXml.replace(/<w:hyperlink\b[^>]*>/g, tag => tag.replace(/\br:id="([^"]+)"/, (attribute, id: string) => {
+    const bookmark = internal.get(id);
+    return bookmark ? `w:anchor="${bookmark}"` : attribute;
+  }));
 }
 
 function addWordTableOfContentsStyles(stylesXml: string): string {

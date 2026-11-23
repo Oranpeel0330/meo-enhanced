@@ -40,6 +40,7 @@ Write, preview, and review complex Markdown in VS Code. Move freely between Live
 | **Word（.docx）** | 交给他人继续编辑 | 使用固定文档格式 |
 
 导出的 HTML 含 Mermaid 图表时会内嵌渲染引擎。只分享这个 HTML 文件，就能在启用 JavaScript 的现代浏览器里离线查看图表；外部链接和媒体仍依赖原有资源。
+HTML 也会内嵌 LaTeX 公式所用的样式和字体。PDF 若有图片未能加载，会保留文件并提示缺图；Word 将公式和 SVG 等图形保留为图片。
 
 ![预览模式的导出菜单，提供 HTML、PDF、Word 以及各自的含目录版本](docs/readme/zh-cn/export-formats.png)
 

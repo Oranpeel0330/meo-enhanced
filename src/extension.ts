@@ -135,6 +135,7 @@ type ExportRuntimeModule = {
     mermaidRuntimeSrc: string;
     mermaidRuntimeDirectory?: string;
     katexStylesHref: string;
+    embeddedKatexStylesPath?: string;
     baseHref: string;
     title: string;
     includeTableOfContents: boolean;
@@ -154,13 +155,7 @@ type ExportRuntimeModule = {
     htmlDocument: string;
     outputHtmlPath: string;
   }) => Promise<void>;
-  renderPdfFromHtmlExport: (options: {
-    htmlDocument: string;
-    outputPdfPath: string;
-    browserExecutablePath?: string;
-    puppeteerRuntimeModulePath: string;
-    timeoutMs?: number;
-  }) => Promise<void>;
+  renderPdfFromHtmlExport: typeof import('./export/pdfRenderer').renderPdfFromHtmlExport;
   writeDocxExport: (options: {
     htmlDocument: string;
     outputDocxPath: string;
@@ -1011,11 +1006,14 @@ class MarkdownWebviewProvider implements vscode.CustomTextEditorProvider {
       }
 
       report('renderingPdf');
-      await exportRuntime.renderPdfFromHtmlExport({
+      const { missingImages } = await exportRuntime.renderPdfFromHtmlExport({
         htmlDocument: exportRender.htmlDocument,
         outputPdfPath: targetUri.fsPath,
         puppeteerRuntimeModulePath
       });
+      if (missingImages) return { warning: snapshot.uiLanguage === 'zh-CN'
+        ? `PDF 已导出，但有 ${missingImages} 张图片未能加载。`
+        : `PDF exported, but ${missingImages} ${missingImages === 1 ? 'image' : 'images'} could not be loaded.` };
     });
   }
 
@@ -1050,6 +1048,8 @@ class MarkdownWebviewProvider implements vscode.CustomTextEditorProvider {
       mermaidRuntimeDirectory: params.target === 'html'
         ? vscode.Uri.joinPath(this.context.extensionUri, 'webview', 'dist', 'mermaid').fsPath : undefined,
       katexStylesHref,
+      embeddedKatexStylesPath: params.target === 'html'
+        ? vscode.Uri.joinPath(this.context.extensionUri, 'webview', 'dist', 'katex', 'katex-embedded.css').fsPath : undefined,
       baseHref,
       title: path.basename(params.outputFileUri.fsPath),
       includeTableOfContents: params.includeTableOfContents,

@@ -1,4 +1,5 @@
 import { prepareMarkdownPresentation, renderMarkdownToHtml } from './renderMarkdown';
+import { readFile } from 'node:fs/promises';
 import { materializeContributedBlocks } from './contributedBlocks';
 import { renderDocumentContent } from './documentContent';
 import { buildExportHtmlDocument as buildStandaloneExportHtmlDocument } from './exportHtmlTemplate';
@@ -31,6 +32,7 @@ export type ExportRuntimeBuildHtmlOptions = {
   mermaidRuntimeSrc: string;
   mermaidRuntimeDirectory?: string;
   katexStylesHref?: string;
+  embeddedKatexStylesPath?: string;
   baseHref: string;
   title: string;
   includeTableOfContents?: boolean;
@@ -95,6 +97,8 @@ async function renderExportHtmlDocument(
 
   const portableMermaidPayload = hasMermaid && options.target === 'html' && options.mermaidRuntimeDirectory
     ? await buildPortableMermaidPayload(options.mermaidRuntimeDirectory) : undefined;
+  const katexStylesCss = hasMath && options.target === 'html' && options.embeddedKatexStylesPath
+    ? await readFile(options.embeddedKatexStylesPath, 'utf8') : undefined;
   const htmlDocument = buildStandaloneExportHtmlDocument({
     title: options.title,
     bodyHtml: definition.renderer === 'github-readme'
@@ -109,6 +113,7 @@ async function renderExportHtmlDocument(
     mermaidRuntimeSrc: options.mermaidRuntimeSrc,
     portableMermaidPayload,
     katexStylesHref: options.katexStylesHref,
+    katexStylesCss,
     baseHref: options.baseHref
   });
 

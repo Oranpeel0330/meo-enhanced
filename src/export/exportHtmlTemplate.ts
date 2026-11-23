@@ -11,6 +11,7 @@ export type BuildExportHtmlDocumentOptions = {
   mermaidRuntimeSrc?: string;
   portableMermaidPayload?: string;
   katexStylesHref?: string;
+  katexStylesCss?: string;
   baseHref?: string;
   githubStyle?: boolean;
   /** Only the built-in GitHub renderer fixes diagram colors; custom CSS supplies its own palette. */
@@ -22,9 +23,9 @@ export function buildExportHtmlDocument(options: BuildExportHtmlDocumentOptions)
   const exportTarget = escapeHtmlAttr(options.target);
   const stylesCss = serializeStyleElementText(options.stylesCss);
   const baseTag = options.baseHref ? `<base href="${escapeHtmlAttr(options.baseHref)}" />` : '';
-  const katexStylesTag = options.hasMath && options.katexStylesHref
-    ? `<link rel="stylesheet" href="${escapeHtmlAttr(options.katexStylesHref)}" />`
-    : '';
+  const katexStylesTag = !options.hasMath ? '' : options.katexStylesCss
+    ? `<style>${serializeStyleElementText(options.katexStylesCss)}</style>`
+    : options.katexStylesHref ? `<link rel="stylesheet" href="${escapeHtmlAttr(options.katexStylesHref)}" />` : '';
   const mermaidScriptTag = !options.hasMermaid ? '' : options.portableMermaidPayload
     ? `<script data-meo-export-mermaid-runtime>\n${buildPortableMermaidBootstrap(options.portableMermaidPayload)}\n    </script>`
     : options.mermaidRuntimeSrc
@@ -478,11 +479,16 @@ function buildRuntimeScript(hasMermaid: boolean, githubStyle = false): string {
   };
 
   const waitForImages = async () => {
-    const images = Array.from((root || document).querySelectorAll('img'));
+    const printing = document.documentElement.dataset.meoExportTarget === 'pdf';
+    const images = Array.from((root || document).querySelectorAll('img'))
+      .filter(img => !printing || img.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
     if (!images.length) {
       return;
     }
 
+    if (printing) {
+      for (const img of images) if (img.loading === 'lazy') img.loading = 'eager';
+    }
     await Promise.all(images.map((img) => {
       if (img.complete) {
         return Promise.resolve();

@@ -29,11 +29,13 @@ type VscodeExportTaskContext = {
   readonly report: (stage: VscodeExportProgressStage) => void;
 };
 
+type VscodeExportTask = (context: VscodeExportTaskContext) => Promise<void | { readonly warning: string }>;
+
 export type VscodeExportOutcome = 'busy' | 'cancelled' | 'completed' | 'failed';
 
 type VscodeExportAttemptResult =
   | { readonly outcome: 'cancelled' | 'failed' }
-  | { readonly outcome: 'completed'; readonly targetUri: vscode.Uri };
+  | { readonly outcome: 'completed'; readonly targetUri: vscode.Uri; readonly warning?: string };
 
 type ActiveExportPhase = 'idle' | 'selectingDestination' | 'exporting';
 
@@ -43,7 +45,7 @@ type PendingExportRequest = {
     readonly format: VscodeExportFormat;
     readonly uiLanguage: UiLanguage;
   };
-  readonly task: (context: VscodeExportTaskContext) => Promise<void>;
+  readonly task: VscodeExportTask;
   readonly resolve: (outcome: VscodeExportOutcome) => void;
 };
 
@@ -60,7 +62,7 @@ export function runVscodeExportWithFeedback(
     readonly format: VscodeExportFormat;
     readonly uiLanguage: UiLanguage;
   },
-  task: (context: VscodeExportTaskContext) => Promise<void>
+  task: VscodeExportTask
 ): Promise<VscodeExportOutcome> {
   return new Promise<VscodeExportOutcome>((resolve) => {
     const request = { options, task, resolve } satisfies PendingExportRequest;
@@ -84,7 +86,7 @@ export function runVscodeExportWithFeedback(
 
 async function drainExportRequests(initialRequest: PendingExportRequest): Promise<void> {
   let request: PendingExportRequest | null = initialRequest;
-  let completedExport: { readonly targetUri: vscode.Uri; readonly strings: VscodeExportStrings } | null = null;
+  let completedExport: { readonly targetUri: vscode.Uri; readonly strings: VscodeExportStrings; readonly warning?: string } | null = null;
   try {
     while (request) {
       const result = await performVscodeExportWithFeedback(request.options, request.task);
@@ -92,6 +94,7 @@ async function drainExportRequests(initialRequest: PendingExportRequest): Promis
       if (result.outcome === 'completed') {
         completedExport = {
           targetUri: result.targetUri,
+          warning: result.warning,
           strings: getStrings(request.options.uiLanguage, request.options.format)
         };
       }
@@ -112,7 +115,7 @@ async function drainExportRequests(initialRequest: PendingExportRequest): Promis
   }
 
   if (completedExport) {
-    void showCompletedExportFeedback(completedExport.targetUri, completedExport.strings);
+    void showCompletedExportFeedback(completedExport.targetUri, completedExport.strings, completedExport.warning);
   }
 }
 
@@ -122,10 +125,10 @@ async function performVscodeExportWithFeedback(
     readonly format: VscodeExportFormat;
     readonly uiLanguage: UiLanguage;
   },
-  task: (context: VscodeExportTaskContext) => Promise<void>
+  task: VscodeExportTask
 ): Promise<VscodeExportAttemptResult> {
   const strings = getStrings(options.uiLanguage, options.format);
-  let targetUri: vscode.Uri | undefined;
+  let completion: { targetUri: vscode.Uri; warning?: string } | undefined;
   activeExportPhase = 'selectingDestination';
 
   try {
@@ -160,11 +163,11 @@ async function performVscodeExportWithFeedback(
 
           activeExportPhase = 'exporting';
           progress.report({ message: strings.progress.preparingExport });
-          await task({
+          const result = await task({
             targetUri: selectedUri,
             report: (stage) => progress.report({ message: strings.progress[stage] })
           });
-          return selectedUri;
+          return { targetUri: selectedUri, warning: result?.warning };
         } catch (error) {
           rejectDestination(error);
           throw error;
@@ -176,27 +179,26 @@ async function performVscodeExportWithFeedback(
     void Promise.resolve(progressOperation).catch(rejectDestination);
     const selectedUri = await destination;
     if (!selectedUri) return { outcome: 'cancelled' };
-    targetUri = await progressOperation;
+    completion = await progressOperation;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error || 'Export failed');
     void vscode.window.showErrorMessage(strings.failed(message));
     return { outcome: 'failed' };
   }
-  if (!targetUri) return { outcome: 'cancelled' };
+  if (!completion) return { outcome: 'cancelled' };
 
-  return { outcome: 'completed', targetUri };
+  return { outcome: 'completed', ...completion };
 }
 
 async function showCompletedExportFeedback(
   targetUri: vscode.Uri,
-  strings: VscodeExportStrings
+  strings: VscodeExportStrings,
+  warning?: string
 ): Promise<void> {
   try {
-    const selected = await vscode.window.showInformationMessage(
-      strings.completed,
-      strings.open,
-      strings.reveal
-    );
+    const selected = warning
+      ? await vscode.window.showWarningMessage(warning, strings.open, strings.reveal)
+      : await vscode.window.showInformationMessage(strings.completed, strings.open, strings.reveal);
     if (selected === strings.open) {
       const opened = await openLocalResource(targetUri);
       if (!opened) throw new Error('The exported file could not be opened.');
