@@ -3,6 +3,14 @@
 This changelog retains the release history of the original Markdown Editor
 Optimized project. New MEO Enhanced releases start from version 0.1.0.
 ---
+## 0.4.5
+- Kept the document and line numbers steady when typing, pasting, or inserting blocks at the end. Split preview follows new content. Live and Source honor the VS Code setting for scrolling beyond the last line.
+- Improved table editing. New tables place the caret in the first cell, and adding rows at the end keeps the active cell in view. Row height and line numbers remain stable as cells switch between editing and rendered content.
+- Inserted tables, code fences, and other Markdown blocks at valid boundaries when the caret is in headings, lists, quotes, or inline formatting. Code comments inside fenced blocks preserve their surrounding quote and list prefixes.
+- Revealed enclosing Markdown markers together near the caret in Live, while preserving their inline formatting. Made HTML line breaks editable consistently in body text and table cells.
+- Kept color swatches beside their hex values on the same line and distinguished complete hex colors from hashtags. Aligned inline action icons with the text and kept hover controls accessible on small images.
+- Restored a one-pixel insertion caret in Live and Source, with the existing theme color and custom color option.
+
 ## 0.4.4
 - Enabled common formatting for pasted text by default. The paste options menu lets you keep formatting or switch to text for the current paste, with one step to undo it.
 - Updated default Windows shortcuts for code blocks, strikethrough, table rows, and the Explorer. Reset window zoom is available as an optional binding. Existing custom bindings and cleared shortcuts are preserved.
