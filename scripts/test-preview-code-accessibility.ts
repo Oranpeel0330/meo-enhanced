@@ -61,17 +61,28 @@ try {
           .querySelector<HTMLElement>('.meo-export-code-line-source')?.dataset.meoShiki);
         checkpoint = 'Source return';
         await page.click('.mode-group [data-mode="source"]');
-        // The retained Preview can be hidden while the accessibility renderer
-        // is settling. Wait for the editable surface, independently of paint callbacks.
-        await page.waitForFunction(() => {
-          const host = document.querySelector<HTMLElement>('.editor-host');
-          const source = host?.querySelector<HTMLElement>('.meo-mode-source .cm-content');
-          return document.querySelector<HTMLElement>('#app')?.dataset.mode === 'source'
-            && !document.querySelector('.mode-group [aria-busy="true"]')
-            && document.querySelector<HTMLElement>('.preview-host')?.hidden
-            && host?.inert === false && source?.isContentEditable
-            && source.querySelector('.cm-line')?.textContent === '# Accessible code';
-        }, { polling: 'mutation' });
+        // During the accessible iframe handoff, Puppeteer's injected poller can
+        // stall even though the Source surface has already become editable.
+        const deadline = performance.now() + 10_000;
+        for (;;) {
+          const status = await page.evaluate(() => {
+            const host = document.querySelector<HTMLElement>('.editor-host');
+            const content = host?.querySelector<HTMLElement>('.meo-mode-source .cm-content');
+            const doc = (content as any)?.cmTile?.root?.view?.state.doc;
+            return {
+              mode: document.querySelector<HTMLElement>('#app')?.dataset.mode,
+              busy: Boolean(document.querySelector('.mode-group [aria-busy="true"]')),
+              previewHidden: document.querySelector<HTMLElement>('.preview-host')?.hidden,
+              editable: host?.inert === false && content?.isContentEditable,
+              heading: doc?.line(1).text,
+              fence: doc?.line(3).text
+            };
+          });
+          if (status.mode === 'source' && !status.busy && status.previewHidden && status.editable
+            && status.heading === '# Accessible code' && status.fence === '```javascript') break;
+          assert.ok(performance.now() < deadline, `Expected an editable Source view: ${JSON.stringify(status)}`);
+          await Bun.sleep(25);
+        }
       }
     }
     checkpoint = 'accessibility tree';
