@@ -61,7 +61,17 @@ try {
           .querySelector<HTMLElement>('.meo-export-code-line-source')?.dataset.meoShiki);
         checkpoint = 'Source return';
         await page.click('.mode-group [data-mode="source"]');
-        await page.waitForFunction(() => document.querySelector('.meo-mode-source') && !document.querySelector('.mode-group [aria-busy="true"]'));
+        // The retained Preview can be hidden while the accessibility renderer
+        // is settling. Wait for the editable surface, independently of paint callbacks.
+        await page.waitForFunction(() => {
+          const host = document.querySelector<HTMLElement>('.editor-host');
+          const source = host?.querySelector<HTMLElement>('.meo-mode-source .cm-content');
+          return document.querySelector<HTMLElement>('#app')?.dataset.mode === 'source'
+            && !document.querySelector('.mode-group [aria-busy="true"]')
+            && document.querySelector<HTMLElement>('.preview-host')?.hidden
+            && host?.inert === false && source?.isContentEditable
+            && source.querySelector('.cm-line')?.textContent === '# Accessible code';
+        }, { polling: 'mutation' });
       }
     }
     checkpoint = 'accessibility tree';
