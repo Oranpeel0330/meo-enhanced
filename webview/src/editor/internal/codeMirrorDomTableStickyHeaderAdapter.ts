@@ -143,6 +143,7 @@ function clonePassiveHeader(source: HTMLTableRowElement): HTMLTableCellElement[]
   return Array.from(source.cells, (cell) => {
     const clone = cell.cloneNode(true) as HTMLTableCellElement;
     clone.querySelector('.meo-md-html-table-cell-reading-preview')?.remove();
+    clone.querySelector('.meo-md-table-selection-layer')?.remove();
     // Keep the color preview visible while the floating header stays a passive navigation surface.
     for (const button of Array.from(clone.querySelectorAll<HTMLButtonElement>(
       'button.meo-md-color-swatch-interactive'

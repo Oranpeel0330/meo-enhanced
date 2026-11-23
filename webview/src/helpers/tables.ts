@@ -72,6 +72,7 @@ import {
   type InlineCaretResolution,
   type InlineDomCaret
 } from './inlinePresentation';
+import { TableTextSelectionPaint } from './tableTextSelectionPaint';
 import { inlineSourceContains, inlineSourceTarget, type InlineEditRange } from './inlineSourceEditing';
 import { updateGitDiffMarkerElement } from './gitDiffMarkerDom';
 import { gitDiffLineFlagsFacet } from './gitDiffPresentation';
@@ -3340,6 +3341,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   private selectionDomAnchor: { node: Node; offset: number; cell: HTMLTableCellElement | undefined; projected: boolean } | null = null;
   selectionDomHead: { node: Node; offset: number } | null = null;
   private pointerTextHighlight: Highlight | null = null;
+  private readonly textSelectionPaint = new TableTextSelectionPaint();
   measuredHeightCache: RenderedBlockPreviewHeight;
   pendingContextMenuRestore: boolean;
   contextPage: TableContextPage;
@@ -4404,6 +4406,8 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       CSS.highlights.set('meo-table-cell-selection', this.pointerTextHighlight);
       anchor.cell?.classList.add('has-projected-text-selection');
     }
+    const content = anchor.cell?.querySelector<HTMLElement>('.meo-md-html-table-cell-content');
+    if (content) this.textSelectionPaint.paint(content, [range]);
   }
 
   private clearPointerTextHighlight() {
@@ -4412,6 +4416,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
       CSS.highlights.delete('meo-table-cell-selection');
     }
     this.pointerTextHighlight = null;
+    this.textSelectionPaint.clear();
     this.selectionDomAnchor?.cell?.classList.remove('has-projected-text-selection');
   }
 
@@ -6873,6 +6878,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
   }
 
   private clearCellLineHighlight(presentation: TableCellLinePresentation) {
+    if (presentation.highlight) this.textSelectionPaint.clear();
     if (CSS.highlights?.get('meo-table-cell-selection') === presentation.highlight) {
       CSS.highlights.delete('meo-table-cell-selection');
     }
@@ -6915,6 +6921,7 @@ class HtmlTableController extends UiLanguageSensitiveWidget {
     if (this.composingInput !== input && input.scrollTop !== presentation.scrollTop) {
       input.scrollTop = presentation.scrollTop;
     }
+    if (presentation.highlight) this.textSelectionPaint.paint(content, presentation.highlight);
     this.paintCellSourceCaret(presentation, sourceRect.right);
   }
 

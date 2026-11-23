@@ -7695,8 +7695,23 @@ html[data-editor-appearance='dark'] body.vscode-dark
   }
 }
 
+.meo-md-html-table-cell-preview :is(.meo-md-inline-code, .meo-md-highlight, mark) {
+  --meo-table-selection-inline-background: var(--meo-selection-bg);
+}
+
 ::highlight(meo-table-cell-selection) {
-  background-color: var(--meo-selection-bg);
+  background-color: var(--meo-table-selection-inline-background, transparent);
+}
+
+.meo-md-table-selection-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+  fill: var(--meo-selection-bg);
+  forced-color-adjust: none;
 }
 
 .cm-editor .has-projected-text-selection :is(.meo-md-html-table-cell-preview, .meo-md-html-table-cell-preview *)::selection {
@@ -9322,6 +9337,7 @@ html[data-meo-ui-contrast='high'] .cm-editor .cm-content :is(.cm-line, td, th) *
   -webkit-text-fill-color: var(--meo-high-contrast-selection-foreground) !important;
 }
 html[data-meo-ui-contrast='high'] ::highlight(meo-table-cell-selection) {
+  background-color: var(--meo-high-contrast-selection);
   color: var(--meo-high-contrast-selection-foreground);
   -webkit-text-fill-color: var(--meo-high-contrast-selection-foreground);
 }

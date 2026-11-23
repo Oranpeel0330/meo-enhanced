@@ -476,11 +476,11 @@ async function checkTextSelectionPaint(page: Page) {
   const cell = 'tbody tr:first-child td:nth-child(2)';
   const preview = `${cell} .meo-md-html-table-cell-preview`;
   const color = [255, 0, 219];
-  const paint = async () => {
-    const box = (await (await page.$(cell))!.boundingBox())!;
+  const paint = async (selector = cell, inset = selector === cell ? 1 : -2) => {
+    const box = (await (await page.$(selector))!.boundingBox())!;
     const buffer = await page.screenshot({ clip: {
-      x: Math.floor(box.x) + 1, y: Math.floor(box.y) + 1,
-      width: Math.floor(box.width) - 2, height: Math.floor(box.height) - 2
+      x: Math.floor(box.x) + inset, y: Math.floor(box.y) + inset,
+      width: Math.floor(box.width) - 2 * inset, height: Math.floor(box.height) - 2 * inset
     } });
     const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
     const rows = Array.from({ length: info.height }, (_, row) => row).filter(row => {
@@ -492,12 +492,23 @@ async function checkTextSelectionPaint(page: Page) {
       return false;
     });
     assert.ok(rows.length > 8, 'The selected text visibly paints a background');
-    return { height: box.height, top: rows[0]!, bottom: rows.at(-1)! };
+    return { height: box.height, top: rows[0]!, bottom: rows.at(-1)!, paintedRows: rows.length,
+      gaps: Array.from({ length: rows.at(-1)! - rows[0]! + 1 }, (_, index) => rows[0]! + index).filter(row => !rows.includes(row)) };
   };
+  const plain = '粗体、斜体、删除线';
+  const wrapped = '这是用于测量自动换行的长标识符 markdown_editor_optimized_table_width_regression_test 和中文说明文字。'.repeat(3);
+  const samples = [
+    { name: 'plain', value: plain, visible: plain, source: plain.slice(1, -1) },
+    { name: 'formatted', value: '**粗体**、*斜体*、~~删除线~~', visible: plain, source: '体**、*斜体*、~~删除' },
+    { name: 'inline-code', value: '文本 `code_span` 普通文字', visible: '文本 code_span 普通文字', source: '本 `code_span` 普通文' },
+    { name: 'wrapped', value: wrapped, visible: wrapped, source: wrapped.slice(1, -1) }
+  ];
   for (const large of [false, true]) {
-    for (const formatted of [false, true]) {
-      const value = formatted ? '**粗体**、*斜体*、~~删除线~~' : '粗体、斜体、删除线';
-      const text = `| A | B |\n| --- | --- |\n| another cell | ${value} |`
+    for (const { name, value, visible, source } of samples) {
+      const viewport = page.viewport()!;
+      const deviceScaleFactor = name === 'wrapped' && large ? 2 : 1;
+      if (deviceScaleFactor !== 1) await page.setViewport({ ...viewport, deviceScaleFactor });
+      const text = `粗体、斜体、删除线\n\n| A | B |\n| --- | --- |\n| another cell | ${value} |`
         + (large ? '\n\n' + 'padding text\n'.repeat(8100) : '');
       await page.evaluate(({ text, color }) => {
         const harness = (window as any).TableStabilityHarness;
@@ -511,6 +522,12 @@ async function checkTextSelectionPaint(page: Page) {
         await page.waitForSelector(preview);
         await page.waitForFunction(large => (window as any).TableStabilityHarness
           .usesLargeDocumentDerivedWorkBudget((window as any).__paintEditor.view.state) === large, {}, large);
+        await page.evaluate(() => {
+          const view = (window as any).__paintEditor.view;
+          view.focus();
+          view.dispatch({ selection: { anchor: 1, head: 8 } });
+        });
+        const body = await paint('.cm-line:first-child');
         await page.click('tbody tr:first-child td:first-child .meo-md-html-table-cell-preview');
         const points = await page.$eval(preview, element => {
           const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -528,23 +545,41 @@ async function checkTextSelectionPaint(page: Page) {
         await page.mouse.move(points[0].x, points[0].y);
         await page.mouse.down();
         await page.mouse.move(points[1].x, points[1].y, { steps: 7 });
-        assert.equal(await page.evaluate(() => document.getSelection()?.toString()), '体、斜体、删除');
+        assert.equal(await page.evaluate(() => document.getSelection()?.toString()), visible.slice(1, -1));
+        const rows = await page.$eval(preview, element => {
+          const rects = Array.from(document.getSelection()!.getRangeAt(0).getClientRects());
+          return { count: new Set(rects.map(rect => Math.round(rect.top))).size,
+            lineHeight: parseFloat(getComputedStyle(element).lineHeight) };
+        });
         const held = await paint();
+        if (name === 'inline-code') await paint(`${preview} .meo-md-inline-code`, 1);
         await page.mouse.up();
         const released = await paint();
-        const label = `${large ? 'optimized' : 'ordinary'}/${formatted ? 'formatted' : 'plain'}`;
+        if (name === 'inline-code') await paint(`${preview} .meo-md-inline-code`, 1);
+        const label = `${large ? 'optimized' : 'ordinary'}/${name}`;
         assert.deepEqual(released, held, `${label}: mouseup must not change the visible selection band or row height`);
-        assert.equal(await page.$eval(`${cell} textarea`, input => input.value.slice(input.selectionStart, input.selectionEnd)),
-          formatted ? '体**、*斜体*、~~删除' : '体、斜体、删除');
+        if (name === 'wrapped') {
+          assert.ok(rows.count >= 2, `${label}: fixture exercises real wrapping`);
+          assert.equal(held.gaps.length, 0, `${label}: wrapped lines do not leave unselected gaps (${held.gaps.join(',')})`);
+          assert.ok(Math.abs(held.paintedRows - rows.lineHeight * rows.count * deviceScaleFactor) <= 1,
+            `${label}: all wrapped visual lines paint at line height (${held.paintedRows}px, ${JSON.stringify({ held, rows, deviceScaleFactor })})`);
+        } else {
+          assert.ok(Math.abs(held.paintedRows - body.paintedRows) <= 1,
+            `${label}: selection uses the Live body height (${held.paintedRows}px vs ${body.paintedRows}px)`);
+        }
+        assert.equal(await page.$eval(`${cell} textarea`, input => input.value.slice(input.selectionStart, input.selectionEnd)), source);
+        await page.keyboard.press('ArrowRight');
+        assert.equal(await page.$(`${cell} .meo-md-table-selection-layer`), null, 'Collapsing selection removes its background');
       } finally {
         await page.evaluate(() => {
           (window as any).__paintEditor.destroy();
           document.documentElement.style.removeProperty('--meo-selection-bg');
         });
+        if (deviceScaleFactor !== 1) await page.setViewport(viewport);
       }
     }
   }
-  console.log('Table drag selection paint remains stable in ordinary and optimized documents');
+  console.log('Table text selection matches the Live body across formats, wrapping and display scales');
 }
 
 async function main() {
