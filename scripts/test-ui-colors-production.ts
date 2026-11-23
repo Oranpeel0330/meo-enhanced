@@ -148,6 +148,14 @@ try {
     const paintBrowser = await launchTestBrowser(undefined, scale);
     try {
       const target = await paintBrowser.newPage();
+      const session = await target.createCDPSession();
+      try {
+        const { windowId } = await session.send('Browser.getWindowForTarget');
+        await session.send('Browser.setContentsSize', { windowId, width: 1100, height: 820 });
+      } finally {
+        await session.detach();
+      }
+      await target.waitForFunction(() => innerWidth >= 1100 && innerHeight >= 820);
       await openFixture(target, true);
       await target.addStyleTag({ content: '.cm-cursorLayer{animation:none!important}' });
       assert.ok(Math.abs(await target.evaluate(() => devicePixelRatio) - scale) < 0.0001);
