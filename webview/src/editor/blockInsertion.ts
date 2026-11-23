@@ -1,11 +1,15 @@
 import { matchInlineScript } from '../../../src/foundation/inlineScript';
 import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPrefix';
 import { Annotation, EditorSelection, type EditorState, type TransactionSpec } from '@codemirror/state';
-import type { Tree } from '@lezer/common';
+import type { SyntaxNode, Tree } from '@lezer/common';
 import { syntaxTree } from '@codemirror/language';
 import { isSuggestionAddress } from '../application/inputSuggestions';
 import { indentedCodeBlockAt } from './codeBlockSource';
+import { resolveMarkdownStructureAt } from './backgroundMarkdownStructure';
+import { markdownInlineSourceNodeNames } from './markdownStructure';
+import { scanHtmlTags, type HtmlTagToken } from '../../../src/foundation/htmlSyntax';
 export type MarkdownInputContext = 'block' | 'inline' | 'heading' | 'excluded';
+export type MarkdownInputContextAt = (state: EditorState, position: number) => MarkdownInputContext;
 
 /** Number of source lines in the new table. The mapped caret identifies its header. */
 export const insertedTableLineCount = Annotation.define<number>();
@@ -46,6 +50,72 @@ export function markdownSyntaxContext(state: EditorState, position: number): Mar
   if (/\$\$[^$]*$|(?<!\\)\$[^$\n]*$/.test(before)) return 'excluded';
   if (/^[ \t]*(?:>\s*)*\[[^\]]+\]:/.test(line.text)) return 'excluded';
   return context;
+}
+
+const atomicTableInsertionSpans = new Set(['InlineMath', 'InlineHTMLCode', 'HTMLTag', 'Comment', 'URL', 'Escape', 'Entity']);
+const protectedTableContainers = /^(?:Table|FencedCode|CodeBlock|ATXHeading[1-6]|SetextHeading[12]|HTMLBlock|CommentBlock|ProcessingInstruction|LinkReference)$/;
+
+/** Keep a block split outside the outermost inline construct. At the end of
+ * that construct the ordinary input context may still see its left-hand node. */
+export function tableInsertionPoint(state: EditorState, position: number, inputContext: MarkdownInputContextAt,
+  beforeOpeningContent = true): number | null {
+  if (state.readOnly || state.selection.ranges.length !== 1) return null;
+  const line = state.doc.lineAt(position);
+  const tree = resolveMarkdownStructureAt(state, line.to, 2);
+  let outer: { from: number; to: number; openingTo: number } | undefined;
+  const include = (from: number, to: number, openingTo: number) => {
+    if (from >= position || position > to) return;
+    if (!outer || from <= outer.from && to >= outer.to) outer = { from, to, openingTo };
+  };
+  let paragraph: SyntaxNode | undefined;
+  for (const side of [-1, 1] as const) {
+    for (let node: SyntaxNode | null = tree.resolve(position, side); node; node = node.parent) {
+      if (protectedTableContainers.test(node.name)) return null;
+      if (node.name === 'InlineMath' && node.from < position && position < node.to) return null;
+      if (node.name === 'Paragraph') paragraph = node;
+      if (markdownInlineSourceNodeNames.has(node.name) || atomicTableInsertionSpans.has(node.name)) {
+        const first = node.firstChild;
+        include(node.from, node.to, first?.name.endsWith('Mark') && first.from === node.from ? first.to : node.from);
+      }
+    }
+  }
+  if (paragraph && paragraph.to - paragraph.from <= 32_768 && state.sliceDoc(paragraph.from, paragraph.to).includes('<')) {
+    const tags: (Pick<HtmlTagToken, 'name' | 'from' | 'to'>)[] = [];
+    // Pair actual Markdown HTML tokens so literal angle brackets in code are ignored.
+    tree.iterate({ from: paragraph.from, to: paragraph.to, enter(node) {
+      if (node.name !== 'HTMLTag') return;
+      const [tag] = scanHtmlTags(state.sliceDoc(node.from, node.to));
+      if (!tag || tag.selfClosing) return;
+      if (!tag.closing) tags.push({ name: tag.name, from: node.from, to: node.to });
+      else if (tags.at(-1)?.name === tag.name) {
+        const open = tags.pop()!;
+        include(open.from, node.to, open.to);
+      }
+    } });
+  }
+  if (!outer) return inputContext(state, position) === 'block' ? position : null;
+  const leadingContext = inputContext(state, outer.from);
+  if (leadingContext !== 'block' && leadingContext !== 'inline') return null;
+  return beforeOpeningContent && position <= outer.openingTo ? outer.from : outer.to;
+}
+
+/** Relocating a typed slash command consumes the query where it was typed and
+ * inserts the block in the same undoable transaction at the safe boundary. */
+export function tableBlockInsertion(state: EditorState, from: number, to: number, block: string, caret: number,
+  inputContext: MarkdownInputContextAt) {
+  const point = tableInsertionPoint(state, from, inputContext, from === to);
+  if (point === null || point > from && point < to) return null;
+  if (point === from || from === to) {
+    const plan = blockInsertion(state, point, point === from ? to : point, block, caret, 'block');
+    return plan && { ...plan, point };
+  }
+  const plan = blockInsertion(state, point, point, block, caret, 'block');
+  if (!plan) return null;
+  const positionAt = (offset: number) => plan.positionAt(offset) - (to - from);
+  return { ...plan, point, positionAt, transaction: {
+    changes: [{ from, to }, plan.transaction.changes!],
+    selection: EditorSelection.cursor(positionAt(caret))
+  } satisfies TransactionSpec };
 }
 
 /** Replaces a query, or inserts after a preserved selection. The editor supplies the context at `from`. */

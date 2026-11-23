@@ -1,4 +1,4 @@
-import { ParseContext, syntaxTree } from '@codemirror/language';
+import { ensureSyntaxTree, ParseContext, syntaxTree } from '@codemirror/language';
 import { ChangeSet, Facet, type EditorState, type Extension, type Text } from '@codemirror/state';
 import { ViewPlugin } from '@codemirror/view';
 import { TreeFragment, type NodeSet, type ParseWrapper, type Tree } from '@lezer/common';
@@ -264,6 +264,17 @@ export function isBackgroundMarkdownPreparationPending(state: EditorState): bool
 export function completedBackgroundMarkdownStructure(state: EditorState): Tree | undefined {
   const backend = state.facet(runtime);
   return backend && usesLargeDocumentDerivedWorkBudget(state) ? backend.read(state.doc).tree : undefined;
+}
+
+/** Structural input guards need only the caret's block on synchronous documents. */
+export function resolveMarkdownStructureAt(state: EditorState, upto: number, timeout: number): Tree {
+  const published = syntaxTree(state);
+  if (isCompleteMarkdownStructure(published, state.doc.length)) return published;
+  const completed = completedBackgroundMarkdownStructure(state);
+  if (completed) return completed;
+  // Extending a synchronous parse cannot make a pending worker reply arrive.
+  if (isBackgroundMarkdownPreparationPending(state)) return published;
+  return ensureSyntaxTree(state, upto, timeout) ?? syntaxTree(state);
 }
 
 export function usesBackgroundMarkdownStructure(state: EditorState): boolean {

@@ -34,22 +34,25 @@ const tableExitPrefix = ('## A section\n\nParagraph with **bold**, `code`, and a
   + '```js\n' + 'const value = '.repeat(32) + '1;\n```\n\n$$\n\\sum_{k=1}^N k\n$$\n\n'
   + '> Quoted content\n> on two lines.\n\n<div><p>HTML content</p></div>\n\n').repeat(130);
 
-async function checkTableInsertionPaint(atEnd: boolean, fromSlash: boolean): Promise<void> {
-  const label = `live-table-insertion-${atEnd ? 'end' : 'middle'}-${fromSlash ? 'slash' : 'toolbar'}`;
+async function checkTableInsertionPaint(atEnd: boolean, fromSlash: boolean, insideInline = false): Promise<void> {
+  const label = `live-table-insertion-${atEnd ? 'end' : 'middle'}-${fromSlash ? 'slash' : 'toolbar'}${insideInline ? '-nested-link' : ''}`;
   const witness = 'Reading witness before table';
   const prefix = tableExitPrefix + witness
     + '. Styled **bold** words keep this paint witness visible. More text on this row.\n\n';
   const suffix = atEnd ? '' : '\n\nFollowing witness\n\n' + 'An ordinary **styled** line with text.\n\n'.repeat(45);
-  const expected = prefix + (fromSlash ? slashTable : toolbarTable).markdown + suffix;
+  const inline = insideInline ? 'Paragraph before [**nested** link](#a-section)' : '';
+  const rest = insideInline ? ' after.' : '';
+  const expected = prefix + (insideInline ? inline + '\n\n' : '')
+    + (fromSlash ? slashTable : toolbarTable).markdown + (insideInline ? '\n\n' + rest : '') + suffix;
   const page = await browser.newPage();
-  const host = await open(page, prefix + suffix, false, 'live', { scrollBeyondLastLine: true });
+  const host = await open(page, prefix + inline + rest + suffix, false, 'live', { scrollBeyondLastLine: true });
   try {
     await page.setViewport({ width: 1200, height: 635 });
     await page.$eval('.editor-host .cm-content', (content, anchor) => {
       const view = (content as any).cmTile.root.view;
       view.dispatch({ selection: { anchor }, effects: view.constructor.scrollIntoView(anchor, { y: 'center' }) });
       view.focus();
-    }, prefix.length);
+    }, prefix.length + (insideInline ? inline.indexOf('nested') + 3 : 0));
     await frames(page, 16);
     if (atEnd) {
       await page.hover('.editor-host > .cm-editor > .cm-scroller');
@@ -388,6 +391,8 @@ try {
   const tableExitOnly = process.argv.includes('--table-exit-only');
   if (!tableExitOnly) {
     for (const atEnd of [false, true]) for (const fromSlash of [false, true]) await checkTableInsertionPaint(atEnd, fromSlash);
+    await checkTableInsertionPaint(false, false, true);
+    await checkTableInsertionPaint(true, true, true);
   }
   if (!paintOnly) {
     await insertAtScrollEnd(true, toolbarTable, false, true, 'blank-exit');

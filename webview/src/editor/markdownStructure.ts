@@ -3,6 +3,11 @@ import type { EditorState, Text } from '@codemirror/state';
 import { NodeProp, Tree, TreeFragment, type Parser, type ParseWrapper } from '@lezer/common';
 import { usesLargeDocumentDerivedWorkBudget } from './liveInputDerivedWork';
 
+export const markdownInlineSourceNodeNames = new Set([
+  'Emphasis', 'StrongEmphasis', 'Strikethrough', 'Highlight', 'InlineCode',
+  'Subscript', 'Superscript', 'Link', 'Image', 'Autolink'
+]);
+
 const completeOuterMarkdown = new NodeProp<number>({ perNode: true });
 const outerMarkdownIdentity = new NodeProp<Tree>({ perNode: true });
 const preparedDocuments = new WeakMap<Text, Parser>();

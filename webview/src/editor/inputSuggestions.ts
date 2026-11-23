@@ -18,7 +18,7 @@ import { beginHtmlCommentTemplate } from './htmlCommentEditing';
 import { nativeSymbolInput } from './nativeTypingAssistance';
 import { addAutomaticSymbolPair } from './typingAssistance';
 import { sourceTableAt } from './sourceTableCommands';
-import { blockInsertion, insertedTableLineCount, type MarkdownInputContext } from './blockInsertion';
+import { blockInsertion, insertedTableLineCount, tableBlockInsertion, tableInsertionPoint, type MarkdownInputContext } from './blockInsertion';
 import { encodeMarkdownPath } from '../../../src/foundation/linkDestination';
 import { scanHtmlTags } from '../../../src/foundation/htmlSyntax';
 import { candidateMatchPositions, candidateTextMatch } from '../../../src/foundation/candidateText';
@@ -264,8 +264,11 @@ export function createInputSuggestions(options: {
         .slice(0, 100).map(({ option }) => ({ label: option.label, insert: typeof option.apply === 'string' ? option.apply : option.label, detail: '' }));
       else if (context.type === 'emoji') items = emojiSuggestions.filter(item => item.name.startsWith(context.query.toLowerCase())).map(item => ({ label: ':' + item.name + ':', insert: item.value, detail: item.value }));
       else if (context.type === 'slash') {
-        const scope = this.cellFrom !== null ? 'inline' : options.inputContext(this.view.state, this.slashFrom! + 1);
-        items = scope === 'excluded' ? [] : slashCommandSuggestions(context.query, scope).map(slash => ({ label: slash.label, insert: slash.insert, detail: language === 'zh-CN' ? slash.zh : slash.en, caret: slash.caret, slash }));
+        const from = this.slashFrom!;
+        const scope = this.cellFrom !== null ? 'inline' : options.inputContext(this.view.state, from + 1);
+        const canInsertInlineTable = scope === 'inline' && this.cellFrom === null
+          ? () => tableInsertionPoint(this.view.state, from, options.inputContext, false) !== null : undefined;
+        items = scope === 'excluded' ? [] : slashCommandSuggestions(context.query, scope, canInsertInlineTable).map(slash => ({ label: slash.label, insert: slash.insert, detail: language === 'zh-CN' ? slash.zh : slash.en, caret: slash.caret, slash }));
       } else if (context.type === 'headings' && !context.target) items = options.currentHeadings().filter(item => candidateMatchPositions(item.label, context.query).length || !context.query).slice(0, 50)
         .map(item => context.wiki ? { ...item, insert: item.anchor ?? item.insert } : item);
       else {
@@ -615,15 +618,22 @@ export function createInputSuggestions(options: {
       const command = item.slash;
       let fields = command?.fields?.map(([start, end]) => ({ from: from + start, to: from + end }));
       let templateEnd = from + insert.length;
+      let relocatedTable: number | undefined;
       let transaction: TransactionSpec = { changes: { from, to, insert }, selection: EditorSelection.cursor(caret) };
       const annotations: Annotation<unknown>[] = [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')];
       if (item.slash?.scope === 'block') {
-        const plan = blockInsertion(this.view.state, from, this.head, insert, item.caret!, options.inputContext(this.view.state, from));
+        const tablePlan = command?.id === 'table'
+          ? tableBlockInsertion(this.view.state, from, this.head, insert, item.caret!, options.inputContext) : null;
+        const plan = command?.id === 'table' ? tablePlan
+          : blockInsertion(this.view.state, from, this.head, insert, item.caret!, options.inputContext(this.view.state, from));
         if (!plan) { this.slashFrom = null; this.clear(); return; }
         transaction = plan.transaction;
         fields = command?.fields?.map(([start, end]) => ({ from: plan.positionAt(start), to: plan.positionAt(end) }));
         templateEnd = plan.positionAt(insert.length);
-        if (command?.id === 'table') annotations.push(insertedTableLineCount.of(plan.lineCount));
+        if (tablePlan) {
+          annotations.push(insertedTableLineCount.of(tablePlan.lineCount));
+          if (tablePlan.point !== from) relocatedTable = tablePlan.point;
+        }
       }
       this.slashFrom = null; this.clear();
       this.dismissed = item.kind !== 'directory';
@@ -644,7 +654,7 @@ export function createInputSuggestions(options: {
         }
         return true;
       };
-      if (command && options.insertSlash) options.insertSlash(from, to, complete, command.id === 'table' ? 'cell' : 'caret');
+      if (command && options.insertSlash) options.insertSlash(relocatedTable ?? from, relocatedTable ?? to, complete, command.id === 'table' ? 'cell' : 'caret');
       else complete(() => {});
       if (item.kind === 'directory') this.schedule();
     }

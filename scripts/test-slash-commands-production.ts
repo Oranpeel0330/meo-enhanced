@@ -474,6 +474,23 @@ try {
     await page.keyboard.press('Enter');
     await waitText('|  |  |  |  |\n| --- | --- | --- | --- |\n|  |  |  |  |\n|  |  |  |  |\n|  |  |  |  |');
     const defaultTable = '|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |';
+    for (const [inline, offset, query, table] of [
+      ['**bold**', 4, '/table', defaultTable],
+      ['[label](file.md)', 3, '/table2x2', emptyMarkdownTable(2, 2)!],
+      ['***nested***', 6, '/tbl', defaultTable]
+    ] as const) {
+      const source = `before ${inline} after`, pos = 'before '.length + offset;
+      const expected = `before ${inline}\n\n${table}\n\n after`;
+      await prepare(mode, source, pos);
+      await page.keyboard.type(query); await open();
+      await page.waitForSelector('.meo-input-suggestion[data-command="table"]');
+      await page.keyboard.press('Enter'); await waitText(expected);
+      if (mode === 'live') await page.waitForFunction(() => document.activeElement instanceof HTMLTextAreaElement
+        && document.activeElement.dataset.tableRow === '0' && document.activeElement.dataset.tableCol === '0');
+      await page.evaluate(() => (window as any).editor.undo());
+      await waitText(source.slice(0, pos) + query + source.slice(pos));
+      await page.evaluate(() => (window as any).editor.redo()); await waitText(expected);
+    }
     for (const [source, pos, expected] of [
       ['- keep', 0, defaultTable + '\n\n- keep'],
       ['> keep', 0, defaultTable + '\n\n> keep'],

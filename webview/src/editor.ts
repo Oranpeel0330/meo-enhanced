@@ -117,7 +117,7 @@ import {
   orderedListRenumberTransactionFilter
 } from './helpers/listMarkers';
 import {
-  insertTable,
+  prepareTableInsertion,
   sourceTableHeaderLineField,
   refreshTableLocalLinkIndicators,
   tableCellEditorOffsetToSourceOffset,
@@ -1427,9 +1427,11 @@ export function createEditor({
 
   const insertTableAtSelection = (cols = 3, rows = 2) => {
     if (getActiveTableInput()) return false;
-    const selection = view.state.selection.main;
-    return withInsertionViewport(selection.to, selection.to, acceptLayout => {
-      if (!insertTable(view, selection, inputContext, cols, rows, Transaction.userEvent.of('input.toolbar'))) return false;
+    const plan = prepareTableInsertion(view.state, view.state.selection.main, inputContext, cols, rows,
+      Transaction.userEvent.of('input.toolbar'));
+    if (!plan) return false;
+    return withInsertionViewport(plan.point, plan.point, acceptLayout => {
+      view.dispatch(plan.transaction);
       focusInsertedTable(acceptLayout);
       return true;
     }, 'cell');

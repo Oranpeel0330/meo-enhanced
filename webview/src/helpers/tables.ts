@@ -6,7 +6,7 @@ import { readMarkdownListPrefix } from '../../../src/foundation/markdownListPref
 import { tableHeaderFitsStickyViewport } from '../editor/tableStickyHeaderPolicy';
 import { createTableColumnResizeHandle } from '../editor/tableColumnResizeHandle';
 import { createTableRowWindow, type TableRowWindow } from '../editor/tableRowWindow';
-import { blockInsertion, insertedTableLineCount, type MarkdownInputContext } from '../editor/blockInsertion';
+import { tableBlockInsertion, insertedTableLineCount, type MarkdownInputContextAt } from '../editor/blockInsertion';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { markLiveInputNestedProjection, usesLargeDocumentDerivedWorkBudget } from '../editor/liveInputDerivedWork';
 import { renderedBlockPreviewHeight, RenderedBlockPreviewHeight } from './renderedBlockPreview';
@@ -8581,21 +8581,20 @@ export const sourceTableHeaderLineField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field)
 });
 
-export function insertTable(
-  view: EditorView,
+export function prepareTableInsertion(
+  state: EditorState,
   selection: CodeMirrorSelectionRange,
-  inputContext: (state: EditorState, position: number) => MarkdownInputContext,
+  inputContext: MarkdownInputContextAt,
   cols = 3,
   rows = 2,
   userEvent?: Annotation<string>
 ) {
   const table = emptyMarkdownTable(cols, rows);
-  if (!table) return false;
-  const plan = blockInsertion(view.state, selection.to, selection.to, table, 2, inputContext(view.state, selection.to));
-  if (!plan) return false;
-  view.dispatch({ ...plan.transaction, annotations: [...(userEvent ? [userEvent] : []), isolateHistory.of('full'),
-    insertedTableLineCount.of(plan.lineCount)] });
-  return true;
+  if (!table) return null;
+  const plan = tableBlockInsertion(state, selection.to, selection.to, table, 2, inputContext);
+  if (!plan) return null;
+  return { point: plan.point, transaction: { ...plan.transaction,
+    annotations: [...(userEvent ? [userEvent] : []), isolateHistory.of('full'), insertedTableLineCount.of(plan.lineCount)] } };
 }
 
 /** Reuses the mounted table's command target, pending-cell commit and selection owner. */

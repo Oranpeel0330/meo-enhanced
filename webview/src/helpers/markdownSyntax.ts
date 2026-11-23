@@ -1,10 +1,10 @@
-import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
+import { syntaxTree } from '@codemirror/language';
 import { EditorState, type Transaction } from '@codemirror/state';
 import { markdownLanguage } from '@codemirror/lang-markdown';
 import { IterMode, type SyntaxNode, type Tree } from '@lezer/common';
 import { isInsideFrontmatter, parseFrontmatter } from './frontmatter';
-import { isCompleteMarkdownStructure, markdownStructureIdentity } from '../editor/markdownStructure';
-import { completedBackgroundMarkdownStructure, isBackgroundMarkdownPreparationPending } from '../editor/backgroundMarkdownStructure';
+import { markdownStructureIdentity } from '../editor/markdownStructure';
+import { resolveMarkdownStructureAt } from '../editor/backgroundMarkdownStructure';
 import type { MarkdownDetailsBlock } from '../../../src/foundation/markdownDocumentContext';
 
 type OwnedMarkdownSpan = { state: EditorState; tree: Tree; indentation: string; originalPosition(position: number): number };
@@ -87,18 +87,8 @@ export function resolvedSyntaxTree(state: EditorState, timeout: number = 50): Tr
   return resolvedSyntaxTreeAt(state, state.doc.length, timeout);
 }
 
-/** Structural input guards need only the caret's block on synchronous documents. */
 export function resolvedSyntaxTreeAt(state: EditorState, upto: number, timeout: number = 50): Tree {
-  const snapshot = syntaxSnapshots.get(state);
-  if (snapshot) return snapshot;
-  const published = syntaxTree(state);
-  if (isCompleteMarkdownStructure(published, state.doc.length)) return published;
-  const completed = completedBackgroundMarkdownStructure(state);
-  if (completed) return completed;
-  // Synchronous parser work cannot make another thread's pending reply arrive.
-  // Keep the current projection until the existing publication path wakes it.
-  if (isBackgroundMarkdownPreparationPending(state)) return published;
-  return ensureSyntaxTree(state, upto, timeout) ?? syntaxTree(state);
+  return syntaxSnapshots.get(state) ?? resolveMarkdownStructureAt(state, upto, timeout);
 }
 export function headingLevelFromName(name: string): number | null {
   const match = /^(?:ATXHeading([1-6])|SetextHeading([12]))$/.exec(name);

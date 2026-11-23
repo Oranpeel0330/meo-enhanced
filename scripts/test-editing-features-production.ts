@@ -188,6 +188,29 @@ try {
     await page.evaluate(() => (window as any).editor.undo()); await waitText('before after');
     await page.evaluate(() => (window as any).editor.redo());
     assert.ok((await text()).startsWith('before\n\n|'), 'table redo preserves surrounding text');
+    const insertedTable = '|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |';
+    for (const [inline, offset, beforeInline] of [
+      ['**bold**', 2, true], ['**bold**', 4, false], ['**bold**', 8, false],
+      ['**bold `code`**', 10, false], ['[label](file.md)', 3, false],
+      ['[label](file.md)', 11, false], ['`literal`', 3, false], ['~sub~', 3, false],
+      ['~~struck~~', 5, false], ['<u>underline</u>', 6, false],
+      ['<u>literal `<b>` word</u>', 19, false], ['<u>first\nsecond</u>', 13, false]
+    ] as const) {
+      const source = 'before ' + inline + ' after';
+      await prepare(mode, source, 'before '.length + offset);
+      assert.equal(await command('insertTable'), true, `${mode}: table insertion near ${inline} at ${offset}`);
+      await waitText(beforeInline
+        ? 'before \n\n' + insertedTable + '\n\n' + inline + ' after'
+        : 'before ' + inline + '\n\n' + insertedTable + '\n\n after');
+      if (mode === 'live') {
+        await page.waitForFunction(() => {
+          const input = document.activeElement;
+          return input instanceof HTMLTextAreaElement && input.dataset.tableRow === '0'
+            && input.dataset.tableCol === '0' && input.selectionStart === 0 && input.selectionEnd === 0;
+        });
+      }
+      await page.evaluate(() => (window as any).editor.undo()); await waitText(source);
+    }
     await prepare(mode, 'word', 0, 4); await command('blockMath'); assert.equal(await text(), '$$\nword\n$$'); await command('blockMath'); assert.equal(await text(), 'word');
     await prepare(mode, '**word**', 4); await command('expandSelection'); await command('shrinkSelection');
     assert.equal(await page.evaluate(() => (window as any).editor.view.state.selection.main.head), 4);

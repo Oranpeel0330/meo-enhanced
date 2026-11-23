@@ -21,7 +21,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { Language, LanguageSupport, syntaxHighlighting } from '@codemirror/language';
 import type { MarkdownParser } from '@lezer/markdown';
-import { certifyMarkdownStructure, markdownStructureAvailable, preparedMarkdownStructure } from './editor/markdownStructure';
+import { certifyMarkdownStructure, markdownInlineSourceNodeNames, markdownStructureAvailable, preparedMarkdownStructure } from './editor/markdownStructure';
 import { isGraphBlockLanguage } from './editor/documentBlocks';
 import {
   Decoration,
@@ -1640,11 +1640,6 @@ function addInlineMarkerRange(builder: DecorationCollector, active: boolean, fro
   }
 }
 
-const inlineSourceNodeNames = new Set([
-  'Emphasis', 'StrongEmphasis', 'Strikethrough', 'Highlight', 'InlineCode',
-  'Subscript', 'Superscript', 'Link', 'Image', 'Autolink'
-]);
-
 function liveInlineSource(state: EditorState, tree: Tree, math: readonly DocumentMathRange[], footnotes: ParsedFootnotes) {
   const selections = state.field(liveDocumentIdleField) ? [] : sourcePresentationSelection(state).ranges;
   const openingBoundaries = new Set(selections.filter(range => range.empty).map(range => range.head));
@@ -1660,7 +1655,7 @@ function liveInlineSource(state: EditorState, tree: Tree, math: readonly Documen
     const candidates: InlineEditRange[] = [];
     for (const side of selection.empty ? [-1, 1] as const : [1] as const) {
       for (let node: SyntaxNode | null = tree.resolve(selection.from, side); node; node = node.parent) {
-        if (!inlineSourceNodeNames.has(node.name)) continue;
+        if (!markdownInlineSourceNodeNames.has(node.name)) continue;
         if (node.name === 'Link' && !isWikiLinkNode(state, node) && !hrefFromSourceLinkNode(state, node)
           && !node.getChild('URL')) continue;
         candidates.push(node);
@@ -2552,7 +2547,7 @@ function buildDecorationRanges(state: EditorState, previous?: DecorationSet, cha
       if (node.name === 'HeaderMark' && node.node.parent?.name.startsWith('SetextHeading')) return;
       const parent = node.node.parent;
       const parentEditing = !!parent && inlineSource.editing(parent.from, parent.to);
-      if (!parentEditing && parent && inlineSourceNodeNames.has(parent.name)) {
+      if (!parentEditing && parent && markdownInlineSourceNodeNames.has(parent.name)) {
         // Hidden inline marks have no DOM rectangle. A collapsed caret on
         // either edge still needs a position without revealing that syntax.
         if (node.from === parent.from && inlineSource.takeCaretBoundary(node.from, true)) {
