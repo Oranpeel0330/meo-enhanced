@@ -1521,7 +1521,11 @@ export function createPreviewController({
         for (const attribute of ['data-meo-html-src', 'data-meo-html-poster']) {
           const source = element.getAttribute(attribute);
           if (!source || [...frameDocument.querySelectorAll(`[${attribute}]`)].some(mounted => mounted.getAttribute(attribute) === source)) continue;
-          if (!resourcePreparation.prepareHtml(source)) admitted = false;
+          const preloadImage = attribute === 'data-meo-html-poster' || (
+            element.localName === 'img' && !element.closest('picture') &&
+            !element.hasAttribute('srcset') && !element.hasAttribute('data-meo-html-srcset')
+          );
+          if (!resourcePreparation.prepareHtml(source, preloadImage)) admitted = false;
         }
       }
       return admitted;

@@ -14,6 +14,7 @@ Optimized project. New MEO Enhanced releases start from version 0.1.0.
 - Made Mermaid diagrams work offline in a single exported HTML file. (#42)
 - Improved exported math layout, preserved more table and text formatting in Word, and surfaced PDF asset warnings.
 - Made the paste options menu toggle with either Ctrl or a click. The arrow points up while the menu is open.
+- Started loading video posters and standalone HTML images ahead of the reading viewport in large Preview documents.
 - Kept the rendered block index available when scrolling through large Live documents and sped up copying entire documents from Preview.
 
 ## 0.4.4

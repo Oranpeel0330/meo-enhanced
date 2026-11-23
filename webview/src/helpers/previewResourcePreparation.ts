@@ -27,15 +27,19 @@ export function createPreviewResourcePreparation(document: Document, options: {
   changed(): void;
 }) {
   type Result = { image?: HTMLImageElement; source?: string } | null;
-  type Entry = { result: Promise<Result>; pending: boolean };
+  type Entry = { result: Promise<Result>; pending: boolean; preload?: HTMLLinkElement };
   const entries = new Map<string, Entry>();
   let pending = 0;
+  options.signal.addEventListener('abort', () => {
+    for (const entry of entries.values()) entry.preload?.remove();
+  }, { once: true });
   const prepare = (key: string, run: () => Promise<Result>): boolean => {
     if (entries.has(key)) return true;
     if (options.signal.aborted || pending >= 2) return false;
     while (entries.size >= 8) {
       const oldest = [...entries].find(([, entry]) => !entry.pending);
       if (!oldest) return false;
+      oldest[1].preload?.remove();
       entries.delete(oldest[0]);
     }
     pending++;
@@ -63,8 +67,22 @@ export function createPreviewResourcePreparation(document: Document, options: {
       entries.delete(key);
       return entry?.result.then(value => value?.image ?? null);
     },
-    prepareHtml(source: string): boolean {
-      return prepare('html:' + source, async () => ({ source: await options.resolveHtml(source, options.signal) ?? '' }));
+    prepareHtml(source: string, preloadImage: boolean): boolean {
+      const key = 'html:' + source;
+      if (!prepare(key, async () => ({ source: await options.resolveHtml(source, options.signal) ?? '' }))) return false;
+      const entry = entries.get(key)!;
+      if (preloadImage && !entry.preload) {
+        const preload = document.createElement('link');
+        preload.rel = 'preload';
+        preload.as = 'image';
+        entry.preload = preload;
+        void entry.result.then(result => {
+          if (!result?.source || options.signal.aborted || entries.get(key) !== entry) return;
+          preload.href = result.source;
+          document.head.append(preload);
+        });
+      }
+      return true;
     },
     async resolveHtml(source: string, signal: AbortSignal): Promise<string | null> {
       const cached = entries.get('html:' + source);
