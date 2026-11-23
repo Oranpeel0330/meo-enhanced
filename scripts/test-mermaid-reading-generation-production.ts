@@ -1,9 +1,33 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { closeTestBrowser } from './browser-test-helpers';
+import { closeTestBrowser, launchTestBrowser } from './browser-test-helpers';
+
+const viewModes = ['live', 'preview', 'source'] as const;
+const reportDirectory = '.local/test-artifacts/mermaid-reading-generation';
+const sourceOnly = process.argv.includes('--source-only');
+const requestedMode = process.argv.find(argument => argument.startsWith('--case-mode='))?.slice(12);
+const selectedMode = viewModes.find(mode => mode === requestedMode);
+if (requestedMode !== undefined && !selectedMode) throw new Error('Unknown Mermaid reading mode');
+if (!selectedMode && !sourceOnly) {
+  // Keep a previous view's test server and renderer allocations out of the
+  // next view's cold admission measurement. Each child retains the full budget.
+  const reports: unknown[] = [];
+  for (const mode of viewModes) {
+    const child = Bun.spawn([process.execPath, import.meta.path, `--case-mode=${mode}`], {
+      stdin: 'inherit', stdout: 'inherit', stderr: 'inherit'
+    });
+    const code = await child.exited;
+    if (code !== 0) process.exit(code);
+    reports.push(...await Bun.file(`${reportDirectory}/latest-${mode}.json`).json());
+  }
+  fs.writeFileSync(`${reportDirectory}/latest.json`, JSON.stringify(reports, null, 2));
+  console.log('Cold complex Mermaid: generation/display during native scrolling and ordinary/windowed documents passed');
+  process.exit(0);
+}
 
 process.env.MEO_TEST_NATIVE_SMOOTH_SCROLLING = '1';
-const { browser, server, open } = await import('./input-presentation-test-helpers');
+const { browser: initialBrowser, server, open } = await import('./input-presentation-test-helpers');
+let browser: typeof initialBrowser | undefined = initialBrowser;
 
 const graph = ['flowchart LR', ...Array.from({ length: 5 }, (_, lane) => [
   `subgraph lane${lane}[Processing lane ${lane}]`, 'direction LR',
@@ -16,10 +40,14 @@ const graphs = [
 ];
 const opening = Array.from({ length: 24 }, (_, i) => `Reading ${i}. ${'A stable paragraph of reading text. '.repeat(6)}\n\n`).join('');
 const reports: unknown[] = [];
-const modes = process.argv.includes('--source-only') ? ['source'] as const : ['live', 'preview', 'source'] as const;
+const modes = [selectedMode ?? 'source'] as const;
+const reportPath = `${reportDirectory}/latest${selectedMode ? '-' + selectedMode : ''}.json`;
 let failure: unknown;
 try {
   for (const { shape, source } of graphs) for (const mode of modes) for (const large of [false, true]) {
+    // Measure each cold admission with a fresh renderer and worker process.
+    // A new page can reuse the previous renderer while its workers retire.
+    browser ??= await launchTestBrowser();
     const text = opening + `\n\n\`\`\`mermaid\n${source}\n\`\`\`\n\nAFTER_GRAPH stable reading witness.\n\n`
       + 'Distant paragraph.\n\n'.repeat(large ? 9_000 : 80);
     const page = await browser.newPage();
@@ -139,7 +167,7 @@ try {
         writes: result.writes, tasks: result.tasks, samples: settled.samples };
       reports.push(report);
       fs.mkdirSync('.local/test-artifacts/mermaid-reading-generation', { recursive: true });
-      fs.writeFileSync('.local/test-artifacts/mermaid-reading-generation/latest.json', JSON.stringify(reports, null, 2));
+      fs.writeFileSync(reportPath, JSON.stringify(reports, null, 2));
       console.log(JSON.stringify({ shape, mode, large, wheels: result.wheels, visible: visible.length, ready: ready.length, delay, scaleChange, writes: result.writes.length,
         maxLongTask: Math.max(0, ...result.tasks) }));
       assert.deepEqual(host.errors, []); assert.equal(host.readHost(), text);
@@ -164,8 +192,12 @@ try {
       }
       await page.screenshot({ path: `.local/test-artifacts/mermaid-reading-generation/${shape}-${mode}-${large}.png` });
     } finally { releaseEngine(); host.dispose(); await page.close(); }
+    const completed = browser;
+    browser = undefined;
+    await closeTestBrowser(completed);
   }
-  if (!process.argv.includes('--source-only')) {
+  if (selectedMode === 'preview') {
+    browser ??= await launchTestBrowser();
     const text = opening.repeat(5) + '\n```mermaid\nsequenceDiagram\nA->>B: DistantEngineResume\n```\n\n'
       + 'Distant paragraph.\n\n'.repeat(9_000);
     const page = await browser.newPage(), host = await open(page, text, false, 'preview');
@@ -198,6 +230,12 @@ try {
       console.log('Indivisible engine: deferred during wheels and resumed by the reading owner after motion');
     } finally { host.dispose(); await page.close(); }
   }
-  console.log('Cold complex Mermaid: generation/display during native scrolling and ordinary/windowed documents passed');
+  console.log(`${modes[0]} cold complex Mermaid reading passed`);
 } catch (error) { failure = error; throw error; }
-finally { server.stop(true); if (failure === undefined) await closeTestBrowser(browser); else await closeTestBrowser(browser, failure); }
+finally {
+  server.stop(true);
+  if (browser) {
+    if (failure === undefined) await closeTestBrowser(browser);
+    else await closeTestBrowser(browser, failure);
+  }
+}
