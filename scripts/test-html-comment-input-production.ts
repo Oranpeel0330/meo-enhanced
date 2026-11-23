@@ -52,7 +52,71 @@ try {
       }) })); }
   };
   const caret = (at: number) => page.evaluate(at => (window as any).editor.view.dispatch({ selection: { anchor: at } }), at);
+  const lineCommentShortcut = async () => {
+    await page.keyboard.down('Control'); await page.keyboard.press('Slash'); await page.keyboard.up('Control');
+  };
   for (const mode of ['source', 'live']) {
+    const rustQuote = '> ~~~rust\n>   let x = 1;\n>     let y = 2;\n> ~~~';
+    const firstRust = rustQuote.indexOf('let x'), lastRust = rustQuote.indexOf('2;') + 2;
+    const commentedRust = '> ~~~rust\n>   // let x = 1;\n>   //   let y = 2;\n> ~~~';
+    await prepare(mode, rustQuote, firstRust, lastRust);
+    await page.evaluate(() => { (window as any).shortcutOverrides = {}; });
+    await lineCommentShortcut();
+    await waitText(commentedRust);
+    await page.evaluate(() => (window as any).editor.undo()); await waitText(rustQuote);
+    assert.deepEqual(await selection(), { anchor: firstRust, head: lastRust });
+    await page.evaluate(() => (window as any).editor.redo()); await waitText(commentedRust);
+    await lineCommentShortcut(); await waitText(rustQuote);
+    assert.deepEqual(await selection(), { anchor: firstRust, head: lastRust });
+    await prepare(mode, rustQuote, lastRust, firstRust);
+    await command('selectionComment');
+    await waitText('> ~~~rust\n>   /* let x = 1;\n>     let y = 2; */\n> ~~~');
+    await command('selectionComment'); await waitText(rustQuote);
+    assert.deepEqual(await selection(), { anchor: lastRust, head: firstRust });
+    await prepare(mode, rustQuote, firstRust, rustQuote.lastIndexOf('>'));
+    await command('lineComment'); await waitText(commentedRust);
+    await command('lineComment'); await waitText(rustQuote);
+    const partlyCommented = rustQuote.replace('let x', '// let x');
+    await prepare(mode, partlyCommented, partlyCommented.indexOf('let x'), partlyCommented.indexOf('2;') + 2);
+    await command('lineComment'); await waitText(commentedRust.replace('// let x', '// // let x'));
+    await command('lineComment'); await waitText(partlyCommented);
+
+    for (const [source, expected] of [
+      ['> > ```js\n> > \tlet x = 1;\n> > \t  let y = 2;\n> > ```', '> > ```js\n> > \t// let x = 1;\n> > \t//   let y = 2;\n> > ```'],
+      ['> - ```sh\n>     echo first\n>       echo last;\n>   ```', '> - ```sh\n>     # echo first\n>     #   echo last;\n>   ```'],
+      ['- ```rs\n    let x = 1;\n      let y = 2;\n  ```', '- ```rs\n    // let x = 1;\n    //   let y = 2;\n  ```'],
+      ['> ```css\n>   a {}\n>     b {};\n> ```', '> ```css\n>   /* a {}\n>     b {}; */\n> ```'],
+      ['> ```html\n>   <em>x</em>\n>   <em>y</em>;\n> ```', '> ```html\n>   <!-- <em>x</em>\n>   <em>y</em>; -->\n> ```']
+    ] as const) {
+      await prepare(mode, source, source.indexOf('\n') + 1, source.lastIndexOf(';') + 1);
+      await command('lineComment'); await waitText(expected);
+      await command('lineComment'); await waitText(source);
+    }
+    const blank = '> ~~~rust\n> \n> ~~~';
+    await prepare(mode, blank, blank.indexOf('\n') + 3);
+    await command('lineComment'); await waitText('> ~~~rust\n> // \n> ~~~');
+    await command('lineComment'); await waitText(blank);
+    const twoFences = rustQuote + '\n\n```python\npass\n```';
+    await prepare(mode, twoFences, firstRust);
+    await page.evaluate(({ first, second }) => {
+      const g = window as any, selection = g.EditingFeaturesHarness.EditorSelection;
+      g.editor.view.dispatch({ selection: selection.create([selection.cursor(first), selection.cursor(second)], 1) });
+    }, { first: firstRust, second: twoFences.indexOf('pass') });
+    await command('lineComment'); await waitText(twoFences.replace('let x', '// let x').replace('pass', '# pass'));
+    await command('lineComment'); await waitText(twoFences);
+    const across = 'before\n\n' + rustQuote + '\n\nafter';
+    for (const [document, from, to] of [
+      [across, 0, across.length], [across, 0, across.indexOf('let x') + 3],
+      [rustQuote, 2, rustQuote.indexOf('let x')], [rustQuote, firstRust, rustQuote.length]
+    ] as const) for (const action of ['lineComment', 'selectionComment']) {
+      await prepare(mode, document, from, to);
+      await command(action); await waitText(document);
+      assert.equal(await page.evaluate(() => (window as any).blocked), 1, `${mode}/${action}: do not cross code or fence boundaries`);
+    }
+    for (const document of ['```unknown\nword\n```', '> ```json\n>   {"word":1}\n> ```', '>     word']) {
+      await prepare(mode, document, document.indexOf('word'));
+      await command('lineComment'); await waitText(document);
+    }
     await prepare(mode); await page.keyboard.down('Control'); await page.keyboard.press('Slash'); await page.keyboard.up('Control');
     assert.equal(await text(), '<!---->', mode + ': Ctrl+/ uses the project command');
     assert.deepEqual(await selection(), { anchor: 4, head: 4 });

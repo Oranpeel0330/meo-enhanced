@@ -22,7 +22,7 @@ import { emptyMarkdownTable, parseMarkdownTable, serializeDelimitedTable } from 
 import { requestMountedTableShortcut, mountedTableClipboardText } from './helpers/tables';
 import { htmlCommentEditing } from './editor/htmlCommentEditing';
 import { nativeSymbolInput, planNativeHtmlCommentToggle } from './editor/nativeTypingAssistance';
-import { canRunCustomEditorCommand, formatMultipleSelections, toggleHtmlComment, runEditorCommand, secondarySelections } from './editor/commands';
+import { canRunCustomEditorCommand, formatMultipleSelections, toggleMarkdownComment, runEditorCommand, secondarySelections } from './editor/commands';
 import type { EditorCommandId } from '../../src/foundation/editingPreferences';
 import { pasteAssistance, insertPlainClipboardText } from './editor/pasteAssistance';
 import { createMarkdownContentParser } from '../../src/shared/markdownContentParser';
@@ -34,7 +34,7 @@ import type { SyntaxNode } from '@lezer/common';
 import { defaultKeymap, deleteLine, history, historyKeymap, indentMore, indentLess, isolateHistory, redo, redoDepth, undo, undoDepth } from '@codemirror/commands';
 import { markdownKeymap } from '@codemirror/lang-markdown';
 import { boundedMarkdownInputPrefix, editorMarkdownLanguage, getEditorMarkdownLanguage } from './liveMode';
-import { indentUnit, syntaxTree, forceParsing } from '@codemirror/language';
+import { indentUnit, syntaxTree, forceParsing, type Language } from '@codemirror/language';
 import { sourceHighlightStyle } from './theme';
 import { viewportSyntaxHighlighting } from './editor/viewportSyntaxHighlighting';
 import { listHistoryFocus, readListHistoryFocus } from './adapters/codeMirrorListHistoryFocus';
@@ -57,7 +57,7 @@ import { isLiveListItemAt, liveModeExtensions, moveLiveHtmlBreakLineEnd, preserv
 import { setLivePointerSelectionActiveEffect } from './editor/livePointerSelection';
 import { detailsBlockStateExtensions } from './helpers/detailsBlocks';
 import { insertMountedTableCellBreak } from './helpers/tables';
-import { planCodeBlockRemoval, sourceCodeBlockLines } from './helpers/codeBlocks';
+import { planCodeBlockRemoval, resolveCodeLanguage, sourceCodeBlockLines } from './helpers/codeBlocks';
 import { continueLiteralSourceNewline, insertIndentedCodeNewline, insertLiteralSourceNewline } from './editor/indentedCodeEditing';
 import { getCodeBlockSourceLines } from './helpers/blockIndent';
 import { markdownContentStyleTheme } from './helpers/markdownContentStyleTheme';
@@ -1324,12 +1324,18 @@ export function createEditor({
     return markdownSyntaxContext(state, position);
   };
 
-  const runCommentCommand = (lines: boolean): boolean => {
-    const selection = view.state.selection.main;
-    const block = collectRenderableHtmlBlocks(view.state).find(block => selection.from >= block.from && selection.to <= block.to);
-    if (block && !view.state.readOnly && !view.compositionStarted) view.dispatch({ effects: setHtmlEditingRangeEffect.of({ from: block.from, to: block.to }) });
-    return toggleHtmlComment(view, lines, () => onCommentBlocked?.());
-  };
+  const runCommentCommand = (lines: boolean): boolean => toggleMarkdownComment(view, lines, {
+    codeLanguage(state, name) {
+      const language: Language | null = resolveCodeLanguage(name);
+      return language ? state.facet(language.data).find(data => data.commentTokens)?.commentTokens : undefined;
+    },
+    blocked: () => onCommentBlocked?.(),
+    prepareHtmlEditing(state, tree) {
+      const selection = state.selection.main;
+      const block = collectRenderableHtmlBlocks(state, tree, selection).find(block => selection.from >= block.from && selection.to <= block.to);
+      if (block) view.dispatch({ effects: setHtmlEditingRangeEffect.of({ from: block.from, to: block.to }) });
+    }
+  });
 
   const focusInsertedTable = (beforeFocus?: () => void) => {
     if (currentMode !== 'live') return;

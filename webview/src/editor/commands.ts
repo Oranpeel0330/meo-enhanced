@@ -1,9 +1,9 @@
-import { EditorSelection, Transaction, type StateEffect, type SelectionRange } from '@codemirror/state';
+import { EditorSelection, Transaction, type EditorState, type StateEffect, type SelectionRange } from '@codemirror/state';
 import { EditorView, Decoration, WidgetType, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
-import { moveLineUp, moveLineDown, copyLineUp, copyLineDown, deleteLine, selectParentSyntax, toggleComment, toggleBlockComment, isolateHistory } from '@codemirror/commands';
+import { moveLineUp, moveLineDown, copyLineUp, copyLineDown, deleteLine, selectParentSyntax, isolateHistory } from '@codemirror/commands';
 import { selectNextOccurrence } from '@codemirror/search';
-import { syntaxTree } from '@codemirror/language';
-import type { SyntaxNode } from '@lezer/common';
+import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
+import type { SyntaxNode, Tree } from '@lezer/common';
 import { parseDelimitedTable, markdownTableFromCells } from '../application/delimitedTable';
 import { inlineCodeMarkers, planInlineWrapper } from '../application/symbolInput';
 import { isCodeInput } from './pasteAssistance';
@@ -15,6 +15,9 @@ import { planHtmlCommentToggle } from '../application/htmlCommentInput';
 import { beginHtmlCommentTemplate } from './htmlCommentEditing';
 import { addAutomaticSymbolPair } from './typingAssistance';
 import { supersedeLiveInputDerivedWork, usesLargeDocumentDerivedWorkBudget } from './liveInputDerivedWork';
+import { resolveMarkdownStructureAt } from './backgroundMarkdownStructure';
+import { isCompleteMarkdownStructure } from './markdownStructure';
+import { planCodeComments, type CodeCommentLanguage } from './codeComments';
 
 const selectionHistory = new WeakMap<EditorView, { after: EditorSelection; before: EditorSelection[] }>();
 // Programmatic edits share the existing toolbar caret-continuity path in both modes.
@@ -157,21 +160,37 @@ function structuralLineCommand(view: EditorView, run: (target: EditorView) => bo
   return run(view);
 }
 
-export function toggleHtmlComment(view: EditorView, lines: boolean, blocked: () => void): boolean {
+export function toggleMarkdownComment(view: EditorView, lines: boolean, options: {
+  readonly codeLanguage: CodeCommentLanguage;
+  blocked(): void;
+  prepareHtmlEditing(state: EditorState, tree: Tree): void;
+}): boolean {
   if (view.state.readOnly || view.compositionStarted) return false;
   const { state } = view;
   const ranges = state.selection.ranges;
-  if (ranges.every(range => isCodeInput(view, range.from) && isCodeInput(view, range.to)))
-    return (lines ? toggleComment : toggleBlockComment)(view);
-  if (ranges.some(range => isCodeInput(view, range.from) || isCodeInput(view, range.to))) { blocked(); return true; }
-  const plan = planHtmlCommentToggle(state.doc.toString(), ranges, lines, markdownCodeRanges(syntaxTree(state)));
-  if (plan.blocked) { blocked(); return true; }
+  const upto = state.doc.lineAt(ranges.at(-1)!.to).to;
+  const tree = resolveMarkdownStructureAt(state, upto, 8);
+  const code = planCodeComments(state, tree, lines, options.codeLanguage);
+  if (code === 'blocked') { options.blocked(); return true; }
+  if (code === 'unsupported') return false;
+  if (code) {
+    if (!code.length) return false;
+    const changes = state.changes(code);
+    view.dispatch({ changes, selection: state.selection.map(changes, lines ? 1 : -1), annotations: [annotation, isolateHistory.of('full')] });
+    return true;
+  }
+  // A proven code selection can be edited while distant syntax settles. The
+  // Markdown fallback must wait until the selected range has been parsed.
+  if (!isCompleteMarkdownStructure(tree, state.doc.length) && !syntaxTreeAvailable(state, upto)) return false;
+  const plan = planHtmlCommentToggle(state.doc.toString(), ranges, lines, markdownCodeRanges(tree));
+  if (plan.blocked) { options.blocked(); return true; }
   const changes = state.changes(plan.edits.map(({ from, to, insert }) => ({ from, to, insert })));
   const selections = plan.edits.flatMap(edit => edit.selections).sort((a, b) => a.index - b.index).map(selection => EditorSelection.range(selection.anchor, selection.head));
   const effects: StateEffect<unknown>[] = plan.edits.flatMap(edit => edit.template ? [
     beginHtmlCommentTemplate.of({ ...edit.template, end: edit.template.to + 3 }),
     addAutomaticSymbolPair.of({ from: edit.template.from - 4, to: edit.template.to + 3, open: '<!--', close: '-->' })
   ] : []);
+  options.prepareHtmlEditing(state, tree);
   view.dispatch({ changes, selection: EditorSelection.create(selections, Math.min(state.selection.mainIndex, selections.length - 1)), effects,
     annotations: [annotation, isolateHistory.of('full')], scrollIntoView: true });
   view.focus(); return true;
