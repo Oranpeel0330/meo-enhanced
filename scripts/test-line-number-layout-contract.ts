@@ -262,6 +262,58 @@ try {
   });
   assert.equal(idleMutations, 0, 'Settled line-number projection must stop rewriting DOM');
   await page.evaluate(() => { (window as any).ed.destroy(); }); await settle();
+  const details = 'Before\n\n<details open>\n<summary>Summary</summary>\n<p>Details body</p>\n</details>\n\nAfter';
+  for (const large of [false, true]) {
+    await page.evaluate(text => {
+      const host = window as any;
+      host.ed = host.MermaidEditingHarness.createEditor({ parent: document.querySelector('#app'), initialMode: 'live', text,
+        onApplyChanges() {} });
+      const view = host.ed.view;
+      host.ed.prepareLiveSyntax(() => true);
+      view.dispatch({ selection: { anchor: view.state.doc.line(1).to } });
+      view.focus();
+      host.readDetailsNumberRows = () => {
+        const { doc } = view.state;
+        const firstLines = doc.sliceString(0, Math.min(doc.length, 256));
+        const root = view.contentDOM.querySelector('.meo-md-html-block details');
+        const gutter = view.scrollDOM.querySelector(':scope > .cm-gutters > .cm-lineNumbers') as HTMLElement;
+        const labels = [...gutter.querySelectorAll('.meo-md-html-details-line-number')];
+        return ['summary', 'p'].map(tag => {
+          const row = root?.querySelector(tag);
+          const number = doc.lineAt(firstLines.indexOf('<' + tag + '>')).number;
+          const label = labels.find(element => element.textContent === String(number));
+          return { number, labels: labels.map(element => element.textContent),
+            offset: row && label ? label.getBoundingClientRect().top - row.getBoundingClientRect().top : null };
+        });
+      };
+    }, details + (large ? '\n\n' + 'Paragraph with **markup**.\n\n'.repeat(5000) : ''));
+    await page.waitForSelector('.meo-md-html-details-line-number');
+    await settle();
+    for (const action of ['Enter', 'undo', 'redo', 'equal-length edit'] as const) {
+      await page.evaluate(() => {
+        const host = window as any;
+        host.detailsSamples = [];
+        const sample = () => setTimeout(() => {
+          host.detailsSamples.push(host.readDetailsNumberRows());
+          if (host.detailsSamples.length < 12) requestAnimationFrame(sample);
+        }, 0);
+        requestAnimationFrame(sample);
+      });
+      if (action === 'Enter') await page.keyboard.press(action);
+      else if (action === 'equal-length edit') {
+        await page.evaluate(() => (window as any).ed.view.dispatch({
+          changes: { from: 2, to: 3, insert: '\n' }, userEvent: 'input.type'
+        }));
+      } else {
+        assert.ok(await page.evaluate(action => (window as any).ed[action](), action));
+      }
+      await page.waitForFunction(() => (window as any).detailsSamples.length === 12);
+      const frames: Array<Array<{ offset: number | null }>> = await page.evaluate(() => (window as any).detailsSamples);
+      const wrong = frames.find(rows => rows.some(row => row.offset === null || Math.abs(row.offset) > 1));
+      assert.equal(wrong, undefined, `${large ? 'Optimized' : 'Ordinary'} HTML details must keep current aligned numbers during ${action}`);
+    }
+    await page.evaluate(() => (window as any).ed.destroy());
+  }
   assert.deepEqual(errors, []);
   console.log(`Line-number layout contract passed: shared settings, resize/font changes and ${paint.count} passive projection frames`);
 } catch (error) { primary = error; } finally {

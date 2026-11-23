@@ -1113,14 +1113,20 @@ const htmlDetailsSemanticLineSelector = [
 class HtmlBlockLineNumberMarker extends GutterMarker {
   elementClass: string;
 
-  constructor(private readonly block: RenderableHtmlBlock, private readonly lineNumbers: readonly string[]) {
+  constructor(
+    private readonly startLine: number,
+    private readonly sourceColumn: number,
+    private readonly block: RenderableHtmlBlock,
+    private readonly lineNumbers: readonly string[]
+  ) {
     super();
     this.elementClass = block.detailsCollapsed === null ? '' : 'meo-md-html-details-line-numbers';
   }
 
   eq(other: GutterMarker): boolean {
     return other instanceof HtmlBlockLineNumberMarker &&
-      other.block.startLine === this.block.startLine &&
+      other.startLine === this.startLine &&
+      other.sourceColumn === this.sourceColumn &&
       other.block.source === this.block.source &&
       other.block.detailsCollapsed === this.block.detailsCollapsed
       && other.lineNumbers.length === this.lineNumbers.length
@@ -1136,21 +1142,28 @@ class HtmlBlockLineNumberMarker extends GutterMarker {
     column.className = 'meo-md-html-details-line-number-column';
     column.__meoHtmlDetailsLineNumberCleanup = mountProjectedLineNumbers(view, column,
       'meo-md-html-details-line-number', () => {
-        const root = view.dom.querySelector<HTMLElement>(
-          `.meo-md-html-block[data-meo-rendered-block-start-line="${this.block.startLine}"]`);
+        if (this.startLine > view.state.doc.lines) return null;
+        const line = view.state.doc.line(this.startLine);
+        const { node, offset } = view.domAtPos(Math.min(line.from + this.sourceColumn, line.to));
+        const start = node.nodeType === Node.TEXT_NODE ? node : node.childNodes[offset] ?? node;
+        const root = (start instanceof HTMLElement ? start : start.parentElement)?.closest<HTMLElement>('.meo-md-html-block');
         const details = root?.querySelector<HTMLDetailsElement>(':scope > .meo-md-html-content > details');
         if (!root || !details) return null;
+        // During local input the DOM, height map and parsed widget can carry
+        // different source origins. The actual block position supplies the
+        // number, while its attached DOM supplies only offsets and geometry.
+        const renderedStart = Number(root.dataset.meoRenderedBlockStartLine);
         const top = column.getBoundingClientRect().top;
         const positions = new Map<number, { line: number; top: number; height: number }>();
         const elements = Array.from(details.querySelectorAll<HTMLElement>(htmlDetailsSemanticLineSelector));
         for (const element of elements) {
-          const line = Number(element.dataset.meoHtmlSourceLine), rect = element.getBoundingClientRect();
+          const line = Number(element.dataset.meoHtmlSourceLine) - renderedStart, rect = element.getBoundingClientRect();
           if (!Number.isInteger(line) || rect.height < 1 || getComputedStyle(element).display === 'none') continue;
           const key = Math.round(rect.top), previous = positions.get(key);
           if (!previous || line >= previous.line) positions.set(key, { line, top: rect.top - top, height: rect.height });
         }
         const rows = Array.from(positions.values()).sort((left, right) => left.top - right.top)
-          .map((row, index) => ({ key: `${row.line}:${index}`, label: this.lineNumbers[row.line - this.block.startLine] ?? '',
+          .map((row, index) => ({ key: `${row.line}:${index}`, label: this.lineNumbers[row.line] ?? '',
             top: row.top, height: row.height }));
         return { rows, elements: [root, ...elements], mutations: [details] };
       });
@@ -1164,9 +1177,12 @@ class HtmlBlockLineNumberMarker extends GutterMarker {
 
 const htmlBlockLineNumberMarker = lineNumberWidgetMarker.of((view, widget, block) => {
   if (!(widget instanceof HtmlBlockWidget) || widget.editing || block.height < 1) return null;
-  return new HtmlBlockLineNumberMarker(widget.block,
-    Array.from({ length: widget.block.endLine - widget.block.startLine + 1 }, (_, index) =>
-      formatSourceLineNumber(widget.block.startLine + index, view.state)));
+  const doc = view.state.doc;
+  const start = doc.lineAt(block.from);
+  const endLine = widget.block.detailsCollapsed === null ? start.number : doc.lineAt(Math.max(block.from, block.to - 1)).number;
+  return new HtmlBlockLineNumberMarker(start.number, block.from - start.from, widget.block,
+    Array.from({ length: endLine - start.number + 1 }, (_, index) =>
+      formatSourceLineNumber(start.number + index, view.state)));
 });
 
 class HtmlWarningWidget extends WidgetType {
