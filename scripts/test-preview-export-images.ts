@@ -1,10 +1,34 @@
+import { mock } from 'bun:test';
 import fs from 'node:fs';
+import * as nodeFs from 'node:fs';
+import * as nodeFsPromises from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import exportRuntime from '../src/export/runtime';
 import { mapHtmlSrcset, normalizeHtmlAttribute } from '../src/shared/htmlPolicy';
 import assert from 'node:assert/strict';
+
+// Network sources must never reach the disk. Observe every file-system entry
+// point; answer network-host paths here so that no share lookup leaves the test.
+const networkHost = 'images.example.test';
+const fileSystemPaths: string[] = [];
+const observeFileSystem = (entries: Record<string, any>): Record<string, any> => Object.fromEntries(
+  Object.entries(entries).filter(([name]) => name !== 'default').map(([name, entry]) => {
+    if (name === 'promises') return [name, observeFileSystem(entry)];
+    if (typeof entry !== 'function' || /^[A-Z_]/.test(name)) return [name, entry];
+    return [name, Object.assign((...args: any[]) => {
+      const target = String(args[0] ?? '');
+      fileSystemPaths.push(target);
+      if (!target.includes(networkHost)) return entry(...args);
+      if (name === 'existsSync') return false;
+      throw Object.assign(new Error(`Unexpected file-system access: ${name} ${target}`), { code: 'ENOENT' });
+    }, entry)];
+  }));
+for (const [specifier, entries] of [['node:fs', nodeFs], ['node:fs/promises', nodeFsPromises]] as const) {
+  const observed = observeFileSystem({ ...entries });
+  mock.module(specifier, () => ({ ...observed, default: observed }));
+}
+const { default: exportRuntime } = await import('../src/export/runtime');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meo-preview-image-'));
 const localImagePath = path.join(tempDir, 'absolute-image.png');
@@ -103,6 +127,31 @@ try {
         throw new Error(`${target} export changed an HTTP image source`);
       }
     }
+  }
+
+  const protocolRelative = `//${networkHost}/image.png`;
+  for (const target of ['html', 'pdf', 'docx'] as const) {
+    const exportSource = async (text: string) => {
+      fileSystemPaths.length = 0;
+      const { htmlDocument } = await exportRuntime.renderExportHtmlDocument({
+        ...baseOptions, target, outputFilePath: path.join(tempDir, `protocol-relative.${target}`),
+        readingSnapshot: { snapshotId: `protocol-relative-${target}`, text, appearance: 'dark', uiLanguage: 'en', environment: {} }
+      });
+      return htmlDocument;
+    };
+    for (const suffix of ['', '?size=2#part']) for (const [text, attribute] of [
+      [`![remote](${protocolRelative}${suffix})`, 'src'],
+      [`<img src="${protocolRelative}${suffix}" alt="remote">`, 'src'],
+      [`<img srcset="${protocolRelative}${suffix} 2x" alt="remote">`, 'srcset'],
+      [`<video poster="${protocolRelative}${suffix}"></video>`, 'poster']
+    ] as const) {
+      const html = await exportSource(text);
+      const value = new RegExp(` ${attribute}="([^"]*${networkHost}[^"]*)"`).exec(html)?.[1];
+      assert.equal(value, `https:${protocolRelative}${suffix}${attribute === 'srcset' ? ' 2x' : ''}`, `${target} export keeps the network address: ${text}`);
+      assert.deepEqual(fileSystemPaths.filter(entry => entry.includes(networkHost)), [], `${target} export reads no file for a network image: ${text}`);
+    }
+    await exportSource(`![local](${path.basename(localImagePath)})`);
+    assert.ok(fileSystemPaths.includes(localImagePath), `${target} export file access is observed`);
   }
 
   console.log('Preview and export image checks passed');
