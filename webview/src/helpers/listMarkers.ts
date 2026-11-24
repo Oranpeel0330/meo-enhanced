@@ -4,7 +4,7 @@ import type { ChangeDesc } from '@codemirror/state';
 import { mapLiveWidgetPositions } from '../editor/liveWidgetPositions';
 import { sourcePresentationSelection } from '../editor/livePointerSelection';
 import { isolateHistory } from '@codemirror/commands';
-import { syntaxTree } from '@codemirror/language';
+import { language, syntaxTree } from '@codemirror/language';
 import type { SyntaxNode, Tree } from '@lezer/common';
 import { listHistoryFocusEffect } from '../adapters/codeMirrorListHistoryFocus';
 import {
@@ -24,6 +24,8 @@ import { Decoration, WidgetType, EditorView, type DecorationSet } from '@codemir
 import { getUiStrings } from '../application/uiLanguage';
 import { UiLanguageSensitiveWidget, uiLanguageFacet } from '../editor/uiLanguage';
 import { parseFrontmatter, isInsideFrontmatterContent } from './frontmatter';
+import { resolvedSyntaxTreeAt } from './markdownSyntax';
+import { isBackgroundMarkdownPreparationPending } from '../editor/backgroundMarkdownStructure';
 
 interface ListMarkerData extends MarkdownListPrefix {
   indentLevel: number;
@@ -69,6 +71,7 @@ const FOUR_SPACE_INDENT = '    ';
 const TAB_INDENT = '\t';
 const TWO_SPACE_INDENT_COLUMNS = 2;
 const FOUR_SPACE_INDENT_COLUMNS = 4;
+const INSERTED_CODE_PARSE_LIMIT = 32_768;
 const orderedListNormalizationIntent = Annotation.define<{
   resetNestedStartsAtLines: readonly number[];
 }>();
@@ -763,6 +766,18 @@ export function handleEnterInList({ state, dispatch }: Parameters<StateCommand>[
   return true;
 }
 
+/** The end of an open fence or indented block still belongs to its code. */
+function isInCodeBlock(tree: Tree, position: number): boolean {
+  for (const side of [1, -1] as const) {
+    for (let node: SyntaxNode | null = tree.resolveInner(position, side); node; node = node.parent) {
+      if (node.name !== 'FencedCode' && node.name !== 'CodeBlock') continue;
+      const last = node.lastChild;
+      return position < node.to || last?.name !== 'CodeMark' || last.from === node.from;
+    }
+  }
+  return false;
+}
+
 export const handleBackspaceAtListContentStart: StateCommand = ({ state, dispatch }) => {
   const selection = state.selection.main;
   if (!selection.empty) {
@@ -790,6 +805,8 @@ export const handleBackspaceAtListContentStart: StateCommand = ({ state, dispatc
   if (!isAtContentStart && !isAtEmptyItemMarkerEnd) {
     return false;
   }
+
+  if (isInCodeBlock(resolvedSyntaxTreeAt(state, line.to), line.from + marker.fromOffset)) return false;
 
   const deletingEmptyLine = !content.trim();
   const nextLine = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
@@ -1010,7 +1027,29 @@ function collectOrderedListRenumberChangesForTransaction(
     changes.push(...collectOrderedListRenumberChangesInLines(lines, resetNestedStartsAtLines));
   }
 
-  return changes;
+  return changes.length ? excludeCodeBlockChanges(transaction, changes) : changes;
+}
+
+/** Digits in code are literal. Existing lines read the accepted tree; a fence
+ * arriving in this transaction is only known from its own inserted text. */
+function excludeCodeBlockChanges(transaction: Transaction, changes: readonly ListTextChange[]): ListTextChange[] {
+  const { startState } = transaction;
+  // Missing syntax does not prove a list. A later edit in the run renumbers it.
+  if (isBackgroundMarkdownPreparationPending(startState)) return [];
+  const toOld = transaction.changes.invertedDesc;
+  const tree = resolvedSyntaxTreeAt(startState, toOld.mapPos(changes.at(-1)!.from, 1));
+  const parser = startState.facet(language)?.parser;
+  const inserted: Array<{ from: number; to: number; tree: Tree | null }> = [];
+  transaction.changes.iterChanges((_fromA, _toA, from, to, text) => {
+    const source = text.toString();
+    if (!parser || !/`{3}|~{3}/.test(source)) return;
+    inserted.push({ from, to, tree: source.length > INSERTED_CODE_PARSE_LIMIT ? null : parser.parse(source) });
+  }, true);
+  return changes.filter(({ from }) => {
+    const source = inserted.find(range => from >= range.from && from < range.to);
+    if (source && (!source.tree || isInCodeBlock(source.tree, from - source.from))) return false;
+    return !isInCodeBlock(tree, toOld.mapPos(from, 1));
+  });
 }
 
 /**
