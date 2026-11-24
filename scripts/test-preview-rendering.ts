@@ -132,6 +132,41 @@ for (const preset of ['default', 'github-readme'] as const) for (const sourceFoo
   assert.ok(nested.includes('Nested note.'));
 }
 
+for (const preset of ['default', 'github-readme'] as const) {
+  const render = (markdownText: string, sourceFootnotes = false, target: 'html' | 'pdf' | 'docx' = 'html') => {
+    const options = { markdownText, markdownFilePath: '/fixture/adjacent-notes.md', target, preset, sourceFootnotes };
+    const complete = renderMarkdownToHtml(options).html;
+    assert.equal(prepareMarkdownPresentation({ ...options, windowedPresentation: true }).renderAll().html, complete,
+      `${preset}: lazy rendering agrees on definition boundaries`);
+    return parseDocument(complete);
+  };
+  const outline = (document: ReturnType<typeof parseDocument>) => DomUtils.findAll(element => /^(?:p|h[1-6]|hr|li|blockquote)$/.test(element.name), document.children)
+    .filter(element => {
+      for (let parent = element.parent; parent; parent = parent.parent) {
+        if ('attribs' in parent && (parent.attribs.class ?? '').includes('footnotes')) return false;
+      }
+      return true;
+    })
+    .map(element => `${element.name}:${DomUtils.textContent(element).replace(/\[?\d\]?/g, '').replace(/\s+/g, ' ').trim()}:${element.attribs['data-source-line']}`);
+  const first = 'p:First.:1';
+  for (const [lines, expected] of [
+    [['First[^1].', '[^1]: Note.', '', 'Second.'], [first, 'p:Second.:4']],
+    [['First[^1].', '[^1]: Note.', '    Continued.', '', '', 'Second.'], [first, 'p:Second.:6']],
+    [['First[^1].', '[^1]: Note.', '', '    Paragraph.', 'Second.'], [first, 'p:Second.:5']],
+    [['First[^1][^2].', '[^1]: Note.', '[^2]: Other.', '', 'Second.'], [first, 'p:Second.:5']],
+    [['First[^1][^2].', '[^1]: Note.', '', '[^2]: Other.', 'Second.'], [first, 'p:Second.:5']],
+    [['First[^1].', '[^1]: Note.', '', '---', '', 'Second.'], [first, 'hr::4', 'p:Second.:6']],
+    [['- First[^1].', '[^1]: Note.', '', 'Second.'], ['li:First.:1', 'p:Second.:4']],
+    [['> First[^1].', '[^1]: Note.', '', 'Second.'], ['blockquote:First.:1', first, 'p:Second.:4']]
+  ] as const) {
+    const text = lines.join('\n');
+    for (const target of ['html', 'pdf', 'docx'] as const) for (const newline of ['\n', '\r\n']) {
+      assert.deepEqual(outline(render(lines.join(newline), false, target)), expected, `${preset}/${target}: ${JSON.stringify(text)}`);
+    }
+    assert.deepEqual(outline(render(text, true)), expected, `${preset}/side: ${JSON.stringify(text)}`);
+  }
+}
+
 {
   const text = 'Reference[^middle] and[^end].\n\nBefore.\n\n[^middle]: Moved note.\n    Continued note.\n\nAfter.\n\n[^end]: Natural tail note.\n';
   const parsed = createPreviewDocument('footnote-reading-flow', { markdownText: text, sourceDocumentPath: '/fixture/notes.md', uiLanguage: 'en' });
