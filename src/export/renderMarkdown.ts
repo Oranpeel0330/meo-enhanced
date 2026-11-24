@@ -1,4 +1,4 @@
-import { markdownHeadingAnchor } from '../foundation/markdownHeadingAnchor';
+import { createMarkdownHeadingAnchors } from '../foundation/markdownHeadingAnchor';
 import { markdownTaskContentPrefix } from '../foundation/markdownTaskList';
 import { normalizeLinkDestination, isLocalFileLinkDestination } from '../foundation/linkDestination';
 import { splitMarkdownTableRow } from '../foundation/markdownTableRow';
@@ -848,7 +848,9 @@ function installSourcePositionAndHeadingAnchorTransform(
   const assignAnchors = (state: any) => {
     if (state.env?.meoTableCell) return;
     const slugCounts = new Map<string, number>();
+    const headingAnchor = createMarkdownHeadingAnchors();
     const tokens = state.tokens as any[];
+    // GitHub preserves each space and existing hyphen, including gaps left by punctuation.
     const githubId = (text: string) => {
       const base = text.trim().toLowerCase().replace(/<[^>]*>/g, '')
         .replace(/[^\p{Letter}\p{Number}\p{Mark} _-]/gu, '').replace(/ /g, '-');
@@ -895,19 +897,7 @@ function installSourcePositionAndHeadingAnchorTransform(
 
       const inlineContent = tokens[index + 1];
       const headingSource = github ? extractHeadingText(inlineContent, true) : String(inlineContent?.content ?? '');
-      // GitHub preserves each space and existing hyphen, including gaps left by punctuation.
-      const baseSlug = github
-        ? headingSource.trim().toLowerCase().replace(/<[^>]*>/g, '')
-          .replace(/[^\p{Letter}\p{Number}\p{Mark} _-]/gu, '').replace(/ /g, '-')
-        : markdownHeadingAnchor(headingSource);
-      let id = baseSlug;
-      if (github) {
-        id = githubId(headingSource);
-      } else {
-        const occurrence = (slugCounts.get(baseSlug) ?? 0) + 1;
-        slugCounts.set(baseSlug, occurrence);
-        id = occurrence === 1 ? baseSlug : `${baseSlug}-${occurrence}`;
-      }
+      const id = github ? githubId(headingSource) : headingAnchor(headingSource);
       headingOpen.attrSet('id', id);
       if (!state.env?.meoFootnote) onHeading?.({
         level: Number.parseInt(String(headingOpen.tag).slice(1), 10),
