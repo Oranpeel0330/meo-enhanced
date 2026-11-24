@@ -70,6 +70,19 @@ async function isTracked(repoRoot: string, gitPath: string): Promise<boolean> {
   }
 }
 
+async function isAbsentFromHead(repoRoot: string, gitPath: string): Promise<boolean> {
+  try {
+    // ls-tree succeeds without output for a missing path and fails when HEAD cannot be read.
+    const result = await runGit(['ls-tree', '--name-only', 'HEAD', '--', gitPath], { cwd: repoRoot });
+    return result.stdout.length === 0;
+  } catch (error) {
+    if (error instanceof GitCliFailure) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function isIgnored(repoRoot: string, gitPath: string): Promise<boolean> {
   try {
     await runGit(['check-ignore', '-q', '--', gitPath], { cwd: repoRoot, maxBytes: 64 * 1024 });
@@ -169,6 +182,13 @@ export async function hydrateGitBaselineText(payload: GitBaselinePayload): Promi
           baseText: null,
           reason: 'too-large',
           maxBytesExceeded: true
+        };
+      }
+      // A staged new or renamed file is tracked by the index but has no HEAD content.
+      if (await isAbsentFromHead(payload.repoRoot, payload.gitPath)) {
+        return {
+          ...payload,
+          baseText: ''
         };
       }
       return {
