@@ -31,6 +31,8 @@ try {
   git('init', '--quiet');
   git('config', 'core.autocrlf', 'false');
   const committed = write('committed.md', '# Committed\n\nbody\n');
+  const bomText = '# Title\n\nbody\n';
+  const withBom = write('bom.md', `\ufeff${bomText}`);
   const unreadable = write('unreadable.md', '# Unreadable\n');
   const large = write('large.md', 'x'.repeat(gitBaselineMaxBytes + 1));
   git('add', '--', '.');
@@ -39,6 +41,13 @@ try {
   const committedBaseline = await read(committed);
   assert.equal(committedBaseline.reason, undefined);
   assert.equal(committedBaseline.baseText, '# Committed\n\nbody\n');
+
+  const bomBaseline = await read(withBom);
+  assert.equal(bomBaseline.baseText, bomText, 'the document text has no byte order mark, so its HEAD text must not either');
+  assert.deepEqual(compareDocuments(bomBaseline.baseText!, bomText).lineChanges, [],
+    'an unchanged UTF-8 BOM file must have no changes against HEAD');
+  assert.deepEqual(compareDocuments(bomBaseline.baseText!, '# Edited\n\nbody\n').lineChanges.map(change => [change.line, change.kind]),
+    [[1, 'modified']], 'a real edit of line 1 must remain visible');
 
   const untracked = write('untracked.md', '# Untracked\n');
   const untrackedBaseline = await read(untracked);

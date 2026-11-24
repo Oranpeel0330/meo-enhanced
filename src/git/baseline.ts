@@ -218,9 +218,10 @@ export async function hydrateGitBaselineText(payload: GitBaselinePayload): Promi
     };
   }
 
+  const baselineText = baselineBytes.toString('utf8');
   return {
     ...payload,
-    baseText: baselineBytes.toString('utf8')
+    baseText: baselineText.charCodeAt(0) === 0xfeff ? baselineText.slice(1) : baselineText
   };
 }
 
