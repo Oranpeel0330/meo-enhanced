@@ -1474,7 +1474,9 @@ function installAlertTransform(md: MarkdownIt, alertLabel: (type: string) => str
   md.renderer.rules.blockquote_open = (tokens: any, idx: number, opts: any, env: any, self: any) => {
     const openToken = tokens[idx];
     if (github && openToken.level > 0) return defaultBlockquoteRender(tokens, idx, opts, env, self);
-    if (github && (tokens[idx + 1]?.type !== 'paragraph_open' || tokens[idx + 2]?.type !== 'inline')) {
+    // The directive is literal text opening this blockquote's own first paragraph.
+    // Links are already resolved here, so "[!NOTE](url)" is not a directive.
+    if (tokens[idx + 1]?.type !== 'paragraph_open' || tokens[idx + 2]?.children?.[0]?.type !== 'text') {
       return defaultBlockquoteRender(tokens, idx, opts, env, self);
     }
     let alertType: AlertType | null = null;

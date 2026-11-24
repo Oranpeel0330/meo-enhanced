@@ -144,6 +144,26 @@ for (const preset of ['default', 'github-readme'] as const) {
   } finally { prototype.parse = parse; }
 }
 
+for (const options of [{}, { windowedPresentation: true, sourceFootnotes: true }]) {
+  const quotes = (markdownText: string) => DomUtils.getElementsByTagName('blockquote', parseDocument(prepareMarkdownPresentation({
+    markdownText, markdownFilePath: '/fixture/alerts.md', target: 'html', ...options
+  }).renderAll().html).children).map(node => [
+    /\bmeo-export-alert-note\b/.test(node.attribs.class ?? ''),
+    DomUtils.findAll(child => child.attribs.class === 'meo-export-alert-header', node.children).length,
+    DomUtils.textContent(node).replace(/\s+/g, '')
+  ]);
+  for (const markdownText of ['> [!NOTE]\n> Body', '> [!NOTE] Body', '> [!NOTE]Body', '>\n> [!NOTE]\n> Body', '> [!note]\n>\n> Body', '1. > [!NOTE] Body']) {
+    assert.deepEqual(quotes(markdownText), [[true, 1, 'NOTEBody']], markdownText);
+  }
+  assert.deepEqual(quotes('> > [!NOTE]\n> > Body'), [[false, 1, 'NOTEBody'], [true, 1, 'NOTEBody']],
+    'a directive belongs to the blockquote that directly contains it');
+  for (const [markdownText, text] of [
+    ['> [!NOTE](https://example.com)', '!NOTE'], ['> [!NOTE][ref]\n\n[ref]: https://example.com', '!NOTE'],
+    ['> # [!NOTE]\n> Body', '[!NOTE]Body'], ['> - [!NOTE]\n> - Body', '[!NOTE]Body'],
+    ['> ---\n> [!NOTE]', '[!NOTE]'], ['> Body\n> [!NOTE]', 'Body[!NOTE]']
+  ]) assert.deepEqual(quotes(markdownText!), [[false, 0, text]], markdownText);
+}
+
 const compatibility = JSON.parse(readFileSync('scripts/fixtures/github-readme/compatibility.json', 'utf8'));
 for (const preset of ['default', 'github-readme'] as const) for (const probe of compatibility.probes) {
   if (probe.pending) continue;
