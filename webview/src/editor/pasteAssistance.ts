@@ -2,6 +2,7 @@ import { sourceTablePaste, sourceTableAt } from './sourceTableCommands';
 import { EditorSelection, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import type { SyntaxNode } from '@lezer/common';
 import type MarkdownIt from 'markdown-it';
 import type { InputAssistance } from '../../../src/foundation/editingPreferences';
 import { getIndentedCodeLinePrefix, indentedCodeBlockAt } from './codeBlockSource';
@@ -23,6 +24,17 @@ function hasInputSyntax(view: EditorView, position: number, names: RegExp): bool
     if (!node.parent) return false;
     node = node.parent;
   }
+}
+
+/** Bracketed text without a destination or reference label is ordinary prose. */
+function isInsideLink(view: EditorView, position: number): boolean {
+  for (let node: SyntaxNode | null = syntaxTree(view.state).resolveInner(position, -1); node; node = node.parent) {
+    if (node.from >= position || position >= node.to) continue;
+    if (node.name === 'Autolink' || node.name === 'LinkReference'
+      || (node.name === 'Link' || node.name === 'Image')
+        && (node.getChild('LinkLabel') || node.getChildren('LinkMark').length > 2)) return true;
+  }
+  return false;
 }
 
 export function isCodeInput(view: EditorView, position = view.state.selection.main.head): boolean {
@@ -116,14 +128,19 @@ export const pasteAssistance = (
       }
     }
 
+    const url = safeClipboardUrl(text);
+    // Links cannot nest, so a URL pasted into one is not itself made a link.
+    const urlInsideLink = !!url && [selection.from, selection.to].some(position => isInsideLink(view, position));
     const convertedText = (defaults: PasteDefaults, matrix: ReturnType<typeof readMatrix>): string | null => {
       if (nestedTable || (!defaults.convertTables && (matrix || tables.length))
         || (!meoMatrix && tables.length && !defaults.pasteHtml && !singleTable)) return null;
       let insert: string | null = null;
       let htmlConverted = false;
-      if (defaults.pasteUrl && !selection.empty && safeClipboardUrl(text)) {
+      if (urlInsideLink) {
+        insert = url;
+      } else if (defaults.pasteUrl && !selection.empty && url) {
         const label = view.state.sliceDoc(selection.from, selection.to).replace(/[\\\[\]]/g, '\\$&');
-        insert = '[' + label + '](' + text.trim().replaceAll('(', '%28').replaceAll(')', '%29') + ')';
+        insert = '[' + label + '](' + url.replaceAll('(', '%28').replaceAll(')', '%29') + ')';
       } else if (defaults.convertTables) {
         if (matrix) insert = markdownTableFromCells(matrix.cells, matrix.source === 'meo');
         else if (html && tables.length && defaults.pasteHtml) {

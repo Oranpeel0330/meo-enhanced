@@ -155,6 +155,34 @@ try {
     assert.equal(await choose('plain'), 'https://example.com', mode + ': text choice replaces the auto-generated link');
     await undoRedo('label', 'https://example.com');
 
+    const next = 'https://new.example/a_(b)';
+    const anchor = '<a href="' + next + '">New page</a>';
+    for (const [original, selected, expected] of [
+      ['[docs](https://old.example/page)', 'https://old.example/page', '[docs](' + next + ')'],
+      ['![logo](https://old.example/logo.png "Title")', 'https://old.example/logo.png', '![logo](' + next + ' "Title")'],
+      ['<https://old.example>', 'https://old.example', '<' + next + '>'],
+      ['[docs][id]\n\n[id]: https://old.example', 'https://old.example', '[docs][id]\n\n[id]: ' + next],
+      ['[docs](https://old.example)', 'docs', '[' + next + '](https://old.example)'],
+      ['[docs][id]', 'docs', '[' + next + '][id]'],
+      ['![logo](logo.png)', 'logo', '![' + next + '](logo.png)'],
+      ['[docs]()', '', '[docs](' + next + ')']
+    ] as const) for (const html of ['', anchor]) for (const pasteUrl of [true, false]) {
+      const from = selected ? original.indexOf(selected) : original.length - 1;
+      await prepare(mode, original, from, from + selected.length, { pasteUrl });
+      assert.equal(await paste(next, html), expected, `${mode}: no link inside ${original}, ${html ? 'rich' : 'plain'} URL, pasteUrl ${pasteUrl}`);
+      await undoRedo(original, expected);
+    }
+    const link = '[word](https://new.example/a_%28b%29)';
+    for (const [before, after] of [
+      ['read ', ' today'], ['see [', '] here'], ['[a](https://a.example)', ''], ['', '[a](https://a.example)'],
+      ['[^1]: ', ''], ['- [ ] ', ' done'], ['', ' <https://a.example>']
+    ] as const) {
+      const original = before + 'word' + after;
+      await prepare(mode, original, before.length, before.length + 4);
+      assert.equal(await paste(next, ''), before + link + after, `${mode}: the selected word in ${original} becomes the label`);
+      await undoRedo(original, before + link + after);
+    }
+
     await prepare(mode);
     const formatted = '# Heading\n\n**Word**\n\n| A | B |\n| --- | --- |\n| **1** | 2 |';
     assert.equal(await paste('Heading\nWord\nA\tB\n1\t2',
@@ -282,6 +310,16 @@ try {
   const edgeHtml = '<h2>Modes</h2>' + table + '<p>After the table.</p>';
   for (const mode of ['source', 'live']) for (const large of [false, true]) {
     const prefix = 'Earlier paragraph.\n\n'.repeat(large ? 4200 : 45);
+    const linked = prefix + '[docs](https://old.example)';
+    await prepare(mode, linked, prefix.length + 7, linked.length - 1);
+    await page.evaluate(() => (window as any).editor.view.dispatch({ scrollIntoView: true }));
+    assert.equal(await page.evaluate(() => {
+      const scope = window as any;
+      return scope.EditingFeaturesHarness.usesLargeDocumentDerivedWorkBudget(scope.editor.view.state);
+    }), large, `${mode}: link paste exercises the expected document-scale policy`);
+    await page.waitForFunction(() => [...(window as any).editor.view.contentDOM.querySelectorAll('.cm-line')].at(-1)?.querySelector('span'));
+    assert.equal(await paste('https://new.example', ''), prefix + '[docs](https://new.example)', `${mode}/${large}: a pasted URL replaces the destination`);
+    await undoRedo(linked, prefix + '[docs](https://new.example)');
     for (const [text, html] of [[edgePlain, edgeHtml], [edgeMarkdown, '']]) {
       await prepare(mode, prefix);
       await page.evaluate(() => (window as any).editor.view.dispatch({ scrollIntoView: true }));
