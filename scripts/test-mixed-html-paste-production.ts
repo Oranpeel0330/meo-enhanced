@@ -204,6 +204,19 @@ try {
       assert.equal(await paste('plain fallback', html), expected, `${mode}: block edges for ${html.slice(0, 30)}`);
       await undoRedo(original, expected);
     }
+    const code = 'import os\n\n\ndef a():  \n \t\n\n    return 1';
+    for (const [html, expected] of [
+      ['<p>Before</p><pre><code>' + code + '\n</code></pre><p>After</p>', 'Before\n\n```\n' + code + '\n```\n\nAfter'],
+      ['<pre>\n\n\na\n\n\n\n</pre>', '```\n\n\na\n\n\n\n```'],
+      ['<ul><li>Step<pre>a  \n\n\n \nb</pre></li></ul>', '- Step\n\n  ```\n  a  \n\n\n   \n  b\n  ```'],
+      ['<blockquote><pre>a  \n\n\nb</pre></blockquote>', '> ```\n> a  \n>\n>\n> b\n> ```'],
+      ['<p>one \u00000\u0000</p><pre>x\u0000\n\n\n\u0000y</pre>', 'one 0\n\n```\nx\n\n\ny\n```'],
+      ['<p>one  </p>\n\n\n\n<p>two</p>', 'one\n\ntwo']
+    ] as const) {
+      await prepare(mode);
+      assert.equal(await paste('plain fallback', html), expected, `${mode}: code and prose whitespace for ${JSON.stringify(html)}`);
+      await undoRedo('', expected);
+    }
     for (const src of ['', 'data:image/png;base64,ignored', 'javascript:ignored']) {
       const image = '<img src="' + src + '">';
       await prepare(mode, 'prefix', 6, 6, { pasteHtml: true });
