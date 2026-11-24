@@ -106,6 +106,32 @@ for (const preset of ['default', 'github-readme'] as const) {
   } finally { parsed.dispose(); }
 }
 
+for (const preset of ['default', 'github-readme'] as const) for (const sourceFootnotes of [false, true]) {
+  const label = `${preset}/${sourceFootnotes ? 'side' : 'full'}`;
+  const render = (markdownText: string) => {
+    const options = { markdownText, markdownFilePath: '/fixture/code-span-notes.md', target: 'html' as const, preset, sourceFootnotes };
+    const complete = renderMarkdownToHtml(options).html;
+    assert.equal(prepareMarkdownPresentation({ ...options, windowedPresentation: true }).renderAll().html, complete,
+      `${label}: lazy rendering agrees on code spans`);
+    return complete;
+  };
+  const referenceCount = (html: string) => html.split('class="footnote-ref"').length - 1;
+  for (const [codeSpan, code] of [['`\\`', '\\'], ['`C:\\`', 'C:\\'], ['``a`\\``', 'a`\\']] as const) {
+    const after = render(`Use ${codeSpan} first[^n].\n\n[^n]: Escape note.`);
+    assert.ok(after.includes(`<code>${code}</code>`), `${label}: ${codeSpan} keeps its backslash`);
+    assert.equal(referenceCount(after), 1, `${label}: a reference after ${codeSpan} is linked`);
+    assert.ok(after.includes('Escape note.'), `${label}: the note referenced after ${codeSpan} is listed`);
+    const inside = render(`Use ${codeSpan} and \`[^n]\` then[^n].\n\n[^n]: Escape note.`);
+    assert.ok(inside.includes('<code>[^n]</code>'), `${label}: a later code span keeps its literal reference`);
+    assert.equal(referenceCount(inside), 1, `${label}: only the reference outside code is linked`);
+  }
+  const escaped = render('Literal \\`[^n] and \\[^n]\n\n[^n]: Escape note.');
+  assert.equal(referenceCount(escaped), 1, `${label}: escapes outside code spans keep their meaning`);
+  const nested = render('Text[^n].\n\n[^n]: Note `\\` then[^other].\n\n[^other]: Nested note.');
+  assert.equal(referenceCount(nested), 2, `${label}: a definition scans its own code spans`);
+  assert.ok(nested.includes('Nested note.'));
+}
+
 {
   const text = 'Reference[^middle] and[^end].\n\nBefore.\n\n[^middle]: Moved note.\n    Continued note.\n\nAfter.\n\n[^end]: Natural tail note.\n';
   const parsed = createPreviewDocument('footnote-reading-flow', { markdownText: text, sourceDocumentPath: '/fixture/notes.md', uiLanguage: 'en' });

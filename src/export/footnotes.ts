@@ -280,7 +280,7 @@ function replaceFootnoteReferencesInLine(
   while (index < line.length) {
     const ch = line[index];
 
-    if (ch === '\\' && index + 1 < line.length) {
+    if (!inCodeSpan && ch === '\\' && index + 1 < line.length) {
       out += line.slice(index, index + 2);
       index += 2;
       continue;
