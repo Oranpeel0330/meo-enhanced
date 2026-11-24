@@ -1,6 +1,7 @@
 import { EditorState, Prec, RangeSetBuilder, StateEffect, StateField, Transaction, type Extension } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { readDocumentTextProjection } from '../application/documentTextProjection';
+import { foldSearchCase } from '../application/searchCaseFolding';
 import { isLiveInputDerivedWorkRefresh, mapLiveInputDerivedDecorations, shouldDeferLiveInputDerivedWork } from './liveInputDerivedWork';
 
 export type SearchOptions = {
@@ -159,8 +160,8 @@ function findSearchMatchRanges(text: string, query: string, options: SearchOptio
     return [];
   }
 
-  const haystack = options.caseSensitive ? text : text.toLocaleLowerCase();
-  const needle = options.caseSensitive ? query : query.toLocaleLowerCase();
+  const haystack = options.caseSensitive ? text : foldSearchCase(text);
+  const needle = options.caseSensitive ? query : foldSearchCase(query);
   const matches: SearchMatchRange[] = [];
   let offset = 0;
   while (offset <= text.length) {

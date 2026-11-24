@@ -78,6 +78,7 @@ import { updateGitDiffMarkerElement } from './gitDiffMarkerDom';
 import { gitDiffLineFlagsFacet } from './gitDiffPresentation';
 import { UiLanguageSensitiveWidget, uiLanguageFacet } from '../editor/uiLanguage';
 import { getUiStrings, type UiLanguage } from '../application/uiLanguage';
+import { foldSearchCase } from '../application/searchCaseFolding';
 import { getTableHistoryFocus, type TableHistoryFocusTarget } from '../adapters/tableHistoryFocus';
 import {
   getTableTransactionProvenance,
@@ -929,8 +930,8 @@ function findTableSearchMatchRanges(text: string, searchState: TableSearchState 
     return [];
   }
 
-  const haystack = searchState?.caseSensitive ? text : text.toLocaleLowerCase();
-  const needle = searchState?.caseSensitive ? query : query.toLocaleLowerCase();
+  const haystack = searchState?.caseSensitive ? text : foldSearchCase(text);
+  const needle = searchState?.caseSensitive ? query : foldSearchCase(query);
   const matches: TableSearchMatchRange[] = [];
   let offset = 0;
   while (offset <= text.length) {

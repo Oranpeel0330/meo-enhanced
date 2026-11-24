@@ -1,4 +1,5 @@
 import type { SearchMatchAnchor } from '../application/searchMatchAnchor';
+import { foldSearchCase } from '../application/searchCaseFolding';
 import { revealPreviewDocumentElement } from './previewDocumentReveal';
 
 type SearchOptions = { wholeWord?: boolean; caseSensitive?: boolean };
@@ -187,7 +188,7 @@ export function createPreviewSearchController({
     }
     observeGeometry(doc);
     const revision = generation;
-    const comparableQuery = options.caseSensitive ? query : query.toLocaleLowerCase();
+    const comparableQuery = options.caseSensitive ? query : foldSearchCase(query);
     const nodes: Text[] = [];
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: node => node.parentElement && !node.parentElement.closest('script, style, noscript, svg')
@@ -246,7 +247,7 @@ export function createPreviewSearchController({
           const prefixLines = mapped?.tagName === 'TR' ? 0 : mapped ? lineOffsets.get(mapped) ?? 0 : 0;
           if (mapped) lineOffsets.set(mapped, prefixLines + (raw.match(/\n/g)?.length ?? 0));
           pendingNode = {
-            node, raw, comparable: options.caseSensitive ? raw : raw.toLocaleLowerCase(),
+            node, raw, comparable: options.caseSensitive ? raw : foldSearchCase(raw),
             offset: 0, cursor: 0, fragment: doc.createDocumentFragment(), changed: false,
             fixedLine: mapped?.tagName === 'TR',
             line: Number(mapped?.dataset.sourceLine ?? 1) + prefixLines
