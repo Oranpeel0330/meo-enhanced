@@ -74,8 +74,13 @@ export function clipboardHtmlToMarkdown(html: string | Element, tableToMarkdown?
     }
     const content = children(node);
     const styled = (marker: string) => content.trim() ? content.replace(/^(\s*)([\s\S]*?)(\s*)$/, (_match, before: string, text: string, after: string) => before + marker + text + marker + after) : content;
-    if (['B', 'STRONG'].includes(tag)) return styled('**');
-    if (['I', 'EM'].includes(tag)) return styled('*');
+    // Clipboard wrappers can cancel the tag's own style. Read the parsed
+    // property: Word's mso-bidi-font-weight does not change the weight.
+    if (['B', 'STRONG'].includes(tag)) {
+      const { fontWeight } = (node as HTMLElement).style;
+      return fontWeight === 'normal' || parseInt(fontWeight) <= 400 ? content : styled('**');
+    }
+    if (['I', 'EM'].includes(tag)) return (node as HTMLElement).style.fontStyle === 'normal' ? content : styled('*');
     if (['S', 'STRIKE', 'DEL'].includes(tag)) return styled('~~');
     if (tag === 'MARK') return styled('==');
     if (tag === 'U') return '<u>' + content + '</u>';

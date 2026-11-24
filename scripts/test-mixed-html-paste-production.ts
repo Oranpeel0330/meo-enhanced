@@ -230,6 +230,18 @@ try {
       assert.equal(await paste('plain fallback', html), expected, `${mode}: nested list ${html}`);
       await undoRedo('', expected);
     }
+    for (const [html, expected] of [
+      ['<b style="font-weight:normal;" id="docs-internal-guid-1"><span style="font-weight:400">Hello world</span></b>', 'Hello world'],
+      ['<b style="font-weight:normal"><p>para one</p><p>para two</p></b>', 'para one\n\npara two'],
+      ['<b style="font-weight:normal"><h2>Title</h2><p>a <strong>bold</strong> b</p></b>', '## Title\n\na **bold** b'],
+      ['<p><strong style="font-weight: 400">a</strong> <em style="font-style: normal">b</em> <i style="font-style:normal">c</i></p>', 'a b c'],
+      ['<p><b>a</b> <b style="color:red">b</b> <strong style="font-weight:700">c</strong> <b style="font-weight:600">d</b></p>', '**a** **b** **c** **d**'],
+      ['<p><b style="mso-bidi-font-weight:normal">a</b> <i style="mso-bidi-font-style:normal">b</i> <em style="font-style:italic">c</em></p>', '**a** *b* *c*']
+    ] as const) {
+      await prepare(mode);
+      assert.equal(await paste('plain fallback', html), expected, `${mode}: inline style over the tag for ${html}`);
+      await undoRedo('', expected);
+    }
     for (const src of ['', 'data:image/png;base64,ignored', 'javascript:ignored']) {
       const image = '<img src="' + src + '">';
       await prepare(mode, 'prefix', 6, 6, { pasteHtml: true });
