@@ -92,10 +92,22 @@ export function clipboardHtmlToMarkdown(html: string | Element, tableToMarkdown?
     if (tag === 'BLOCKQUOTE') return '\n\n' + content.trim().split('\n').map(line => '> ' + line).join('\n') + '\n\n';
     if (tag === 'UL' || tag === 'OL') {
       const start = tag === 'OL' ? Number(node.getAttribute('start') ?? 1) : 1;
-      return '\n\n' + Array.from(node.children).filter(child => child.tagName === 'LI').map((item, index) => {
-        const marker = tag === 'OL' ? `${Number.isFinite(start) ? start + index : index + 1}. ` : '- ';
-        return marker + children(item).trim().split('\n').map((line, lineIndex) => lineIndex ? ' '.repeat(marker.length) + line : line).join('\n');
-      }).join('\n') + '\n\n';
+      const items: { marker: string; content: string }[] = [];
+      let index = 0;
+      for (const child of node.children) {
+        if (child.tagName === 'LI') {
+          items.push({ marker: tag === 'OL' ? `${Number.isFinite(start) ? start + index : index + 1}. ` : '- ', content: children(child) });
+          index++;
+        } else if (child.tagName === 'UL' || child.tagName === 'OL') {
+          // Rich-text editors also place a sub-list after its item instead of
+          // inside it. Without a preceding item it keeps its own markers here.
+          if (!items.length) items.push({ marker: '', content: '' });
+          items[items.length - 1].content += convert(child);
+        }
+      }
+      return '\n\n' + items.map(({ marker, content }) => marker
+        + content.trim().split('\n').map((line, lineIndex) => lineIndex ? ' '.repeat(marker.length) + line : line).join('\n')
+      ).join('\n') + '\n\n';
     }
     if (tag === 'TD' || tag === 'TH') return content.trim() + '\t';
     if (['P', 'DIV', 'SECTION', 'ARTICLE', 'TR', 'TABLE'].includes(tag)) return '\n\n' + content.trim() + '\n\n';

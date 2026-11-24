@@ -217,6 +217,19 @@ try {
       assert.equal(await paste('plain fallback', html), expected, `${mode}: code and prose whitespace for ${JSON.stringify(html)}`);
       await undoRedo('', expected);
     }
+    for (const [html, expected] of [
+      ['<ul><li>Alpha<ul><li>Beta</li></ul></li><li>Gamma</li></ul>', '- Alpha\n\n  - Beta\n- Gamma'],
+      ['<ul><li>Alpha</li><ul><li>Beta</li></ul><li>Gamma</li></ul>', '- Alpha\n\n  - Beta\n- Gamma'],
+      ['<ol start="3"><li>Alpha</li><ol><li>Beta</li><li>More</li></ol><li>Gamma</li></ol>', '3. Alpha\n\n   1. Beta\n   2. More\n4. Gamma'],
+      ['<ul><li>Alpha</li><ol><li>Beta</li><ul><li>Deep</li></ul></ol><ul><li>Second</li></ul></ul>', '- Alpha\n\n  1. Beta\n\n     - Deep\n\n  - Second'],
+      ['<ul><ul><li>Beta</li></ul><li>Gamma</li></ul>', '- Beta\n- Gamma'],
+      ['<ul><ol><ol><li>Deep</li></ol></ol></ul>', '1. Deep'],
+      ['<ul><li>Alpha</li><ul><ul><li>Deep</li></ul><li>Beta</li></ul></ul>', '- Alpha\n\n  - Deep\n  - Beta']
+    ] as const) {
+      await prepare(mode);
+      assert.equal(await paste('plain fallback', html), expected, `${mode}: nested list ${html}`);
+      await undoRedo('', expected);
+    }
     for (const src of ['', 'data:image/png;base64,ignored', 'javascript:ignored']) {
       const image = '<img src="' + src + '">';
       await prepare(mode, 'prefix', 6, 6, { pasteHtml: true });
