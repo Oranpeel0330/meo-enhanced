@@ -28,7 +28,7 @@ import {
 } from '../shared/htmlPolicy';
 import { isSupportedHtmlTag, isCustomHtmlTag } from '../shared/htmlPolicy';
 import { inspectHtmlStylesheets } from '../shared/htmlStylesheet';
-import { splitHtmlBlockFragments } from '../foundation/htmlSyntax';
+import { scanHtmlTags, splitHtmlBlockFragments } from '../foundation/htmlSyntax';
 import type { UiLanguage } from '../foundation/uiLanguage';
 import { getReadingUiStrings } from './readingUiLanguage';
 import { normalizeFenceLanguage } from './fenceLanguage';
@@ -45,7 +45,7 @@ import { installWikiReferenceTransform } from './wikiReferences';
 import type { ResolvedWikiResources } from '../foundation/wikiReference';
 import { addGithubDetailsSummary, createGithubHtmlSanitizer, githubHtmlAttributes, githubHtmlTags, installGithubInlineRules, isGithubImageSource, isGithubLink, linkifyGithubFilteredHtml, replaceGithubEmoji, stripGithubSelectMarkup } from './githubReadme';
 
-const OPENING_KBD_TAG_RE = /^<kbd\b[^>]*>$/i;
+const OPENING_KBD_TAG_RE = /^<kbd\b[\s\S]*>$/i;
 const CLOSING_KBD_TAG_RE = /^<\/kbd\s*>$/i;
 const DEFERRED_IMAGE_ATTRIBUTE = 'data-meo-deferred-image-src';
 const DEFERRED_IMAGE_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
@@ -785,11 +785,11 @@ function installSafeHtmlTransform(
     const closingTag = /^<\/\s*([a-z][a-z\d-]*)\s*>$/i.exec(trimmed);
     if (closingTag) return `</${canonicalHtmlTagName(closingTag[1]!)}>`;
 
-    const openingTag = /^<\s*([a-z][a-z\d-]*)\b[^>]*>$/i.exec(trimmed);
-    if (!openingTag || /<\/\s*[a-z]/i.test(trimmed)) {
+    const openingTag = scanHtmlTags(trimmed)[0];
+    if (!openingTag || openingTag.closing || openingTag.from !== 0 || openingTag.to !== trimmed.length) {
       return sanitizeHtml(source, safeHtmlSanitizerOptions);
     }
-    const tagName = openingTag[1].toLowerCase();
+    const tagName = openingTag.name;
     if (tagName === 'br' || tagName === 'img' || /\/\s*>$/.test(trimmed)) {
       return sanitizeHtml(source, safeHtmlSanitizerOptions);
     }

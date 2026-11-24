@@ -166,6 +166,58 @@ for (const preset of ['default', 'github-readme'] as const) {
   assert.equal(deferred.renderAll().html, complete);
 }
 
+for (const preset of ['default', 'github-readme'] as const) {
+  const render = (markdownText: string) => parseDocument(renderMarkdownToHtml({
+    markdownText, markdownFilePath: '/fixture/attribute-angle-brackets.md', target: 'html', preset
+  }).html).children;
+  for (const [tag, markdownText] of [
+    ['a', '<a href="https://example.com" title="a > b">Content</a> after'],
+    ['a', "<a href='https://example.com' title='a > b'>Content</a> after"],
+    ['a', '<a href="https://example.com?q=1>0">Content</a> after'],
+    ['span', '<span title="</b>">**Content**</span> after'],
+    ['kbd', '<kbd title="a > b">Content</kbd> after'],
+    ['div', '<div title="a > b">Content</div>'],
+    ['div', '<div title="a > b">\n\n**Content**\n\n</div>\n\nafter'],
+    ['p', '<div><p title="a > b" lang="en">Content</p>after</div>']
+  ] as const) {
+    const element = DomUtils.getElementsByTagName(tag, render(markdownText)).find(node => DomUtils.textContent(node).trim() === 'Content');
+    assert.ok(element, `${preset}: ${markdownText} ends at its own closing tag`);
+  }
+
+  // The same fragment without the quoted bracket is the control: admitting the
+  // bracket must not admit an attribute, URL or element that was blocked before.
+  for (const fragment of [
+    '<a title="a QUOTED b" href="https://example.com" onclick="alert(1)">Content</a>',
+    '<a onclick="if (a QUOTED b) alert(1)" href="https://example.com">Content</a>',
+    "<a onmouseover='a QUOTED b' title='QUOTED' href='https://example.com'>Content</a>",
+    '<a title="a QUOTED b" href="javascript:alert(1)">Content</a>',
+    '<a href="javascript:alert(1 QUOTED 0)">Content</a>',
+    '<a title="QUOTED" href="java&#10;script:alert(1)">Content</a>',
+    '<a title="QUOTED" href="vbscript:msgbox(1)">Content</a>',
+    '<a title="QUOTED<img src=x onerror=alert(1)QUOTED">Content</a>',
+    '<a title="QUOTED</a><img src=x onerror=alert(1)>">Content</a>',
+    '<div title="a QUOTED b" onclick="alert(1)">Content</div>',
+    '<div data-x="QUOTED" style="background:url(javascript:alert(1))">Content</div>',
+    '<form title="QUOTED" action="javascript:alert(1)" onsubmit="alert(1)"><button formaction="javascript:alert(1)">Content</button></form>',
+    '<svg aria-label="QUOTED" onload="alert(1)"><a href="javascript:alert(1)" title="QUOTED">Content</a></svg>',
+    '<img src="x.png" alt="QUOTED" onerror="alert(1)">Content',
+    '<script data-x="QUOTED">alert(1)</script>Content'
+  ]) for (const markdownText of [fragment, `Inline ${fragment} tail.`, `<div title="QUOTED">\n\n${fragment}\n\n</div>`]) {
+    const elements = (quoted: string) => DomUtils.findAll(() => true, render(markdownText.replaceAll('QUOTED', quoted)));
+    const names = (quoted: string) => elements(quoted).map(node => [node.name, Object.keys(node.attribs)]);
+    assert.deepEqual(names('>'), names('gt'), `${preset}: ${markdownText} keeps the control's elements and attributes`);
+    for (const node of elements('>')) {
+      assert.notEqual(node.name, 'script', `${preset}: ${markdownText}`);
+      for (const [name, value] of Object.entries(node.attribs)) {
+        assert.doesNotMatch(name, /^(?:on|action$|formaction$)/i, `${preset}: ${markdownText}`);
+        if (['href', 'src', 'style', 'xlink:href'].includes(name)) {
+          assert.doesNotMatch(value.replace(/[\u0000- ]/g, ''), /(?:javascript|vbscript):/i, `${preset}: ${markdownText}`);
+        }
+      }
+    }
+  }
+}
+
 {
   let normalizations = 0, preparations = 0;
   const fences: string[] = [];
